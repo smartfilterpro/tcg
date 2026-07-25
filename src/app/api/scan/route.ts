@@ -22,11 +22,12 @@ const SCAN_SCHEMA = {
           collector_number: {
             type: ["string", "null"],
             description:
-              "The collector number before the slash at the bottom of the card, e.g. '042' from '042/191'. Null if unreadable.",
+              "The collector number at the bottom of the card. Usually before a slash ('042' from '042/191'). Promo cards may have NO slash and a letter prefix instead — report the full code (e.g. 'SWSH095', 'SM210', 'XY67'). Null if unreadable.",
           },
           set_total: {
             type: ["string", "null"],
-            description: "The number after the slash, e.g. '191' from '042/191'. Null if unreadable.",
+            description:
+              "What follows the slash: usually the set size ('191' from '042/191'), but on promo cards it can be a set code — report it as printed (e.g. 'SVP' from '095/SVP'). Null if there is no slash or it's unreadable.",
           },
           set_name_hint: {
             type: ["string", "null"],
@@ -58,10 +59,13 @@ const SYSTEM = `You identify Pokémon Trading Card Game cards from photos.
 The photo may contain a single card or many cards laid out (or a binder page).
 For EVERY distinct, identifiable card in the image, extract its printed details.
 Read carefully — the collector number at the bottom (e.g. 042/191) is the most
-important field for identification. Do not invent numbers you cannot read; use
-null instead and lower the confidence. Ignore card backs, sleeves without cards,
-and anything that is not a Pokémon TCG card. List cards roughly left-to-right,
-top-to-bottom.`;
+important field for identification. Promo cards are common and number differently:
+a black-star promo may show 'SWSH095', 'SM210', 'XY67' with no slash (report the
+full code as collector_number), or '095/SVP' where the part after the slash is a
+set code, not a count (report 'SVP' as set_total). Do not invent numbers you
+cannot read; use null instead and lower the confidence. Ignore card backs,
+sleeves without cards, and anything that is not a Pokémon TCG card. List cards
+roughly left-to-right, top-to-bottom.`;
 
 export async function POST(req: Request) {
   try {

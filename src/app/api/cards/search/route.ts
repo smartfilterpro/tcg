@@ -4,23 +4,34 @@ import { requireUser, AuthError } from "@/lib/auth";
 
 /** Parse a free-form query into name / collector-number / set-size parts.
  *  Supported shapes:
- *    "101/190"            → number 101 in a set of 190
- *    "#101" or "101"      → number 101 in any set
- *    "TG12/TG30", "SV045" → alphanumeric promo/gallery numbers
- *    "Charizard 4/102"    → name + number + set size
- *    "Charizard"          → name only
+ *    "101/190", "095/086"  → number in a set of that size (zeros OK)
+ *    "095/SVP"             → promo-set code after the slash
+ *    "#101" or "101"       → number in any set
+ *    "TG12/TG30", "SWSH095"→ alphanumeric promo/gallery numbers
+ *    "Charizard 4/102"     → name + number + set size
+ *    "Charizard"           → name only
  */
-function parseQuery(raw: string): { name?: string; number?: string; printedTotal?: string } {
+function parseQuery(raw: string): {
+  name?: string;
+  number?: string;
+  printedTotal?: string;
+  setName?: string;
+} {
   const q = raw.trim();
 
-  // "number/total" — optionally preceded by a name, e.g. "Charizard 4/102"
-  const slash = q.match(/^(.*?)[\s#]*([A-Za-z]{0,4}\d{1,3}[a-z]?)\s*\/\s*[A-Za-z]{0,4}(\d{1,3})$/);
+  // "number/total" — optionally preceded by a name, e.g. "Charizard 4/102".
+  // The part after the slash is either a set size ("190") or a promo-set
+  // code ("SVP", "SWSH", "SM").
+  const slash = q.match(/^(.*?)[\s#]*([A-Za-z]{0,4}\d{1,3}[a-z]?)\s*\/\s*([A-Za-z0-9]{1,8})$/);
   if (slash) {
     const name = slash[1].trim();
+    const after = slash[3];
+    const digitsInAfter = after.replace(/\D/g, "");
     return {
       name: name || undefined,
       number: slash[2],
-      printedTotal: slash[3],
+      printedTotal: digitsInAfter ? digitsInAfter : undefined,
+      setName: digitsInAfter ? undefined : after, // "SVP" → search promo sets by name
     };
   }
 
@@ -28,8 +39,8 @@ function parseQuery(raw: string): { name?: string; number?: string; printedTotal
   const hash = q.match(/^#\s*([A-Za-z]{0,4}\d{1,3}[a-z]?)$/);
   if (hash) return { number: hash[1] };
 
-  // Bare number (or promo codes like "TG12", "SV045") — nothing else it could be
-  const bare = q.match(/^([A-Za-z]{0,4}\d{1,3}[a-z]?)$/);
+  // Bare number (or promo codes like "TG12", "SWSH095") — nothing else it could be
+  const bare = q.match(/^#?\s*([A-Za-z]{0,4}\d{1,3}[a-z]?)$/);
   if (bare && /\d/.test(q) && !/^[A-Za-z]+\d$/.test(q)) {
     // exclude names ending in a digit like "Porygon2" (letters+single digit)
     return { number: bare[1] };
@@ -50,8 +61,9 @@ export async function GET(req: Request) {
     let cards = await searchCards({ ...parsed, pageSize: 16 });
 
     // Number-based searches can be over-constrained (e.g. printedTotal counts
-    // only the base set, not secret rares) — relax progressively.
-    if (cards.length === 0 && parsed.printedTotal) {
+    // only the base set, not secret rares; promo-set codes vary) — relax
+    // progressively.
+    if (cards.length === 0 && (parsed.printedTotal || parsed.setName)) {
       cards = await searchCards({ name: parsed.name, number: parsed.number, pageSize: 16 });
     }
     if (cards.length === 0 && parsed.number && !parsed.name) {
