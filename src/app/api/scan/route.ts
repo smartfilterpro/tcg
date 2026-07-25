@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { matchDetectedCard } from "@/lib/pokemontcg";
+import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
 import type { DetectedCard, ScanMatch } from "@/lib/types";
 
@@ -147,7 +148,26 @@ export async function POST(req: Request) {
       const batch = detectedCards.slice(i, i + BATCH);
       const matched = await Promise.all(
         batch.map(async (detected) => {
-          const { match, candidates } = await matchDetectedCard(detected);
+          let { match, candidates } = await matchDetectedCard(detected);
+          // Primary DB miss → try TCGdex (usually has new sets/promos earlier)
+          if (candidates.length === 0 && detected.name) {
+            const alt = await searchTcgdex({
+              name: detected.name,
+              number: detected.collectorNumber ?? undefined,
+              pageSize: 6,
+            });
+            if (alt.length === 0 && detected.collectorNumber) {
+              // Number may have been misread — retry on name alone
+              const byName = await searchTcgdex({ name: detected.name, pageSize: 6 });
+              if (byName.length > 0) {
+                match = byName[0];
+                candidates = byName;
+              }
+            } else if (alt.length > 0) {
+              match = alt[0];
+              candidates = alt;
+            }
+          }
           return { detected, match, candidates } satisfies ScanMatch;
         })
       );

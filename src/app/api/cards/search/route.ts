@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { searchCards } from "@/lib/pokemontcg";
+import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
 
 /** Parse a free-form query into name / collector-number / set-size parts.
@@ -76,7 +77,15 @@ export async function GET(req: Request) {
       cards = await searchCards({ name: oldStyle, number: parsed.number, pageSize: 16 });
     }
 
-    return NextResponse.json({ cards });
+    // Primary database came up empty — fall back to TCGdex, which usually has
+    // brand-new sets and promos months earlier.
+    let source = "pokemontcg.io";
+    if (cards.length === 0) {
+      cards = await searchTcgdex({ name: parsed.name, number: parsed.number, pageSize: 12 });
+      if (cards.length > 0) source = "tcgdex";
+    }
+
+    return NextResponse.json({ cards, source });
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
