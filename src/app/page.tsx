@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import type { CollectionItem } from "@/lib/types";
+import CardPickerModal from "@/components/CardPickerModal";
+import type { CardSummary, CollectionItem } from "@/lib/types";
 
 type SortKey = "newest" | "name" | "price" | "set";
 
@@ -17,6 +18,9 @@ export default function CollectionPage() {
   const [sort, setSort] = useState<SortKey>("newest");
   const [selected, setSelected] = useState<CollectionItem | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function load() {
     try {
@@ -109,6 +113,28 @@ export default function CollectionPage() {
     }
   }
 
+  async function addCard(card: CardSummary) {
+    const res = await fetch("/api/collection", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: [{ card, quantity: 1 }] }),
+    });
+    if (res.ok) {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      setToast(`Added ${card.name} ×1 — click again for another copy`);
+      toastTimer.current = setTimeout(() => setToast(null), 2500);
+    } else {
+      const json = await res.json().catch(() => ({}));
+      setToast(`Couldn't add: ${json.error ?? "unknown error"}`);
+    }
+  }
+
+  function closeAdd() {
+    setShowAdd(false);
+    setToast(null);
+    load(); // pull in whatever was added
+  }
+
   async function refreshPrices() {
     setRefreshing(true);
     try {
@@ -128,11 +154,25 @@ export default function CollectionPage() {
         <div className="text-4xl">📷</div>
         <h1 className="mt-2 text-xl font-bold">Your collection is empty</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Scan your first cards to start building your collection.
+          Scan your first cards, or add them by searching the card database.
         </p>
-        <Link href="/scan" className="btn-primary mt-4">
-          Scan cards
-        </Link>
+        <div className="mt-4 flex justify-center gap-2">
+          <Link href="/scan" className="btn-primary">
+            Scan cards
+          </Link>
+          <button className="btn-secondary" onClick={() => setShowAdd(true)}>
+            + Add by search
+          </button>
+        </div>
+        {showAdd && (
+          <CardPickerModal
+            initialQuery=""
+            candidates={[]}
+            onClose={closeAdd}
+            onPick={addCard}
+            toast={toast}
+          />
+        )}
       </div>
     );
   }
@@ -152,6 +192,9 @@ export default function CollectionPage() {
         <div className="flex gap-2">
           <button className="btn-secondary" onClick={refreshPrices} disabled={refreshing}>
             {refreshing ? "Refreshing…" : "↻ Refresh prices"}
+          </button>
+          <button className="btn-secondary" onClick={() => setShowAdd(true)}>
+            + Add by search
           </button>
           <Link href="/scan" className="btn-primary">
             + Scan cards
@@ -240,6 +283,16 @@ export default function CollectionPage() {
           </button>
         ))}
       </div>
+
+      {showAdd && (
+        <CardPickerModal
+          initialQuery=""
+          candidates={[]}
+          onClose={closeAdd}
+          onPick={addCard}
+          toast={toast}
+        />
+      )}
 
       {selected && (
         <div

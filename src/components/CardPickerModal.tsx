@@ -3,17 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 import type { CardSummary } from "@/lib/types";
 
-/** Search-the-database picker used to correct a misidentified card. */
+/** Search-the-database picker — used to correct a misidentified scan and to
+ *  add cards manually. When `toast` is provided, the modal stays open after a
+ *  pick (multi-add mode) and shows the toast as feedback. */
 export default function CardPickerModal({
   initialQuery,
   candidates,
   onPick,
   onClose,
+  toast,
 }: {
   initialQuery: string;
   candidates: CardSummary[];
   onPick: (card: CardSummary) => void;
   onClose: () => void;
+  toast?: string | null;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<CardSummary[]>(candidates);
@@ -53,10 +57,20 @@ export default function CardPickerModal({
             onChange={(e) => setQuery(e.target.value)}
           />
           <button className="btn-secondary" onClick={onClose}>
-            Close
+            {toast !== undefined ? "Done" : "Close"}
           </button>
         </div>
+        {toast && (
+          <div className="mb-2 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">
+            {toast}
+          </div>
+        )}
         {loading && <p className="py-2 text-sm text-slate-400">Searching…</p>}
+        {!loading && results.length === 0 && !query.trim() && (
+          <p className="py-6 text-center text-sm text-slate-400">
+            Type a card name or number to search the full card database.
+          </p>
+        )}
         <div className="grid flex-1 grid-cols-3 gap-3 overflow-y-auto sm:grid-cols-4">
           {results.map((card) => (
             <button
@@ -78,9 +92,9 @@ export default function CardPickerModal({
               </div>
             </button>
           ))}
-          {!loading && results.length === 0 && (
+          {!loading && results.length === 0 && !!query.trim() && (
             <p className="col-span-full py-6 text-center text-sm text-slate-400">
-              No results — try a different name.
+              No results — try a different name or number.
             </p>
           )}
         </div>
