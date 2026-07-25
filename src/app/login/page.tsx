@@ -3,26 +3,28 @@
 import { useState } from "react";
 
 export default function LoginPage() {
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<"idle" | "sending" | "sent">("idle");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    setStatus("sending");
+    setBusy(true);
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, password, mode }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Something went wrong");
-      setStatus("sent");
+      window.location.href = "/";
     } catch (err) {
-      setStatus("idle");
       setError(err instanceof Error ? err.message : "Something went wrong");
+      setBusy(false);
     }
   }
 
@@ -37,29 +39,54 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {status === "sent" ? (
-          <div className="rounded-lg bg-green-50 p-4 text-center text-sm text-green-800">
-            ✉️ Check your email for a magic sign-in link.
-          </div>
-        ) : (
-          <form onSubmit={submit} className="space-y-3">
-            <input
-              type="email"
-              required
-              placeholder="you@example.com"
-              className="input"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <button className="btn-primary w-full" disabled={status === "sending"}>
-              {status === "sending" ? "Sending…" : "Email me a sign-in link"}
+        <form onSubmit={submit} className="space-y-3">
+          <input
+            type="email"
+            required
+            autoComplete="email"
+            placeholder="you@example.com"
+            className="input"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <input
+            type="password"
+            required
+            minLength={8}
+            autoComplete={mode === "signup" ? "new-password" : "current-password"}
+            placeholder={mode === "signup" ? "Choose a password (8+ characters)" : "Password"}
+            className="input"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <button className="btn-primary w-full" disabled={busy}>
+            {busy
+              ? mode === "signup"
+                ? "Creating account…"
+                : "Signing in…"
+              : mode === "signup"
+                ? "Create account"
+                : "Sign in"}
+          </button>
+          {error && <p className="text-sm text-red-600">{error}</p>}
+        </form>
+
+        <div className="mt-4 text-center text-sm">
+          {mode === "signin" ? (
+            <button className="text-poke-blue hover:underline" onClick={() => setMode("signup")}>
+              First time here? Create your account
             </button>
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            <p className="text-center text-xs text-slate-400">
-              Invite-only — ask the admin if you need access.
-            </p>
-          </form>
-        )}
+          ) : (
+            <button className="text-poke-blue hover:underline" onClick={() => setMode("signin")}>
+              Already have an account? Sign in
+            </button>
+          )}
+        </div>
+        <p className="mt-3 text-center text-xs text-slate-400">
+          {mode === "signup"
+            ? "Invite-only — your email must be on the invite list."
+            : "Forgot your password? Ask the admin to reset it."}
+        </p>
       </div>
     </div>
   );
