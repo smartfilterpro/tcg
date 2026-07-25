@@ -18,14 +18,9 @@ export async function POST(req: Request) {
       .upsert({ email: normalized, invited_by: user.id }, { onConflict: "email" });
     if (insertErr) throw insertErr;
 
-    // Best-effort: send a Supabase invite email so they get a direct link.
-    let emailSent = true;
-    const { error: inviteErr } = await admin.auth.admin.inviteUserByEmail(normalized, {
-      redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
-    });
-    if (inviteErr) emailSent = false; // e.g. user already exists — invite row still allows login
-
-    return NextResponse.json({ ok: true, emailSent });
+    // No email is sent — the admin shares the app link, and the invitee
+    // creates their account with a password on the login page.
+    return NextResponse.json({ ok: true });
   } catch (err) {
     return errorResponse(err);
   }

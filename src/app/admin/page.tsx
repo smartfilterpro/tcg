@@ -47,13 +47,26 @@ export default function AdminPage() {
       setError(json.error);
     } else {
       setMessage(
-        json.emailSent
-          ? `Invite sent to ${email} ✉️`
-          : `${email} added to the allow-list (they can sign in from the login page).`
+        `${email} is invited! Send them the app link — they can create their account on the login page.`
       );
       setEmail("");
       load();
     }
+  }
+
+  async function resetPassword(id: string, userEmail: string) {
+    const password = prompt(
+      `Set a new password for ${userEmail} (8+ characters).\nShare it with them privately — they can keep using it or you can change it again later.`
+    );
+    if (!password) return;
+    const res = await fetch(`/api/admin/users/${id}/password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else setMessage(`Password updated for ${userEmail}.`);
   }
 
   async function revoke(inviteEmail: string) {
@@ -87,6 +100,10 @@ export default function AdminPage() {
 
       <div className="card-panel p-4">
         <h2 className="mb-2 font-semibold">Invite a friend</h2>
+        <p className="mb-2 text-xs text-slate-500">
+          Adds their email to the allow-list. Then just send them the app link — they&apos;ll
+          create their own password on the login page.
+        </p>
         <form onSubmit={invite} className="flex gap-2">
           <input
             type="email"
@@ -119,6 +136,12 @@ export default function AdminPage() {
                 >
                   {u.role}
                 </span>
+                <button
+                  className="btn text-xs text-slate-500 hover:bg-slate-100"
+                  onClick={() => resetPassword(u.id, u.email)}
+                >
+                  Reset password
+                </button>
                 {u.role !== "admin" && (
                   <button
                     className="btn text-xs text-red-600 hover:bg-red-50"

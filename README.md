@@ -20,8 +20,9 @@ and build battle decks with Claude — solo or with friends.
   tailored to your saved play-style profile.
 - **🔗 Claude Cowork** — a bundled skill (`.claude/skills/pokemon-deck-builder/`) plus a
   token-secured export API let you build decks by chatting with Claude anywhere.
-- **👥 Accounts & admin** — magic-link login, invite-only signup, and an admin portal
-  to invite friends and manage users. The first person to sign in becomes admin.
+- **👥 Accounts & admin** — email + password login, invite-only signup (no emails
+  required), and an admin portal to invite friends, reset passwords, and manage
+  users. The first account created becomes admin.
 
 ## Stack
 
@@ -34,10 +35,12 @@ Next.js (App Router, TypeScript) · Supabase (Postgres + Auth + RLS) · Anthropi
 
 1. Create a project at [supabase.com](https://supabase.com).
 2. In the SQL editor, run `supabase/migrations/001_init.sql`.
-3. In **Authentication → URL Configuration**, set the Site URL to your app URL and add
-   `https://<your-app>/auth/callback` to the redirect allow-list.
-4. Grab from **Project Settings → API**: the project URL, `anon` key, and
-   `service_role` key.
+3. Grab from **Project Settings → API**: the project URL, `anon`/publishable key, and
+   `service_role`/secret key. (New-style `sb_publishable_...` / `sb_secret_...` keys
+   work in the same slots.)
+
+No email/SMTP configuration is needed — login is email + password, accounts are
+created pre-confirmed, and password resets are done by the admin from the Admin page.
 
 ### 2. Anthropic
 
@@ -56,14 +59,14 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000, enter your email, click the magic link — **the first
-account created becomes the admin**. Invite friends from the Admin page.
+Open http://localhost:3000 and create your account — **the first account created
+becomes the admin**. Invite friends from the Admin page (adds them to the
+allow-list), then send them the app link so they can create their own account.
 
 ### 5. Deploy (Vercel)
 
-Push to GitHub → import in Vercel → add the same env vars (set
-`NEXT_PUBLIC_APP_URL` to your production URL) → deploy. Update the Supabase redirect
-allow-list with the production `/auth/callback` URL.
+Push to GitHub → import in Vercel/Railway → add the same env vars (set
+`NEXT_PUBLIC_APP_URL` to your production URL, no trailing slash) → deploy.
 
 ## Using the Cowork deck-builder skill
 
