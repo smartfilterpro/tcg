@@ -5,7 +5,7 @@ import { getUserAndProfile } from "@/lib/auth";
 
 export const metadata: Metadata = {
   title: "PokéDeck — scan, collect, battle",
-  description: "Scan your Pokémon cards, track your collection, and build decks with Claude.",
+  description: "Scan your Pokémon cards, track your collection, and build decks with Trainer AI.",
 };
 
 export const viewport: Viewport = {

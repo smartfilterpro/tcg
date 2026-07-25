@@ -25,13 +25,28 @@ actually owns, pulled live from their PokéDeck collection app.
 ## Deck building rules
 
 - Exactly **60 cards**.
-- Max **4 copies** of any card by name — except basic energy, which is unlimited
-  (assume the user has as many basic energies as needed even if not in the export).
-- Never include more copies of a card than `quantity` shows they own.
+- Max **4 copies** of any card by name — except basic energy, which is unlimited:
+  **assume the user owns as many basic energies (Grass, Fire, Water, Lightning,
+  Psychic, Fighting, Darkness, Metal) as needed, even if none appear in the
+  export** — players rarely scan energy cards. Special energy must be owned.
+- Never include more copies of any other card than `quantity` shows they own.
 - Respect evolution lines: an evolution needs its pre-evolution in the deck
   (e.g. Charizard ex needs Charmander, and Charmeleon or Rare Candy).
+  Use ratios like 4-3-3 or 3-2-3 for main lines.
+
+## Deck quality craft
+
+- Pick a clear **win condition** first — usually one main attacker line, ideally
+  with a backup attacker covering the main line's weakness.
+- **Consistency beats variety**: 3–4 copies of core cards over spreads of 1-ofs.
+- **Draw/search is the skeleton**: aim for 8–12 draw and search trainers
+  (Professor's Research, Iono, Poké Ball variants — whatever they own) so the
+  deck doesn't brick.
+- **Match energy to attack costs**: cheap attackers → 8–10 energy; hungry
+  attackers → 12–15. Prefer mono- or two-type energy lines.
 - Typical shape: 12–20 Pokémon, 25–35 Trainers, 8–15 Energy. Adjust to the
   archetype and to what the collection actually supports.
+- **Mind the mulligan**: 8+ Basic Pokémon unless the archetype justifies fewer.
 - If the collection can't support a strong deck, build the best casual deck possible
   and say so honestly.
 

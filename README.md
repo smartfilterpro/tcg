@@ -75,6 +75,28 @@ Push to GitHub → import in Vercel/Railway → add the same env vars (set
    `.claude/skills/pokemon-deck-builder/` into your skills folder.
 3. Ask Claude to "build me a Pokémon deck" and paste your collection link when asked.
 
+## Trainer AI — scope & safeguards
+
+The in-app assistant is branded **Trainer AI** (rename it in `src/lib/branding.ts`).
+It is deliberately narrow. Guardrails, in layers:
+
+1. **Single-purpose endpoints** — the AI is only reachable through three routes:
+   card identification (`/api/scan`), deck building (`/api/decks/build`), and deck
+   coaching (`/api/decks/coach`). There is no open-ended chat endpoint.
+2. **Structured output** — scan and deck-build responses are schema-constrained
+   (JSON matching a fixed shape), so the model can only return card
+   identifications or a deck list, regardless of what a request tries to make it do.
+3. **Scoped system prompts** — each route instructs the model to ignore off-topic
+   or instruction-changing content and to treat collection data (card names,
+   profile notes) as data, never as instructions. The coach politely declines
+   anything that isn't Pokémon TCG.
+4. **No tools, no side effects** — the model has no database access and no tools;
+   every write goes through the app's authenticated, validated API routes.
+5. **Auth required** — all AI routes require a signed-in (invited) user.
+
+Deck building assumes **unlimited basic energy** (players rarely scan energy
+cards); special energy must actually be owned.
+
 ## Scanning tips
 
 - Lay cards flat, no overlap, decent light, minimal glare.
