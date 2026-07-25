@@ -114,6 +114,36 @@ function esc(v: string): string {
   return v.replace(/["\\]/g, "");
 }
 
+/** The DB is inconsistent about collector numbers: some sets store "95",
+ *  others "095", promos use letter prefixes ("SWSH095", "SM210", "TG12").
+ *  Generate the plausible spellings so one search catches them all. */
+function numberVariants(n: string): string[] {
+  const out = new Set<string>();
+  const raw = esc(n).trim().replace(/\s+/g, "");
+  if (!raw) return [];
+  out.add(raw.toUpperCase());
+  out.add(raw.replace(/^0+(?=\d)/, "").toUpperCase());
+  const digits = raw.replace(/\D/g, "");
+  if (digits) {
+    const stripped = digits.replace(/^0+(?=\d)/, "");
+    out.add(stripped); // "95"
+    out.add(stripped.padStart(3, "0")); // "095"
+  }
+  return [...out];
+}
+
+function numberClause(n: string): string | null {
+  const variants = numberVariants(n);
+  if (variants.length === 0) return null;
+  if (variants.length === 1) return `number:${variants[0]}`;
+  return `(${variants.map((v) => `number:${v}`).join(" OR ")})`;
+}
+
+/** Digits-only, zero-stripped comparison key: "SWSH095" → "95". */
+export function numberKey(n: string | null | undefined): string {
+  return (n ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+}
+
 /** Search cards by (partial) name and/or collector number / set size. */
 export async function searchCards(opts: {
   name?: string;
@@ -124,7 +154,10 @@ export async function searchCards(opts: {
 }): Promise<CardSummary[]> {
   const clauses: string[] = [];
   if (opts.name) clauses.push(`name:"${esc(opts.name)}*"`);
-  if (opts.number) clauses.push(`number:${esc(opts.number).replace(/^0+(?=\d)/, "")}`);
+  if (opts.number) {
+    const clause = numberClause(opts.number);
+    if (clause) clauses.push(clause);
+  }
   if (opts.printedTotal)
     clauses.push(`set.printedTotal:${esc(opts.printedTotal).replace(/^0+(?=\d)/, "")}`);
   if (opts.setName) clauses.push(`set.name:"${esc(opts.setName)}*"`);
@@ -174,12 +207,32 @@ export async function matchDetectedCard(detected: {
 
   if (candidates.length === 0) return { match: null, candidates: [] };
 
-  // Score: number match, printed-total match, set-name hint match
-  const normNum = (n: string | null) => (n ?? "").replace(/^0+(?=\d)/, "").toLowerCase();
+  // Score: number match (exact beats digits-only), printed-total match,
+  // and set hints. Digits-only comparison bridges promo prefixes and
+  // leading zeros ("SWSH095" vs "095" vs "95").
+  const exact = (n: string | null) => (n ?? "").replace(/^0+(?=\d)/, "").toLowerCase();
   const scored = candidates.map((c) => {
     let score = 0;
-    if (detected.collectorNumber && normNum(c.number) === normNum(detected.collectorNumber)) score += 4;
-    if (detected.setTotal && c.setPrintedTotal != null && String(c.setPrintedTotal) === normNum(detected.setTotal)) score += 3;
+    if (detected.collectorNumber) {
+      if (exact(c.number) === exact(detected.collectorNumber)) score += 4;
+      else if (numberKey(c.number) && numberKey(c.number) === numberKey(detected.collectorNumber))
+        score += 3;
+    }
+    if (detected.setTotal) {
+      if (/\d/.test(detected.setTotal)) {
+        // Numeric total: compare against the set's printed size
+        if (
+          c.setPrintedTotal != null &&
+          String(c.setPrintedTotal) === numberKey(detected.setTotal)
+        )
+          score += 3;
+      } else {
+        // Letters-only "total" (e.g. 095/SVP) is a promo-set code
+        const code = detected.setTotal.toLowerCase();
+        if (c.setName.toLowerCase().includes(code) || c.setId.toLowerCase().includes(code))
+          score += 3;
+      }
+    }
     if (
       detected.setNameHint &&
       c.setName.toLowerCase().includes(detected.setNameHint.toLowerCase())
