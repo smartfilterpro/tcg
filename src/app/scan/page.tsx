@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import CardPickerModal from "@/components/CardPickerModal";
+import { AI_NAME } from "@/lib/branding";
 import {
   availableVariants,
   defaultVariantFor,
@@ -165,7 +166,7 @@ export default function ScanPage() {
           )}
           <div className="animate-pulse text-lg font-semibold">🔍 Identifying cards…</div>
           <p className="mt-1 text-sm text-slate-500">
-            Claude is reading the cards and matching them against the database.
+            {AI_NAME} is reading the cards and matching them against the database.
           </p>
         </div>
       )}

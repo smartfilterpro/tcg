@@ -1,7 +1,63 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AI_NAME } from "@/lib/branding";
 import type { Deck, DeckCardEntry } from "@/lib/types";
+
+function CoachBox({ deck }: { deck: { name: string; strategy: string | null; cards: DeckCardEntry[] } }) {
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+
+  async function ask() {
+    if (!question.trim() || asking) return;
+    setAsking(true);
+    setAnswer(null);
+    try {
+      const res = await fetch("/api/decks/coach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deck, question }),
+      });
+      const json = await res.json();
+      setAnswer(res.ok ? json.answer : json.error || "Something went wrong");
+    } catch {
+      setAnswer("Something went wrong — try again.");
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="mb-2 text-xs font-semibold text-slate-500">
+        🎓 Ask {AI_NAME} about this deck — how to pilot it, opening plays, rules, matchups
+      </p>
+      <div className="flex gap-2">
+        <input
+          className="input text-sm"
+          placeholder='e.g. "What do I search for first turn?" or "How do I beat water decks?"'
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && ask()}
+        />
+        <button className="btn-secondary shrink-0 text-sm" onClick={ask} disabled={asking}>
+          {asking ? "Thinking…" : "Ask"}
+        </button>
+      </div>
+      {asking && (
+        <p className="mt-2 animate-pulse text-xs text-slate-400">
+          {AI_NAME} is thinking about your deck…
+        </p>
+      )}
+      {answer && (
+        <div className="mt-2 whitespace-pre-wrap rounded bg-white p-3 text-sm text-slate-700 shadow-sm">
+          {answer}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface BuiltDeck {
   name: string;
@@ -111,7 +167,7 @@ export default function DecksPage() {
       <div className="card-panel p-4">
         <h2 className="font-semibold">🎮 Your play style</h2>
         <p className="mb-2 mt-0.5 text-xs text-slate-500">
-          Tell Claude how you like to play — aggressive, defensive, favorite Pokémon, combos you
+          Tell {AI_NAME} how you like to play — aggressive, defensive, favorite Pokémon, combos you
           love, your experience level. It uses this to tailor every deck it builds for you.
         </p>
         <textarea
@@ -130,9 +186,10 @@ export default function DecksPage() {
 
       {/* Builder */}
       <div className="card-panel p-4">
-        <h2 className="font-semibold">🤖 Build a deck with Claude</h2>
+        <h2 className="font-semibold">🤖 Build a deck with {AI_NAME}</h2>
         <p className="mb-2 mt-0.5 text-xs text-slate-500">
-          Claude looks at your whole collection and builds a legal 60-card deck. Can take a minute.
+          {AI_NAME} looks at your whole collection and builds a legal 60-card deck. Basic energy
+          is assumed — no need to scan energy cards. Can take a minute.
         </p>
         <div className="flex gap-2">
           <input
@@ -148,7 +205,7 @@ export default function DecksPage() {
         </div>
         {building && (
           <p className="mt-2 animate-pulse text-sm text-slate-500">
-            Claude is studying your collection and crafting a deck…
+            {AI_NAME} is studying your collection and crafting a deck…
           </p>
         )}
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
@@ -178,6 +235,7 @@ export default function DecksPage() {
                 <strong>Wishlist upgrades:</strong> {built.missing_suggestions.join(", ")}
               </div>
             )}
+            <CoachBox deck={{ name: built.name, strategy: built.strategy, cards: built.cards }} />
           </div>
         )}
       </div>
@@ -251,6 +309,9 @@ export default function DecksPage() {
               <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{viewing.strategy}</p>
             )}
             <DeckList cards={viewing.cards ?? []} />
+            <CoachBox
+              deck={{ name: viewing.name, strategy: viewing.strategy, cards: viewing.cards ?? [] }}
+            />
           </div>
         </div>
       )}
