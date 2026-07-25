@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { anthropic, MODEL } from "@/lib/anthropic";
-import { matchDetectedCard, numberKey } from "@/lib/pokemontcg";
+import { matchDetectedCard, numberKey, cleanCardName } from "@/lib/pokemontcg";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
@@ -138,7 +138,8 @@ export async function POST(req: Request) {
     // Match each detected card against the reference database (in parallel,
     // capped to avoid hammering the API).
     const detectedCards: DetectedCard[] = parsed.cards.map((c) => ({
-      name: c.name,
+      // Normalize away curly apostrophes etc. the vision model may emit
+      name: cleanCardName(c.name),
       collectorNumber: c.collector_number,
       setTotal: c.set_total,
       setNameHint: c.set_name_hint,
