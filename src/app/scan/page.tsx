@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import CardPickerModal from "@/components/CardPickerModal";
 import { AI_NAME } from "@/lib/branding";
+import { uploadCardPhoto } from "@/lib/photos";
 import {
   availableVariants,
   defaultVariantFor,
@@ -20,6 +21,7 @@ interface ReviewRow {
   candidates: CardSummary[];
   quantity: number;
   variant: string; // finish: normal | holofoil | reverseHolofoil | ...
+  photoUrl: string | null; // user-taken photo, used when the DB has no image
 }
 
 /** Downscale a photo client-side so uploads stay fast and under limits. */
@@ -56,6 +58,9 @@ export default function ScanPage() {
   const [pickerRow, setPickerRow] = useState<ReviewRow | null>(null);
   const [addedCount, setAddedCount] = useState(0);
   const [preview, setPreview] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const [photoRowKey, setPhotoRowKey] = useState<number | null>(null);
+  const [photoUploading, setPhotoUploading] = useState<number | null>(null);
 
   // Rotate through status messages while a scan is running so the page
   // clearly isn't frozen (scans take 10-30s depending on card count).
@@ -94,9 +99,19 @@ export default function ScanPage() {
           candidates: r.candidates,
           quantity: 1,
           variant: r.match ? defaultVariantFor(r.match, r.detected.rarityHint) : "normal",
+          photoUrl: null,
         }))
       );
       setPhase("review");
+      // Single-card scan with no database image (common for promos): use the
+      // photo just taken as the card's image, automatically.
+      if (results.length === 1 && results[0].match && !results[0].match.imageSmall) {
+        uploadCardPhoto(file).then((url) => {
+          if (url) {
+            setRows((prev) => prev.map((r) => (r.key === 0 ? { ...r, photoUrl: url } : r)));
+          }
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Scan failed");
       setPhase("idle");
@@ -121,7 +136,14 @@ export default function ScanPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          items: valid.map((r) => ({ card: r.card, quantity: r.quantity, variant: r.variant })),
+          items: valid.map((r) => ({
+            card:
+              r.card && !r.card.imageSmall && r.photoUrl
+                ? { ...r.card, imageSmall: r.photoUrl, imageLarge: r.photoUrl }
+                : r.card,
+            quantity: r.quantity,
+            variant: r.variant,
+          })),
         }),
       });
       const json = await res.json();
@@ -158,6 +180,26 @@ export default function ScanPage() {
       {error && (
         <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>
       )}
+
+      {/* Per-row card photo capture (used when the database has no card art) */}
+      <input
+        ref={photoInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={async (e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (!f || photoRowKey === null) return;
+          const key = photoRowKey;
+          setPhotoUploading(key);
+          const url = await uploadCardPhoto(f);
+          setPhotoUploading(null);
+          if (url) updateRow(key, { photoUrl: url });
+          else setError("Photo upload failed — has the card-photos storage migration been run?");
+        }}
+      />
 
       {phase === "idle" && (
         <div className="card-panel p-8 text-center">
@@ -225,12 +267,16 @@ export default function ScanPage() {
           <div className="space-y-3">
             {rows.map((row) => (
               <div key={row.key} className="card-panel flex gap-3 p-3">
-                {row.card?.imageSmall ? (
+                {row.card?.imageSmall || row.photoUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={row.card.imageSmall} alt={row.card.name} className="w-20 self-start rounded" />
+                  <img
+                    src={row.card?.imageSmall ?? row.photoUrl!}
+                    alt={row.card?.name ?? "your photo"}
+                    className="w-20 self-start rounded"
+                  />
                 ) : (
                   <div className="flex aspect-[63/88] w-20 items-center justify-center self-start rounded bg-slate-100 text-center text-[10px] text-slate-400">
-                    No match
+                    {row.card ? "No image in database" : "No match"}
                   </div>
                 )}
                 <div className="min-w-0 flex-1">
@@ -295,6 +341,23 @@ export default function ScanPage() {
                           ))}
                         </optgroup>
                       </select>
+                    )}
+                    {row.card && !row.card.imageSmall && (
+                      <button
+                        className="btn-secondary text-xs"
+                        disabled={photoUploading === row.key}
+                        onClick={() => {
+                          setPhotoRowKey(row.key);
+                          photoInputRef.current?.click();
+                        }}
+                        title="No card art in the database — use your own photo instead"
+                      >
+                        {photoUploading === row.key
+                          ? "Uploading…"
+                          : row.photoUrl
+                            ? "📷 Retake photo"
+                            : "📷 Add photo"}
+                      </button>
                     )}
                     <button className="btn-secondary text-xs" onClick={() => setPickerRow(row)}>
                       {row.card ? "Change card" : "Find card"}

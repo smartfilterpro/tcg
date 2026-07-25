@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { uploadCardPhoto } from "@/lib/photos";
 import type { CardSummary } from "@/lib/types";
 
 const ENERGY_TYPES = [
@@ -26,11 +27,18 @@ function ManualCardForm({
   const [energyType, setEnergyType] = useState("");
   const [rarity, setRarity] = useState("");
   const [price, setPrice] = useState("");
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    let photoUrl: string | null = null;
+    if (photo) photoUrl = await uploadCardPhoto(photo);
     const parsedPrice = parseFloat(price);
+    setSaving(false);
     onSubmit({
       id: `custom-${crypto.randomUUID()}`,
       name: name.trim(),
@@ -45,8 +53,8 @@ function ManualCardForm({
       setSeries: null,
       setPrintedTotal: null,
       releaseDate: null,
-      imageSmall: null,
-      imageLarge: null,
+      imageSmall: photoUrl,
+      imageLarge: photoUrl,
       marketPrice: Number.isFinite(parsedPrice) ? parsedPrice : null,
       prices: null,
     });
@@ -107,9 +115,30 @@ function ManualCardForm({
           onChange={(e) => setPrice(e.target.value)}
         />
       </div>
+      <div className="flex items-center gap-2">
+        <label className="btn-secondary cursor-pointer text-sm">
+          {photo ? "📷 Change photo" : "📷 Photo of your card (optional)"}
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null;
+              setPhoto(f);
+              setPhotoPreview(f ? URL.createObjectURL(f) : null);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        {photoPreview && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={photoPreview} alt="card photo" className="h-14 rounded shadow-sm" />
+        )}
+      </div>
       <div className="flex gap-2">
-        <button type="submit" className="btn-primary text-sm">
-          Add this card
+        <button type="submit" className="btn-primary text-sm" disabled={saving}>
+          {saving ? "Saving…" : "Add this card"}
         </button>
         <button type="button" className="btn-secondary text-sm" onClick={onCancel}>
           Back to search
