@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { anthropic, MODEL } from "@/lib/anthropic";
-import { matchDetectedCard } from "@/lib/pokemontcg";
+import { matchDetectedCard, numberKey } from "@/lib/pokemontcg";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
 import type { DetectedCard, ScanMatch } from "@/lib/types";
@@ -149,21 +149,29 @@ export async function POST(req: Request) {
       const matched = await Promise.all(
         batch.map(async (detected) => {
           let { match, candidates } = await matchDetectedCard(detected);
-          // Primary DB miss → try TCGdex (usually has new sets/promos earlier)
-          if (candidates.length === 0 && detected.name) {
+
+          // Consult TCGdex when the primary DB found nothing — or found only
+          // cards that DON'T carry the detected collector number. That second
+          // case is the typical promo failure: a name search surfaces old
+          // printings of the same Pokémon while the actual promo exists only
+          // in TCGdex (which gets new sets/promos months earlier).
+          const key = numberKey(detected.collectorNumber);
+          const primaryHasNumber =
+            !key || candidates.some((c) => numberKey(c.number) === key);
+          if (detected.name && (candidates.length === 0 || !primaryHasNumber)) {
             const alt = await searchTcgdex({
               name: detected.name,
               number: detected.collectorNumber ?? undefined,
               pageSize: 6,
             });
-            if (alt.length === 0 && detected.collectorNumber) {
-              // Number may have been misread — retry on name alone
-              const byName = await searchTcgdex({ name: detected.name, pageSize: 6 });
-              if (byName.length > 0) {
-                match = byName[0];
-                candidates = byName;
-              }
-            } else if (alt.length > 0) {
+            const altNumberMatches = key
+              ? alt.filter((c) => numberKey(c.number) === key)
+              : alt;
+            if (altNumberMatches.length > 0) {
+              // Number-exact fallback wins; keep primary results as alternatives
+              match = altNumberMatches[0];
+              candidates = [...altNumberMatches, ...candidates];
+            } else if (candidates.length === 0 && alt.length > 0) {
               match = alt[0];
               candidates = alt;
             }

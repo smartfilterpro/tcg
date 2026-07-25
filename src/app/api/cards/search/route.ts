@@ -1,7 +1,19 @@
 import { NextResponse } from "next/server";
-import { searchCards } from "@/lib/pokemontcg";
+import { searchCards, numberKey } from "@/lib/pokemontcg";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
+
+/** The primary API has been flaky — an error there must not kill the search,
+ *  because the TCGdex fallback can still answer. */
+async function safeSearch(
+  opts: Parameters<typeof searchCards>[0]
+): Promise<ReturnType<typeof searchCards> extends Promise<infer T> ? T : never> {
+  try {
+    return await searchCards(opts);
+  } catch {
+    return [];
+  }
+}
 
 /** Parse a free-form query into name / collector-number / set-size parts.
  *  Supported shapes:
@@ -47,6 +59,19 @@ function parseQuery(raw: string): {
     return { number: bare[1] };
   }
 
+  // "name number" WITHOUT a slash — e.g. "Gengar 073", "Pikachu SWSH061",
+  // "Mew #25". The number token needs 2+ digits, a letter prefix, or a "#"
+  // so names like "Porygon2" or "Blastoise 2" aren't misparsed.
+  const trailing = q.match(/^(.+?)\s+#?([A-Za-z]{0,4}\d{1,4}[a-z]?)$/);
+  if (trailing) {
+    const numTok = trailing[2];
+    const looksLikeNumber =
+      /\d{2,}/.test(numTok) || /^[A-Za-z]+\d+/.test(numTok) || q.includes("#");
+    if (looksLikeNumber && /\d/.test(numTok)) {
+      return { name: trailing[1].trim(), number: numTok };
+    }
+  }
+
   return { name: q };
 }
 
@@ -59,30 +84,46 @@ export async function GET(req: Request) {
     if (!q) return NextResponse.json({ cards: [] });
 
     const parsed = parseQuery(q);
-    let cards = await searchCards({ ...parsed, pageSize: 16 });
+    let cards = await safeSearch({ ...parsed, pageSize: 16 });
 
     // Number-based searches can be over-constrained (e.g. printedTotal counts
     // only the base set, not secret rares; promo-set codes vary) — relax
     // progressively.
     if (cards.length === 0 && (parsed.printedTotal || parsed.setName)) {
-      cards = await searchCards({ name: parsed.name, number: parsed.number, pageSize: 16 });
+      cards = await safeSearch({ name: parsed.name, number: parsed.number, pageSize: 16 });
     }
     if (cards.length === 0 && parsed.number && !parsed.name) {
-      cards = await searchCards({ name: q, pageSize: 16 });
+      cards = await safeSearch({ name: q, pageSize: 16 });
     }
     // XY-era Mega Evolutions are named "M Gengar-EX", not "Mega Gengar EX" —
     // retry "Mega X" queries with the old naming convention.
     if (cards.length === 0 && parsed.name && /^mega\s+/i.test(parsed.name)) {
       const oldStyle = parsed.name.replace(/^mega\s+/i, "M ").replace(/\s*ex$/i, "");
-      cards = await searchCards({ name: oldStyle, number: parsed.number, pageSize: 16 });
+      cards = await safeSearch({ name: oldStyle, number: parsed.number, pageSize: 16 });
     }
 
-    // Primary database came up empty — fall back to TCGdex, which usually has
-    // brand-new sets and promos months earlier.
+    // Consult TCGdex (usually has new sets/promos months earlier) when the
+    // primary came up empty — or when it returned cards but NONE carry the
+    // number that was searched for (typical promo case: a name search finds
+    // old printings while the actual promo lives only in TCGdex).
     let source = "pokemontcg.io";
-    if (cards.length === 0) {
-      cards = await searchTcgdex({ name: parsed.name, number: parsed.number, pageSize: 12 });
-      if (cards.length > 0) source = "tcgdex";
+    const key = parsed.number ? numberKey(parsed.number) : "";
+    const primaryHasNumber = !key || cards.some((c) => numberKey(c.number) === key);
+    if (cards.length === 0 || !primaryHasNumber) {
+      const alt = await searchTcgdex({
+        name: parsed.name,
+        number: parsed.number,
+        pageSize: 12,
+      });
+      const altNumberMatches = key ? alt.filter((c) => numberKey(c.number) === key) : alt;
+      if (cards.length === 0) {
+        cards = alt;
+        if (alt.length > 0) source = "tcgdex";
+      } else if (altNumberMatches.length > 0) {
+        // Put the number-exact fallback results first, keep primary as alternatives
+        cards = [...altNumberMatches, ...cards].slice(0, 20);
+        source = "mixed";
+      }
     }
 
     return NextResponse.json({ cards, source });

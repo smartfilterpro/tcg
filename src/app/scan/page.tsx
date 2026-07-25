@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import CardPickerModal from "@/components/CardPickerModal";
 import { AI_NAME } from "@/lib/branding";
@@ -36,15 +36,37 @@ async function fileToBase64(file: File, maxDim = 2048): Promise<{ data: string; 
   return { data: dataUrl.split(",")[1], mediaType: "image/jpeg" };
 }
 
+const SCAN_STEPS = [
+  `${AI_NAME} is reading the cards in your photo…`,
+  "Finding names and collector numbers…",
+  "Matching against the card database…",
+  "Double-checking sets and rarities…",
+  "Looking up market prices…",
+  "Almost there — big scans take a little longer…",
+];
+
 export default function ScanPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
+  const [scanStep, setScanStep] = useState(0);
   const [phase, setPhase] = useState<"idle" | "scanning" | "review" | "saving" | "done">("idle");
   const [rows, setRows] = useState<ReviewRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pickerRow, setPickerRow] = useState<ReviewRow | null>(null);
   const [addedCount, setAddedCount] = useState(0);
   const [preview, setPreview] = useState<string | null>(null);
+
+  // Rotate through status messages while a scan is running so the page
+  // clearly isn't frozen (scans take 10-30s depending on card count).
+  useEffect(() => {
+    if (phase !== "scanning") return;
+    setScanStep(0);
+    const interval = setInterval(
+      () => setScanStep((s) => Math.min(s + 1, SCAN_STEPS.length - 1)),
+      3500
+    );
+    return () => clearInterval(interval);
+  }, [phase]);
 
   async function handleFile(file: File) {
     setError(null);
@@ -161,13 +183,30 @@ export default function ScanPage() {
       {phase === "scanning" && (
         <div className="card-panel p-8 text-center">
           {preview && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={preview} alt="scan preview" className="mx-auto mb-4 max-h-64 rounded-lg opacity-80" />
+            <div className="relative mx-auto mb-5 inline-block overflow-hidden rounded-lg">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={preview} alt="scan preview" className="max-h-64 rounded-lg" />
+              <div className="absolute inset-0 bg-poke-dark/20" />
+              <div className="scan-beam" />
+            </div>
           )}
-          <div className="animate-pulse text-lg font-semibold">🔍 Identifying cards…</div>
-          <p className="mt-1 text-sm text-slate-500">
-            {AI_NAME} is reading the cards and matching them against the database.
+          <div className="flex items-center justify-center gap-3">
+            <span className="animate-spin-slow inline-block h-6 w-6 shrink-0 rounded-full border-2 border-poke-dark bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
+            <span className="text-lg font-semibold">Identifying cards…</span>
+          </div>
+          <p className="mt-2 min-h-5 text-sm text-slate-500 transition-opacity" key={scanStep}>
+            {SCAN_STEPS[scanStep]}
           </p>
+          <div className="mx-auto mt-4 flex max-w-48 gap-1">
+            {SCAN_STEPS.map((_, i) => (
+              <div
+                key={i}
+                className={`h-1 flex-1 rounded-full transition-colors duration-500 ${
+                  i <= scanStep ? "bg-poke-red" : "bg-slate-200"
+                }`}
+              />
+            ))}
+          </div>
         </div>
       )}
 
