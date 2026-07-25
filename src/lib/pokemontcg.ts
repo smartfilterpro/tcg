@@ -101,16 +101,19 @@ function esc(v: string): string {
   return v.replace(/["\\]/g, "");
 }
 
-/** Search cards by (partial) name and optional collector number. */
+/** Search cards by (partial) name and/or collector number / set size. */
 export async function searchCards(opts: {
   name?: string;
   number?: string;
+  printedTotal?: string;
   setName?: string;
   pageSize?: number;
 }): Promise<CardSummary[]> {
   const clauses: string[] = [];
   if (opts.name) clauses.push(`name:"${esc(opts.name)}*"`);
   if (opts.number) clauses.push(`number:${esc(opts.number).replace(/^0+(?=\d)/, "")}`);
+  if (opts.printedTotal)
+    clauses.push(`set.printedTotal:${esc(opts.printedTotal).replace(/^0+(?=\d)/, "")}`);
   if (opts.setName) clauses.push(`set.name:"${esc(opts.setName)}*"`);
   if (clauses.length === 0) return [];
   const cards = await apiGet("/cards", {

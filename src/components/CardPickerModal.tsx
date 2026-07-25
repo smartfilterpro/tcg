@@ -48,7 +48,7 @@ export default function CardPickerModal({
           <input
             autoFocus
             className="input"
-            placeholder="Search the card database… (e.g. Charizard ex)"
+            placeholder='Search by name or number — e.g. "Charizard", "101/190", "#25"'
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
