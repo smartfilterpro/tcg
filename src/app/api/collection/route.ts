@@ -43,8 +43,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No valid items" }, { status: 400 });
     }
 
-    // 1) Upsert card reference rows (shared cache)
-    const cardRows = items.map((i) => summaryToRow(i.card));
+    // 1) Upsert card reference rows (shared cache). Dedupe by card id first —
+    // the same card can appear multiple times in one save (two copies in one
+    // photo, or two finishes of the same card), and Postgres rejects an upsert
+    // that touches the same row twice.
+    const cardRows = [
+      ...new Map(items.map((i) => [i.card.id, summaryToRow(i.card)])).values(),
+    ];
     const { error: cardErr } = await supabase
       .from("cards")
       .upsert(cardRows, { onConflict: "id" });
