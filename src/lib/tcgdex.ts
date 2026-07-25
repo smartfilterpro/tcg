@@ -97,8 +97,27 @@ export async function searchTcgdex(opts: {
     params.set("localId", opts.number.replace(/\D/g, "").replace(/^0+(?=\d)/, "") || opts.number);
   }
 
-  const briefs = await get<TcgdexBrief[]>(`${BASE}/cards?${params.toString()}`);
+  let briefs = await get<TcgdexBrief[]>(`${BASE}/cards?${params.toString()}`);
+  // Name + number found nothing (the number may be misread or formatted
+  // differently) — retry on name alone rather than giving up.
+  if ((!Array.isArray(briefs) || briefs.length === 0) && opts.name && opts.number) {
+    briefs = await get<TcgdexBrief[]>(
+      `${BASE}/cards?${new URLSearchParams({ name: opts.name }).toString()}`
+    );
+  }
   if (!Array.isArray(briefs) || briefs.length === 0) return [];
+
+  // Put number-matching briefs first so they survive the detail-fetch cap.
+  if (opts.number) {
+    const wanted = opts.number.replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+    if (wanted) {
+      const briefKey = (b: TcgdexBrief) =>
+        String(b.localId ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+      briefs = [...briefs].sort(
+        (a, b) => (briefKey(b) === wanted ? 1 : 0) - (briefKey(a) === wanted ? 1 : 0)
+      );
+    }
+  }
 
   // Briefs lack set/rarity info — fetch details for the first few.
   const limit = Math.min(opts.pageSize ?? 8, 12);
