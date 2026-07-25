@@ -1,0 +1,283 @@
+"use client";
+
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import CardPickerModal from "@/components/CardPickerModal";
+import type { CardSummary, ScanMatch } from "@/lib/types";
+
+interface ReviewRow {
+  key: number;
+  detected: ScanMatch["detected"];
+  card: CardSummary | null; // the (possibly corrected) identification
+  candidates: CardSummary[];
+  quantity: number;
+}
+
+/** Downscale a photo client-side so uploads stay fast and under limits. */
+async function fileToBase64(file: File, maxDim = 2048): Promise<{ data: string; mediaType: string }> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  const w = Math.round(bitmap.width * scale);
+  const h = Math.round(bitmap.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
+  return { data: dataUrl.split(",")[1], mediaType: "image/jpeg" };
+}
+
+export default function ScanPage() {
+  const router = useRouter();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [phase, setPhase] = useState<"idle" | "scanning" | "review" | "saving" | "done">("idle");
+  const [rows, setRows] = useState<ReviewRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [pickerRow, setPickerRow] = useState<ReviewRow | null>(null);
+  const [addedCount, setAddedCount] = useState(0);
+  const [preview, setPreview] = useState<string | null>(null);
+
+  async function handleFile(file: File) {
+    setError(null);
+    setPhase("scanning");
+    setPreview(URL.createObjectURL(file));
+    try {
+      const { data, mediaType } = await fileToBase64(file);
+      const res = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: data, mediaType }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Scan failed");
+      const results: ScanMatch[] = json.results;
+      if (results.length === 0) {
+        throw new Error("No cards were detected. Try better lighting and make sure the collector numbers are visible.");
+      }
+      setRows(
+        results.map((r, i) => ({
+          key: i,
+          detected: r.detected,
+          card: r.match,
+          candidates: r.candidates,
+          quantity: 1,
+        }))
+      );
+      setPhase("review");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Scan failed");
+      setPhase("idle");
+    }
+  }
+
+  function updateRow(key: number, patch: Partial<ReviewRow>) {
+    setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  }
+
+  function removeRow(key: number) {
+    setRows((prev) => prev.filter((r) => r.key !== key));
+  }
+
+  async function save() {
+    const valid = rows.filter((r) => r.card && r.quantity > 0);
+    if (valid.length === 0) return;
+    setPhase("saving");
+    setError(null);
+    try {
+      const res = await fetch("/api/collection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: valid.map((r) => ({ card: r.card, quantity: r.quantity })),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Save failed");
+      setAddedCount(json.added);
+      setPhase("done");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
+      setPhase("review");
+    }
+  }
+
+  function reset() {
+    setRows([]);
+    setPreview(null);
+    setError(null);
+    setPhase("idle");
+  }
+
+  const confidenceChip = {
+    high: "bg-green-100 text-green-800",
+    medium: "bg-amber-100 text-amber-800",
+    low: "bg-red-100 text-red-800",
+  } as const;
+
+  return (
+    <div className="mx-auto max-w-3xl">
+      <h1 className="mb-1 text-2xl font-bold">Scan cards</h1>
+      <p className="mb-4 text-sm text-slate-500">
+        Snap one card or a whole spread — lay cards flat, avoid glare, and keep the
+        little number at the bottom (e.g. 042/191) readable.
+      </p>
+
+      {error && (
+        <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>
+      )}
+
+      {phase === "idle" && (
+        <div className="card-panel p-8 text-center">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleFile(f);
+              e.target.value = "";
+            }}
+          />
+          <div className="text-5xl">📷</div>
+          <p className="mt-3 text-slate-600">Take a photo or choose one from your library.</p>
+          <button className="btn-primary mt-4" onClick={() => fileRef.current?.click()}>
+            Take / choose photo
+          </button>
+        </div>
+      )}
+
+      {phase === "scanning" && (
+        <div className="card-panel p-8 text-center">
+          {preview && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={preview} alt="scan preview" className="mx-auto mb-4 max-h-64 rounded-lg opacity-80" />
+          )}
+          <div className="animate-pulse text-lg font-semibold">🔍 Identifying cards…</div>
+          <p className="mt-1 text-sm text-slate-500">
+            Claude is reading the cards and matching them against the database.
+          </p>
+        </div>
+      )}
+
+      {(phase === "review" || phase === "saving") && (
+        <div>
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-sm font-semibold">
+              {rows.length} card{rows.length === 1 ? "" : "s"} detected — review before saving
+            </p>
+            <button className="btn-secondary text-xs" onClick={reset}>
+              Start over
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            {rows.map((row) => (
+              <div key={row.key} className="card-panel flex gap-3 p-3">
+                {row.card?.imageSmall ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={row.card.imageSmall} alt={row.card.name} className="w-20 self-start rounded" />
+                ) : (
+                  <div className="flex aspect-[63/88] w-20 items-center justify-center self-start rounded bg-slate-100 text-center text-[10px] text-slate-400">
+                    No match
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold">
+                      {row.card ? row.card.name : `“${row.detected.name}” — not found`}
+                    </span>
+                    <span className={`chip ${confidenceChip[row.detected.confidence]}`}>
+                      {row.detected.confidence === "high" ? "✓ confident" : `⚠ ${row.detected.confidence} confidence`}
+                    </span>
+                  </div>
+                  {row.card ? (
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {row.card.setName} · #{row.card.number}
+                      {row.card.setPrintedTotal ? `/${row.card.setPrintedTotal}` : ""}
+                      {row.card.rarity ? ` · ${row.card.rarity}` : ""}
+                      {row.card.marketPrice != null ? ` · $${row.card.marketPrice.toFixed(2)}` : ""}
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Saw: {row.detected.name}
+                      {row.detected.collectorNumber ? ` #${row.detected.collectorNumber}` : ""}
+                      {row.detected.setTotal ? `/${row.detected.setTotal}` : ""}
+                    </p>
+                  )}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="btn-secondary h-8 w-8 p-0 text-base"
+                        onClick={() => updateRow(row.key, { quantity: Math.max(1, row.quantity - 1) })}
+                      >
+                        −
+                      </button>
+                      <span className="w-8 text-center text-sm font-bold">{row.quantity}</span>
+                      <button
+                        className="btn-secondary h-8 w-8 p-0 text-base"
+                        onClick={() => updateRow(row.key, { quantity: row.quantity + 1 })}
+                      >
+                        +
+                      </button>
+                    </div>
+                    <button className="btn-secondary text-xs" onClick={() => setPickerRow(row)}>
+                      {row.card ? "Change card" : "Find card"}
+                    </button>
+                    <button
+                      className="btn text-xs text-red-600 hover:bg-red-50"
+                      onClick={() => removeRow(row.key)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="sticky bottom-4 mt-4">
+            <button
+              className="btn-primary w-full py-3 text-base shadow-lg"
+              disabled={phase === "saving" || rows.every((r) => !r.card)}
+              onClick={save}
+            >
+              {phase === "saving"
+                ? "Saving…"
+                : `Add ${rows.filter((r) => r.card).reduce((s, r) => s + r.quantity, 0)} card(s) to collection`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {phase === "done" && (
+        <div className="card-panel p-8 text-center">
+          <div className="text-5xl">🎉</div>
+          <h2 className="mt-2 text-xl font-bold">{addedCount} card(s) added!</h2>
+          <div className="mt-4 flex justify-center gap-3">
+            <button className="btn-primary" onClick={reset}>
+              Scan more
+            </button>
+            <button className="btn-secondary" onClick={() => router.push("/")}>
+              View collection
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pickerRow && (
+        <CardPickerModal
+          initialQuery={pickerRow.detected.name}
+          candidates={pickerRow.candidates}
+          onClose={() => setPickerRow(null)}
+          onPick={(card) => {
+            updateRow(pickerRow.key, { card });
+            setPickerRow(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
