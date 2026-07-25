@@ -3,7 +3,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
-import type { CardSummary, CollectionItem } from "@/lib/types";
+import {
+  availableVariants,
+  defaultVariantFor,
+  priceForVariant,
+  variantLabel,
+  type CardSummary,
+  type CollectionItem,
+} from "@/lib/types";
 
 type SortKey = "newest" | "name" | "price" | "set";
 
@@ -19,7 +26,11 @@ export default function CollectionPage() {
   const [selected, setSelected] = useState<CollectionItem | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [addVariant, setAddVariant] = useState("auto");
+  const [variantFilter, setVariantFilter] = useState("");
   const [toast, setToast] = useState<string | null>(null);
+  const [notesDraft, setNotesDraft] = useState("");
+  const [notesSaved, setNotesSaved] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function load() {
@@ -42,6 +53,7 @@ export default function CollectionPage() {
     const types = new Set<string>();
     const rarities = new Set<string>();
     const supertypes = new Set<string>();
+    const variants = new Set<string>();
     for (const item of items ?? []) {
       const c = item.card;
       if (!c) continue;
@@ -49,12 +61,14 @@ export default function CollectionPage() {
       for (const t of c.types ?? []) types.add(t);
       if (c.rarity) rarities.add(c.rarity);
       if (c.supertype) supertypes.add(c.supertype);
+      variants.add(item.variant ?? "normal");
     }
     return {
       sets: [...sets.entries()].sort((a, b) => a[1].localeCompare(b[1])),
       types: [...types].sort(),
       rarities: [...rarities].sort(),
       supertypes: [...supertypes].sort(),
+      variants: [...variants].sort(),
     };
   }, [items]);
 
@@ -66,13 +80,15 @@ export default function CollectionPage() {
     if (setFilter) list = list.filter((i) => i.card.set_id === setFilter);
     if (rarityFilter) list = list.filter((i) => i.card.rarity === rarityFilter);
     if (supertypeFilter) list = list.filter((i) => i.card.supertype === supertypeFilter);
+    if (variantFilter) list = list.filter((i) => (i.variant ?? "normal") === variantFilter);
     switch (sort) {
       case "name":
         list = [...list].sort((a, b) => a.card.name.localeCompare(b.card.name));
         break;
       case "price":
         list = [...list].sort(
-          (a, b) => (b.card.market_price ?? 0) - (a.card.market_price ?? 0)
+          (a, b) =>
+            (priceForVariant(b.card, b.variant) ?? 0) - (priceForVariant(a.card, a.variant) ?? 0)
         );
         break;
       case "set":
@@ -84,14 +100,17 @@ export default function CollectionPage() {
         break;
     }
     return list;
-  }, [items, search, typeFilter, setFilter, rarityFilter, supertypeFilter, sort]);
+  }, [items, search, typeFilter, setFilter, rarityFilter, supertypeFilter, variantFilter, sort]);
 
   const totals = useMemo(() => {
     const all = (items ?? []).filter((i) => i.card);
     return {
       cards: all.reduce((s, i) => s + i.quantity, 0),
       unique: all.length,
-      value: all.reduce((s, i) => s + (i.card.market_price ?? 0) * i.quantity, 0),
+      value: all.reduce(
+        (s, i) => s + (priceForVariant(i.card, i.variant) ?? 0) * i.quantity,
+        0
+      ),
     };
   }, [items]);
 
@@ -114,19 +133,57 @@ export default function CollectionPage() {
   }
 
   async function addCard(card: CardSummary) {
+    const variant = addVariant === "auto" ? defaultVariantFor(card) : addVariant;
     const res = await fetch("/api/collection", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: [{ card, quantity: 1 }] }),
+      body: JSON.stringify({ items: [{ card, quantity: 1, variant }] }),
     });
     if (res.ok) {
       if (toastTimer.current) clearTimeout(toastTimer.current);
-      setToast(`Added ${card.name} ×1 — click again for another copy`);
+      setToast(`Added ${card.name} (${variantLabel(variant)}) ×1 — click again for another copy`);
       toastTimer.current = setTimeout(() => setToast(null), 2500);
     } else {
       const json = await res.json().catch(() => ({}));
       setToast(`Couldn't add: ${json.error ?? "unknown error"}`);
     }
+  }
+
+  async function changeVariant(item: CollectionItem, variant: string) {
+    const res = await fetch(`/api/collection/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ variant }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(json.error ?? "Couldn't change finish");
+      return;
+    }
+    setItems((prev) => prev?.map((i) => (i.id === item.id ? { ...i, variant } : i)) ?? null);
+    setSelected((s) => (s?.id === item.id ? { ...s, variant } : s));
+  }
+
+  async function saveNotes(item: CollectionItem) {
+    const res = await fetch(`/api/collection/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes: notesDraft }),
+    });
+    if (res.ok) {
+      setItems(
+        (prev) =>
+          prev?.map((i) => (i.id === item.id ? { ...i, notes: notesDraft || null } : i)) ?? null
+      );
+      setNotesSaved(true);
+      setTimeout(() => setNotesSaved(false), 2000);
+    }
+  }
+
+  function openDetail(item: CollectionItem) {
+    setSelected(item);
+    setNotesDraft(item.notes ?? "");
+    setNotesSaved(false);
   }
 
   function closeAdd() {
@@ -171,6 +228,19 @@ export default function CollectionPage() {
             onClose={closeAdd}
             onPick={addCard}
             toast={toast}
+            headerExtra={
+              <select
+                className="input w-auto shrink-0"
+                value={addVariant}
+                onChange={(e) => setAddVariant(e.target.value)}
+                title="Finish to add cards as"
+              >
+                <option value="auto">Finish: Auto</option>
+                <option value="normal">Normal</option>
+                <option value="holofoil">Holo</option>
+                <option value="reverseHolofoil">Reverse Holo</option>
+              </select>
+            }
           />
         )}
       </div>
@@ -233,6 +303,12 @@ export default function CollectionPage() {
             <option key={r} value={r}>{r}</option>
           ))}
         </select>
+        <select className="input w-auto" value={variantFilter} onChange={(e) => setVariantFilter(e.target.value)}>
+          <option value="">All finishes</option>
+          {facets.variants.map((v) => (
+            <option key={v} value={v}>{variantLabel(v)}</option>
+          ))}
+        </select>
         <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
           <option value="newest">Newest first</option>
           <option value="name">Name A–Z</option>
@@ -248,11 +324,16 @@ export default function CollectionPage() {
           <button
             key={item.id}
             className="card-panel group relative overflow-hidden p-2 text-left transition-transform hover:-translate-y-0.5 hover:shadow-md"
-            onClick={() => setSelected(item)}
+            onClick={() => openDetail(item)}
           >
             {item.quantity > 1 && (
               <span className="absolute right-2 top-2 z-10 rounded-full bg-poke-dark px-2 py-0.5 text-xs font-bold text-white">
                 ×{item.quantity}
+              </span>
+            )}
+            {(item.variant ?? "normal") !== "normal" && (
+              <span className="absolute left-2 top-2 z-10 rounded-full bg-poke-gold px-2 py-0.5 text-[10px] font-bold text-poke-dark shadow">
+                {variantLabel(item.variant)}
               </span>
             )}
             {item.card.image_small ? (
@@ -274,9 +355,9 @@ export default function CollectionPage() {
             </div>
             <div className="mt-1 flex items-center justify-between text-xs">
               <span className="truncate text-slate-400">{item.card.rarity ?? ""}</span>
-              {item.card.market_price != null && (
+              {priceForVariant(item.card, item.variant) != null && (
                 <span className="font-semibold text-green-700">
-                  ${item.card.market_price.toFixed(2)}
+                  ${priceForVariant(item.card, item.variant)!.toFixed(2)}
                 </span>
               )}
             </div>
@@ -323,12 +404,50 @@ export default function CollectionPage() {
                     <div>Type: {(selected.card.types ?? []).join(", ")}</div>
                   )}
                   {selected.card.hp && <div>HP: {selected.card.hp}</div>}
-                  {selected.card.market_price != null && (
+                  <div className="flex items-center gap-2">
+                    Finish:
+                    <select
+                      className="input w-auto py-1 text-xs"
+                      value={selected.variant ?? "normal"}
+                      onChange={(e) => changeVariant(selected, e.target.value)}
+                    >
+                      {[
+                        ...new Set([
+                          ...availableVariants(selected.card),
+                          selected.variant ?? "normal",
+                        ]),
+                      ].map((v) => (
+                        <option key={v} value={v}>
+                          {variantLabel(v)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {priceForVariant(selected.card, selected.variant) != null && (
                     <div className="font-semibold text-green-700">
-                      Market: ${selected.card.market_price.toFixed(2)} each
+                      Market ({variantLabel(selected.variant ?? "normal")}): $
+                      {priceForVariant(selected.card, selected.variant)!.toFixed(2)} each
                     </div>
                   )}
                 </dl>
+              </div>
+            </div>
+
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <label className="text-xs font-semibold text-slate-500">
+                Notes (e.g. “Pokémon Center stamp”, “graded PSA 9”)
+              </label>
+              <textarea
+                className="input mt-1 min-h-16 text-sm"
+                value={notesDraft}
+                onChange={(e) => setNotesDraft(e.target.value)}
+                placeholder="Anything special about your copy…"
+              />
+              <div className="mt-1 flex items-center gap-2">
+                <button className="btn-secondary text-xs" onClick={() => saveNotes(selected)}>
+                  Save notes
+                </button>
+                {notesSaved && <span className="text-xs text-green-600">Saved ✓</span>}
               </div>
             </div>
 

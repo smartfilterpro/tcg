@@ -12,12 +12,14 @@ export default function CardPickerModal({
   onPick,
   onClose,
   toast,
+  headerExtra,
 }: {
   initialQuery: string;
   candidates: CardSummary[];
   onPick: (card: CardSummary) => void;
   onClose: () => void;
   toast?: string | null;
+  headerExtra?: React.ReactNode;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<CardSummary[]>(candidates);
@@ -56,6 +58,7 @@ export default function CardPickerModal({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          {headerExtra}
           <button className="btn-secondary" onClick={onClose}>
             {toast !== undefined ? "Done" : "Close"}
           </button>
