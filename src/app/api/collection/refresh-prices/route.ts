@@ -23,7 +23,8 @@ export async function POST() {
     const cutoff = Date.now() - STALE_HOURS * 3600 * 1000;
     const stale = (items ?? [])
       .map((i) => i.card as unknown as { id: string; price_updated_at: string | null })
-      .filter((c) => c && (!c.price_updated_at || new Date(c.price_updated_at).getTime() < cutoff))
+      .filter((c) => c && !c.id.startsWith("custom-")) // manual cards aren't in the reference DB
+      .filter((c) => !c.price_updated_at || new Date(c.price_updated_at).getTime() < cutoff)
       .slice(0, MAX_PER_RUN);
 
     let updated = 0;

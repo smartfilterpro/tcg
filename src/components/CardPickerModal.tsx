@@ -3,6 +3,122 @@
 import { useEffect, useRef, useState } from "react";
 import type { CardSummary } from "@/lib/types";
 
+const ENERGY_TYPES = [
+  "Grass", "Fire", "Water", "Lightning", "Psychic",
+  "Fighting", "Darkness", "Metal", "Dragon", "Colorless",
+];
+
+/** Form for cards the reference database doesn't have yet (brand-new sets,
+ *  promos, etc. — the database lags months behind new releases). */
+function ManualCardForm({
+  initialName,
+  onSubmit,
+  onCancel,
+}: {
+  initialName: string;
+  onSubmit: (card: CardSummary) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(initialName);
+  const [setLabel, setSetLabel] = useState("");
+  const [number, setNumber] = useState("");
+  const [supertype, setSupertype] = useState("Pokémon");
+  const [energyType, setEnergyType] = useState("");
+  const [rarity, setRarity] = useState("");
+  const [price, setPrice] = useState("");
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    const parsedPrice = parseFloat(price);
+    onSubmit({
+      id: `custom-${crypto.randomUUID()}`,
+      name: name.trim(),
+      supertype,
+      subtypes: [],
+      types: energyType ? [energyType] : [],
+      hp: null,
+      number: number.trim() || "—",
+      rarity: rarity.trim() || "Promo",
+      setId: "custom",
+      setName: setLabel.trim() || "Custom / Promo",
+      setSeries: null,
+      setPrintedTotal: null,
+      releaseDate: null,
+      imageSmall: null,
+      imageLarge: null,
+      marketPrice: Number.isFinite(parsedPrice) ? parsedPrice : null,
+      prices: null,
+    });
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="text-xs text-slate-500">
+        For cards the database doesn&apos;t have yet (new sets and promos lag by months).
+        It&apos;ll show without card art until the database catches up.
+      </p>
+      <input
+        className="input"
+        placeholder="Card name * — e.g. Mega Gengar ex"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        required
+      />
+      <div className="flex gap-2">
+        <input
+          className="input"
+          placeholder="Set / promo series — e.g. ME Black Star Promos"
+          value={setLabel}
+          onChange={(e) => setSetLabel(e.target.value)}
+        />
+        <input
+          className="input w-28 shrink-0"
+          placeholder="No. — 073"
+          value={number}
+          onChange={(e) => setNumber(e.target.value)}
+        />
+      </div>
+      <div className="flex gap-2">
+        <select className="input" value={supertype} onChange={(e) => setSupertype(e.target.value)}>
+          <option>Pokémon</option>
+          <option>Trainer</option>
+          <option>Energy</option>
+        </select>
+        <select className="input" value={energyType} onChange={(e) => setEnergyType(e.target.value)}>
+          <option value="">Energy type…</option>
+          {ENERGY_TYPES.map((t) => (
+            <option key={t}>{t}</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex gap-2">
+        <input
+          className="input"
+          placeholder="Rarity — e.g. Promo, SIR"
+          value={rarity}
+          onChange={(e) => setRarity(e.target.value)}
+        />
+        <input
+          className="input w-32 shrink-0"
+          placeholder="Value $ (opt.)"
+          inputMode="decimal"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+        />
+      </div>
+      <div className="flex gap-2">
+        <button type="submit" className="btn-primary text-sm">
+          Add this card
+        </button>
+        <button type="button" className="btn-secondary text-sm" onClick={onCancel}>
+          Back to search
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /** Search-the-database picker — used to correct a misidentified scan and to
  *  add cards manually. When `toast` is provided, the modal stays open after a
  *  pick (multi-add mode) and shows the toast as feedback. */
@@ -24,6 +140,7 @@ export default function CardPickerModal({
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<CardSummary[]>(candidates);
   const [loading, setLoading] = useState(false);
+  const [manualMode, setManualMode] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -68,6 +185,17 @@ export default function CardPickerModal({
             {toast}
           </div>
         )}
+        {manualMode ? (
+          <ManualCardForm
+            initialName={query}
+            onSubmit={(card) => {
+              onPick(card);
+              setManualMode(false);
+            }}
+            onCancel={() => setManualMode(false)}
+          />
+        ) : (
+          <>
         {loading && <p className="py-2 text-sm text-slate-400">Searching…</p>}
         {!loading && results.length === 0 && !query.trim() && (
           <p className="py-6 text-center text-sm text-slate-400">
@@ -101,6 +229,16 @@ export default function CardPickerModal({
             </p>
           )}
         </div>
+        <div className="mt-3 border-t border-slate-100 pt-2 text-center">
+          <button
+            className="text-xs text-poke-blue hover:underline"
+            onClick={() => setManualMode(true)}
+          >
+            Card not in the database (new set / promo)? Add it manually →
+          </button>
+        </div>
+          </>
+        )}
       </div>
     </div>
   );
