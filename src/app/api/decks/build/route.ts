@@ -1,11 +1,35 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
-import { logAiUsage } from "@/lib/usage";
-import type { CardSummaryRow } from "@/lib/types";
+import type { CardSummaryRow, DeckCardEntry } from "@/lib/types";
 
-export const maxDuration = 300; // deck building takes real thinking time
+export const maxDuration = 300;
+
+// ===== Background job store =====
+// Deck builds can take several minutes — longer than proxy request timeouts
+// (the cause of "Unexpected end of JSON input" failures). So POST starts a
+// job and returns immediately; the client polls GET until it finishes.
+// In-memory is fine for a single-instance deployment (Railway default).
+
+interface BuildJob {
+  userId: string;
+  status: "running" | "done" | "error";
+  deck?: unknown;
+  error?: string;
+  created: number;
+}
+
+const globalJobs = globalThis as unknown as { __deckJobs?: Map<string, BuildJob> };
+const jobs = (globalJobs.__deckJobs ??= new Map<string, BuildJob>());
+
+function cleanupJobs() {
+  const cutoff = Date.now() - 30 * 60_000;
+  for (const [id, job] of jobs) {
+    if (job.created < cutoff) jobs.delete(id);
+  }
+}
 
 const DECK_SCHEMA = {
   type: "object",
@@ -83,7 +107,7 @@ DECK QUALITY CRAFT — apply these principles:
 - Match energy count to attack costs: cheap attackers → 8-10 energy;
   hungry attackers → 12-15. Prefer mono-type or two-type energy lines.
 - Typical shape: 12-20 Pokémon, 25-35 Trainers, 8-15 Energy — adjust to the
-  archetype and what the collection actually supports.
+  archetype and to what the collection actually supports.
 - Consider the mulligan: enough Basic Pokémon (usually 8+) to avoid frequent
   mulligans.
 - If the collection can't support a competitive 60, build the best casual
@@ -94,12 +118,15 @@ Tailor to the player's play style profile and experience level when provided.
 The strategy write-up should cover: the win condition, the ideal opening turns,
 what to search for first, and how the deck wants to trade prizes.`;
 
+/** POST: start a deck build. Returns { jobId } immediately. */
 export async function POST(req: Request) {
   try {
     const { user } = await requireUser();
     const { prompt } = (await req.json()) as { prompt?: string };
     const supabase = await createClient();
 
+    // Gather everything the job needs BEFORE returning (request-scoped
+    // resources like cookies aren't reliable in the detached task).
     const [{ data: items, error }, { data: playProfile }] = await Promise.all([
       supabase
         .from("collection_items")
@@ -110,8 +137,6 @@ export async function POST(req: Request) {
     ]);
     if (error) throw error;
 
-    // Aggregate quantities per card id — the same card can exist in several
-    // finishes (normal / holo / reverse holo), which are one card for deck rules.
     const byId = new Map<
       string,
       {
@@ -164,27 +189,76 @@ export async function POST(req: Request) {
       .filter(Boolean)
       .join("\n\n");
 
-    const client = anthropic();
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 16000,
-      system: SYSTEM,
-      output_config: {
-        format: { type: "json_schema", schema: DECK_SCHEMA as unknown as Record<string, unknown> },
-      },
-      messages: [{ role: "user", content: userContent }],
-    });
+    cleanupJobs();
+    const jobId = crypto.randomUUID();
+    jobs.set(jobId, { userId: user.id, status: "running", created: Date.now() });
 
-    await logAiUsage(supabase, user.id, "deck_build", MODEL, response.usage);
+    // Run the build detached — the client polls for the result.
+    void (async () => {
+      try {
+        const client = anthropic();
+        // Streaming keeps the connection to Anthropic alive for long builds.
+        const stream = client.messages.stream({
+          model: MODEL,
+          max_tokens: 16000,
+          system: SYSTEM,
+          output_config: {
+            format: {
+              type: "json_schema",
+              schema: DECK_SCHEMA as unknown as Record<string, unknown>,
+            },
+          },
+          messages: [{ role: "user", content: userContent }],
+        });
+        const response = await stream.finalMessage();
 
-    if (response.stop_reason === "refusal") {
-      return NextResponse.json({ error: "Deck build was declined. Try again." }, { status: 422 });
-    }
-    const textBlock = response.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      return NextResponse.json({ error: "No deck produced." }, { status: 500 });
-    }
-    return NextResponse.json({ deck: JSON.parse(textBlock.text) });
+        // Log usage with the service client (request cookies are gone by now)
+        try {
+          await createAdminClient()
+            .from("ai_usage")
+            .insert({
+              user_id: user.id,
+              endpoint: "deck_build",
+              model: MODEL,
+              input_tokens: response.usage?.input_tokens ?? 0,
+              output_tokens: response.usage?.output_tokens ?? 0,
+            });
+        } catch {
+          // best-effort
+        }
+
+        if (response.stop_reason === "refusal") {
+          jobs.set(jobId, {
+            userId: user.id,
+            status: "error",
+            error: "Deck build was declined. Try again.",
+            created: Date.now(),
+          });
+          return;
+        }
+        const textBlock = response.content.find((b) => b.type === "text");
+        if (!textBlock || textBlock.type !== "text") {
+          throw new Error("No deck produced.");
+        }
+        const deck = JSON.parse(textBlock.text) as {
+          name: string;
+          strategy: string;
+          cards: DeckCardEntry[];
+          missing_suggestions: string[];
+        };
+        jobs.set(jobId, { userId: user.id, status: "done", deck, created: Date.now() });
+      } catch (err) {
+        console.error("deck build job error", err);
+        jobs.set(jobId, {
+          userId: user.id,
+          status: "error",
+          error: err instanceof Error ? err.message : "Deck build failed",
+          created: Date.now(),
+        });
+      }
+    })();
+
+    return NextResponse.json({ jobId });
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
@@ -194,5 +268,28 @@ export async function POST(req: Request) {
       { error: err instanceof Error ? err.message : "Deck build failed" },
       { status: 500 }
     );
+  }
+}
+
+/** GET ?job=<id>: poll a build job. */
+export async function GET(req: Request) {
+  try {
+    const { user } = await requireUser();
+    const jobId = new URL(req.url).searchParams.get("job");
+    const job = jobId ? jobs.get(jobId) : undefined;
+    if (!job || job.userId !== user.id) {
+      return NextResponse.json(
+        { error: "Build not found — it may have expired. Try again." },
+        { status: 404 }
+      );
+    }
+    if (job.status === "running") return NextResponse.json({ status: "running" });
+    if (job.status === "error") return NextResponse.json({ status: "error", error: job.error });
+    return NextResponse.json({ status: "done", deck: job.deck });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return NextResponse.json({ error: "Request failed" }, { status: 500 });
   }
 }

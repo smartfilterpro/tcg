@@ -66,12 +66,37 @@ interface BuiltDeck {
   missing_suggestions: string[];
 }
 
+/** Parse a response body defensively — an empty/cut-off reply becomes a
+ *  friendly error instead of "Unexpected end of JSON input". */
+async function safeJson(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      res.ok
+        ? "The server sent an incomplete reply — please try again."
+        : `Request failed (${res.status}) — please try again.`
+    );
+  }
+}
+
+const BUILD_STEPS = [
+  `${AI_NAME} is reading your collection…`,
+  "Choosing a win condition…",
+  "Picking attackers and support…",
+  "Balancing trainers and energy…",
+  "Writing up the strategy…",
+  "Still working — big collections take a few minutes…",
+];
+
 export default function DecksPage() {
   const [decks, setDecks] = useState<Deck[]>([]);
   const [styleNotes, setStyleNotes] = useState("");
   const [styleSaved, setStyleSaved] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [building, setBuilding] = useState(false);
+  const [buildStep, setBuildStep] = useState(0);
   const [built, setBuilt] = useState<BuiltDeck | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<Deck | null>(null);
@@ -99,20 +124,44 @@ export default function DecksPage() {
 
   async function build() {
     setBuilding(true);
+    setBuildStep(0);
     setError(null);
     setBuilt(null);
+    const stepTimer = setInterval(
+      () => setBuildStep((s) => Math.min(s + 1, BUILD_STEPS.length - 1)),
+      15000
+    );
     try {
+      // Start the build as a background job (deck builds can outlast proxy
+      // request timeouts), then poll until it's done.
       const res = await fetch("/api/decks/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt }),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Deck build failed");
-      setBuilt(json.deck);
+      const start = await safeJson(res);
+      if (!res.ok) throw new Error((start.error as string) || "Deck build failed");
+      const jobId = start.jobId as string;
+
+      const deadline = Date.now() + 10 * 60_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const poll = await fetch(`/api/decks/build?job=${encodeURIComponent(jobId)}`);
+        const status = await safeJson(poll);
+        if (!poll.ok) throw new Error((status.error as string) || "Deck build failed");
+        if (status.status === "done") {
+          setBuilt(status.deck as unknown as BuiltDeck);
+          return;
+        }
+        if (status.status === "error") {
+          throw new Error((status.error as string) || "Deck build failed");
+        }
+      }
+      throw new Error("The build is taking unusually long — please try again.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deck build failed");
     } finally {
+      clearInterval(stepTimer);
       setBuilding(false);
     }
   }
@@ -204,9 +253,10 @@ export default function DecksPage() {
           </button>
         </div>
         {building && (
-          <p className="mt-2 animate-pulse text-sm text-slate-500">
-            {AI_NAME} is studying your collection and crafting a deck…
-          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="animate-spin-slow inline-block h-4 w-4 shrink-0 rounded-full border-2 border-poke-dark bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
+            <p className="animate-pulse text-sm text-slate-500">{BUILD_STEPS[buildStep]}</p>
+          </div>
         )}
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
 
