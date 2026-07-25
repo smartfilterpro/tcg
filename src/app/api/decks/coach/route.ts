@@ -42,9 +42,10 @@ export async function POST(req: Request) {
     }
 
     const client = anthropic();
-    const response = await client.messages.create({
+    // Thinking tokens and the visible answer share max_tokens — keep headroom.
+    const stream = client.messages.stream({
       model: MODEL,
-      max_tokens: 3000,
+      max_tokens: 8000,
       system: SYSTEM,
       messages: [
         {
@@ -57,6 +58,7 @@ export async function POST(req: Request) {
         },
       ],
     });
+    const response = await stream.finalMessage();
 
     await logAiUsage(await createClient(), user.id, "coach", MODEL, response.usage);
 
@@ -67,7 +69,10 @@ export async function POST(req: Request) {
     }
     const textBlock = response.content.find((b) => b.type === "text");
     return NextResponse.json({
-      answer: textBlock && textBlock.type === "text" ? textBlock.text : "No answer produced.",
+      answer:
+        textBlock && textBlock.type === "text"
+          ? textBlock.text
+          : "I thought about that one too long and ran out of room — try asking again, maybe a bit more specifically!",
     });
   } catch (err) {
     if (err instanceof AuthError) {

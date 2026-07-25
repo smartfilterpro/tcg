@@ -198,9 +198,12 @@ export async function POST(req: Request) {
       try {
         const client = anthropic();
         // Streaming keeps the connection to Anthropic alive for long builds.
+        // Generous cap: the model spends thinking tokens planning the deck
+        // BEFORE emitting the JSON, and both draw from the same budget — too
+        // small a cap truncates the response before the deck appears.
         const stream = client.messages.stream({
           model: MODEL,
-          max_tokens: 16000,
+          max_tokens: 32000,
           system: SYSTEM,
           output_config: {
             format: {
@@ -238,14 +241,27 @@ export async function POST(req: Request) {
         }
         const textBlock = response.content.find((b) => b.type === "text");
         if (!textBlock || textBlock.type !== "text") {
-          throw new Error("No deck produced.");
+          throw new Error(
+            response.stop_reason === "max_tokens"
+              ? "The build ran out of room before finishing — please try again (a more specific request, e.g. one type, also helps)."
+              : "No deck produced — please try again."
+          );
         }
-        const deck = JSON.parse(textBlock.text) as {
+        let deck: {
           name: string;
           strategy: string;
           cards: DeckCardEntry[];
           missing_suggestions: string[];
         };
+        try {
+          deck = JSON.parse(textBlock.text);
+        } catch {
+          throw new Error(
+            response.stop_reason === "max_tokens"
+              ? "The build was cut off mid-deck — please try again."
+              : "The deck came back malformed — please try again."
+          );
+        }
         jobs.set(jobId, { userId: user.id, status: "done", deck, created: Date.now() });
       } catch (err) {
         console.error("deck build job error", err);

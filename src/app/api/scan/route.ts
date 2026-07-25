@@ -82,9 +82,11 @@ export async function POST(req: Request) {
     }
 
     const client = anthropic();
-    const response = await client.messages.create({
+    // Streamed with a generous cap: thinking + per-card JSON both draw from
+    // max_tokens, and big multi-card spreads need the headroom.
+    const stream = client.messages.stream({
       model: MODEL,
-      max_tokens: 8192,
+      max_tokens: 16000,
       system: SYSTEM,
       output_config: {
         format: { type: "json_schema", schema: SCAN_SCHEMA as unknown as Record<string, unknown> },
@@ -109,6 +111,7 @@ export async function POST(req: Request) {
         },
       ],
     });
+    const response = await stream.finalMessage();
 
     await logAiUsage(await createClient(), user.id, "scan", MODEL, response.usage);
 
@@ -121,10 +124,18 @@ export async function POST(req: Request) {
 
     const textBlock = response.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") {
-      return NextResponse.json({ error: "No cards detected." }, { status: 422 });
+      return NextResponse.json(
+        {
+          error:
+            response.stop_reason === "max_tokens"
+              ? "That photo has too many cards for one scan — try splitting it into two photos."
+              : "No cards detected.",
+        },
+        { status: 422 }
+      );
     }
 
-    const parsed = JSON.parse(textBlock.text) as {
+    let parsed: {
       cards: Array<{
         name: string;
         collector_number: string | null;
@@ -134,7 +145,19 @@ export async function POST(req: Request) {
         confidence: "high" | "medium" | "low";
       }>;
     };
-
+    try {
+      parsed = JSON.parse(textBlock.text);
+    } catch {
+      return NextResponse.json(
+        {
+          error:
+            response.stop_reason === "max_tokens"
+              ? "That photo has too many cards for one scan — try splitting it into two photos."
+              : "The scan came back malformed — please try again.",
+        },
+        { status: 422 }
+      );
+    }
     // Match each detected card against the reference database (in parallel,
     // capped to avoid hammering the API).
     const detectedCards: DetectedCard[] = parsed.cards.map((c) => ({
