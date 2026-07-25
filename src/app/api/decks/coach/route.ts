@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
+import { logAiUsage } from "@/lib/usage";
+import { createClient } from "@/lib/supabase/server";
 import type { DeckCardEntry } from "@/lib/types";
 
 export const maxDuration = 120;
@@ -27,7 +29,7 @@ be newer to the game unless the question suggests otherwise.`;
 
 export async function POST(req: Request) {
   try {
-    await requireUser();
+    const { user } = await requireUser();
     const { deck, question } = (await req.json()) as {
       deck?: { name?: string; strategy?: string | null; cards?: DeckCardEntry[] };
       question?: string;
@@ -55,6 +57,8 @@ export async function POST(req: Request) {
         },
       ],
     });
+
+    await logAiUsage(await createClient(), user.id, "coach", MODEL, response.usage);
 
     if (response.stop_reason === "refusal") {
       return NextResponse.json(

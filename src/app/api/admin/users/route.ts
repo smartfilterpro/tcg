@@ -1,20 +1,54 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, AuthError } from "@/lib/auth";
+import { estimateCostUsd } from "@/lib/usage";
 
-/** GET: all users + pending invites (admin only). */
+export interface UserUsage {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  costUsd30d: number;
+}
+
+/** GET: all users + pending invites + per-user AI usage (admin only). */
 export async function GET() {
   try {
     await requireAdmin();
     const admin = createAdminClient();
-    const [{ data: profiles }, { data: invites }] = await Promise.all([
+    const [{ data: profiles }, { data: invites }, { data: usageRows }] = await Promise.all([
       admin.from("profiles").select("*").order("created_at"),
       admin.from("invites").select("*").order("created_at", { ascending: false }),
+      admin
+        .from("ai_usage")
+        .select("user_id, model, input_tokens, output_tokens, created_at")
+        .limit(50000),
     ]);
+
+    // Aggregate token usage per user (all-time + last 30 days)
+    const cutoff30d = Date.now() - 30 * 24 * 3600 * 1000;
+    const usage: Record<string, UserUsage> = {};
+    for (const row of usageRows ?? []) {
+      const u = (usage[row.user_id] ??= {
+        calls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        costUsd30d: 0,
+      });
+      u.calls += 1;
+      u.inputTokens += row.input_tokens ?? 0;
+      u.outputTokens += row.output_tokens ?? 0;
+      const cost = estimateCostUsd(row.model ?? "", row.input_tokens ?? 0, row.output_tokens ?? 0);
+      u.costUsd += cost;
+      if (new Date(row.created_at).getTime() >= cutoff30d) u.costUsd30d += cost;
+    }
+
     const profileEmails = new Set((profiles ?? []).map((p) => p.email));
     return NextResponse.json({
       users: profiles ?? [],
       invites: (invites ?? []).filter((i) => !profileEmails.has(i.email)),
+      usage,
     });
   } catch (err) {
     return errorResponse(err);
