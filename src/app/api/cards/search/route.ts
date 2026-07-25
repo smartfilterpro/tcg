@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { searchCards, numberKey } from "@/lib/pokemontcg";
+import { searchCards, numberKey, cleanCardName } from "@/lib/pokemontcg";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
 
@@ -101,6 +101,18 @@ export async function GET(req: Request) {
       const oldStyle = parsed.name.replace(/^mega\s+/i, "M ").replace(/\s*ex$/i, "");
       cards = await safeSearch({ name: oldStyle, number: parsed.number, pageSize: 16 });
     }
+    // Punctuation-blind retry: match on word-parts only, so apostrophes,
+    // periods, hyphens, and é can't block a match ("farfetchd" → Farfetch'd)
+    if (cards.length === 0 && parsed.name) {
+      cards = await safeSearch({
+        nameTokens: parsed.name,
+        number: parsed.number,
+        pageSize: 16,
+      });
+      if (cards.length === 0 && parsed.number) {
+        cards = await safeSearch({ nameTokens: parsed.name, pageSize: 16 });
+      }
+    }
 
     // Consult TCGdex (usually has new sets/promos months earlier) when the
     // primary came up empty — or when it returned cards but NONE carry the
@@ -111,7 +123,7 @@ export async function GET(req: Request) {
     const primaryHasNumber = !key || cards.some((c) => numberKey(c.number) === key);
     if (cards.length === 0 || !primaryHasNumber) {
       const alt = await searchTcgdex({
-        name: parsed.name,
+        name: parsed.name ? cleanCardName(parsed.name) : undefined,
         number: parsed.number,
         pageSize: 12,
       });

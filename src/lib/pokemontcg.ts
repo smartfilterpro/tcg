@@ -114,6 +114,57 @@ function esc(v: string): string {
   return v.replace(/["\\]/g, "");
 }
 
+/** Punctuation-heavy names, keyed by their punctuation-stripped lowercase
+ *  form → the exact database spelling. */
+const NAME_ALIASES: Record<string, string> = {
+  "farfetchd": "Farfetch'd",
+  "farfetch d": "Farfetch'd",
+  "sirfetchd": "Sirfetch'd",
+  "sirfetch d": "Sirfetch'd",
+  "mr mime": "Mr. Mime",
+  "mr rime": "Mr. Rime",
+  "mime jr": "Mime Jr.",
+  "ho oh": "Ho-Oh",
+  "hooh": "Ho-Oh",
+  "porygon z": "Porygon-Z",
+  "type null": "Type: Null",
+  "jangmo o": "Jangmo-o",
+  "hakamo o": "Hakamo-o",
+  "kommo o": "Kommo-o",
+  "flabebe": "Flabébé",
+  "nidoran f": "Nidoran♀",
+  "nidoran female": "Nidoran♀",
+  "nidoran m": "Nidoran♂",
+  "nidoran male": "Nidoran♂",
+};
+
+/** Normalize a card name for searching: straighten curly quotes/dashes the
+ *  vision model (or a phone keyboard) may produce, collapse whitespace, map
+ *  punctuation-stripped spellings to the database's exact form, and restore
+ *  the é in "Pokémon …" trainer card names. */
+export function cleanCardName(raw: string): string {
+  let s = raw
+    .normalize("NFC")
+    .replace(/[\u2018\u2019\u201B`\u00B4]/g, "'") // curly/backtick apostrophes → '
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2013\u2014]/g, "-") // en/em dashes → hyphen
+    .replace(/\s+/g, " ")
+    .trim();
+  const key = s
+    .toLowerCase()
+    .replace(/[.'":\-♀♂!]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const alias = NAME_ALIASES[key];
+  if (alias) return alias;
+  // Alias + suffix, e.g. "mr mime ex" → "Mr. Mime ex" (search is case-insensitive)
+  for (const [k, v] of Object.entries(NAME_ALIASES)) {
+    if (key.startsWith(k + " ")) return v + key.slice(k.length);
+  }
+  if (/\bpokemon\b/i.test(s)) s = s.replace(/pokemon/gi, "Pokémon");
+  return s;
+}
+
 /** The DB is inconsistent about collector numbers: some sets store "95",
  *  others "095", promos use letter prefixes ("SWSH095", "SM210", "TG12").
  *  Generate the plausible spellings so one search catches them all. */
@@ -144,16 +195,26 @@ export function numberKey(n: string | null | undefined): string {
   return (n ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
 }
 
-/** Search cards by (partial) name and/or collector number / set size. */
+/** Search cards by (partial) name and/or collector number / set size.
+ *  `nameTokens` matches on word-parts only (punctuation-blind) — use as a
+ *  fallback when the exact name phrase finds nothing. */
 export async function searchCards(opts: {
   name?: string;
+  nameTokens?: string;
   number?: string;
   printedTotal?: string;
   setName?: string;
   pageSize?: number;
 }): Promise<CardSummary[]> {
   const clauses: string[] = [];
-  if (opts.name) clauses.push(`name:"${esc(opts.name)}*"`);
+  if (opts.name) clauses.push(`name:"${esc(cleanCardName(opts.name))}*"`);
+  if (opts.nameTokens) {
+    const tokens = cleanCardName(opts.nameTokens)
+      .toLowerCase()
+      .split(/[^a-z0-9é]+/i)
+      .filter((t) => t.length >= 2);
+    for (const t of tokens) clauses.push(`name:${esc(t)}*`);
+  }
   if (opts.number) {
     const clause = numberClause(opts.number);
     if (clause) clauses.push(clause);
@@ -202,6 +263,26 @@ export async function matchDetectedCard(detected: {
       candidates = await searchCards({ name: detected.name, pageSize: 12 });
     } catch {
       candidates = [];
+    }
+  }
+  // Pass 3: punctuation-blind word matching (handles apostrophes, periods,
+  // hyphens, é — "Farfetch'd", "Mr. Mime", "Ho-Oh", "Pokémon Catcher")
+  if (candidates.length === 0 && detected.name) {
+    try {
+      candidates = await searchCards({
+        nameTokens: detected.name,
+        number: detected.collectorNumber ?? undefined,
+        pageSize: 12,
+      });
+    } catch {
+      candidates = [];
+    }
+    if (candidates.length === 0) {
+      try {
+        candidates = await searchCards({ nameTokens: detected.name, pageSize: 12 });
+      } catch {
+        candidates = [];
+      }
     }
   }
 
