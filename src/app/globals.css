@@ -33,3 +33,43 @@ body {
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
   }
 }
+
+/* Scanning animation: a beam that sweeps down the photo repeatedly */
+@keyframes scan-sweep {
+  0% {
+    top: -8%;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  100% {
+    top: 104%;
+    opacity: 0;
+  }
+}
+
+.scan-beam {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, transparent, #ee1515 20%, #ffcb05 50%, #ee1515 80%, transparent);
+  box-shadow: 0 0 12px 3px rgba(238, 21, 21, 0.45);
+  animation: scan-sweep 2.2s ease-in-out infinite;
+}
+
+/* Slow spin for the Pokéball loader */
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 1.6s linear infinite;
+}
