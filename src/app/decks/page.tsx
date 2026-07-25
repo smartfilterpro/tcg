@@ -90,6 +90,10 @@ const BUILD_STEPS = [
   "Still working — big collections take a few minutes…",
 ];
 
+/** The in-flight build's ticket, persisted so a page refresh (or Safari
+ *  reloading a backgrounded tab) can resume watching the same build. */
+const JOB_STORAGE_KEY = "pokedeck-build-job";
+
 export default function DecksPage() {
   const [decks, setDecks] = useState<Deck[]>([]);
   const [styleNotes, setStyleNotes] = useState("");
@@ -110,6 +114,20 @@ export default function DecksPage() {
     fetch("/api/profile")
       .then((r) => r.json())
       .then((j) => setStyleNotes(j.styleNotes ?? ""));
+
+    // Resume watching an in-flight build after a refresh / tab reload.
+    try {
+      const raw = localStorage.getItem(JOB_STORAGE_KEY);
+      if (raw) {
+        const { jobId, started } = JSON.parse(raw) as { jobId: string; started: number };
+        if (jobId && Date.now() - started < 20 * 60_000) {
+          pollUntilDone(jobId);
+        } else {
+          localStorage.removeItem(JOB_STORAGE_KEY);
+        }
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function saveStyle() {
@@ -122,30 +140,19 @@ export default function DecksPage() {
     setTimeout(() => setStyleSaved(false), 2000);
   }
 
-  async function build() {
+  /** Watch a build job until it finishes (works for fresh builds and for
+   *  builds resumed after a page refresh). */
+  async function pollUntilDone(jobId: string) {
     setBuilding(true);
     setBuildStep(0);
     setError(null);
-    setBuilt(null);
     const stepTimer = setInterval(
       () => setBuildStep((s) => Math.min(s + 1, BUILD_STEPS.length - 1)),
       15000
     );
     try {
-      // Start the build as a background job (deck builds can outlast proxy
-      // request timeouts), then poll until it's done.
-      const res = await fetch("/api/decks/build", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-      });
-      const start = await safeJson(res);
-      if (!res.ok) throw new Error((start.error as string) || "Deck build failed");
-      const jobId = start.jobId as string;
-
       const deadline = Date.now() + 10 * 60_000;
       while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 3000));
         const poll = await fetch(`/api/decks/build?job=${encodeURIComponent(jobId)}`);
         const status = await safeJson(poll);
         if (!poll.ok) throw new Error((status.error as string) || "Deck build failed");
@@ -156,12 +163,41 @@ export default function DecksPage() {
         if (status.status === "error") {
           throw new Error((status.error as string) || "Deck build failed");
         }
+        await new Promise((r) => setTimeout(r, 3000));
       }
       throw new Error("The build is taking unusually long — please try again.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deck build failed");
     } finally {
       clearInterval(stepTimer);
+      setBuilding(false);
+      try {
+        localStorage.removeItem(JOB_STORAGE_KEY);
+      } catch {}
+    }
+  }
+
+  async function build() {
+    setError(null);
+    setBuilt(null);
+    setBuilding(true);
+    try {
+      // Start the build as a background job (deck builds can outlast proxy
+      // request timeouts), remember the ticket, then poll until done.
+      const res = await fetch("/api/decks/build", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      const start = await safeJson(res);
+      if (!res.ok) throw new Error((start.error as string) || "Deck build failed");
+      const jobId = start.jobId as string;
+      try {
+        localStorage.setItem(JOB_STORAGE_KEY, JSON.stringify({ jobId, started: Date.now() }));
+      } catch {}
+      await pollUntilDone(jobId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Deck build failed");
       setBuilding(false);
     }
   }
