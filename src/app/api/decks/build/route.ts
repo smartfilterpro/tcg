@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
+import { logAiUsage } from "@/lib/usage";
 import type { CardSummaryRow } from "@/lib/types";
 
 export const maxDuration = 300; // deck building takes real thinking time
@@ -173,6 +174,8 @@ export async function POST(req: Request) {
       },
       messages: [{ role: "user", content: userContent }],
     });
+
+    await logAiUsage(supabase, user.id, "deck_build", MODEL, response.usage);
 
     if (response.stop_reason === "refusal") {
       return NextResponse.json({ error: "Deck build was declined. Try again." }, { status: 422 });

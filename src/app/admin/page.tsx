@@ -9,9 +9,24 @@ interface Invite {
   created_at: string;
 }
 
+interface UserUsage {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  costUsd30d: number;
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
 export default function AdminPage() {
   const [users, setUsers] = useState<Profile[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
+  const [usage, setUsage] = useState<Record<string, UserUsage>>({});
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +40,7 @@ export default function AdminPage() {
     } else {
       setUsers(json.users);
       setInvites(json.invites);
+      setUsage(json.usage ?? {});
     }
     setLoading(false);
   }
@@ -119,6 +135,10 @@ export default function AdminPage() {
 
       <div className="card-panel p-4">
         <h2 className="mb-2 font-semibold">Members ({users.length})</h2>
+        <p className="mb-1 text-xs text-slate-400">
+          AI usage = scans, deck builds, and coach questions. Costs are estimates at standard
+          API rates.
+        </p>
         <ul className="divide-y divide-slate-100">
           {users.map((u) => (
             <li key={u.id} className="flex items-center justify-between py-2">
@@ -126,6 +146,20 @@ export default function AdminPage() {
                 <div className="text-sm font-medium">{u.display_name || u.email}</div>
                 <div className="text-xs text-slate-400">
                   {u.email} · joined {new Date(u.created_at).toLocaleDateString()}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {usage[u.id] ? (
+                    <>
+                      🤖 {usage[u.id].calls} AI call{usage[u.id].calls === 1 ? "" : "s"} ·{" "}
+                      {formatTokens(usage[u.id].inputTokens + usage[u.id].outputTokens)} tokens ·{" "}
+                      <span className="font-semibold">
+                        ~${usage[u.id].costUsd.toFixed(2)} all-time
+                      </span>{" "}
+                      · ~${usage[u.id].costUsd30d.toFixed(2)} last 30d
+                    </>
+                  ) : (
+                    "🤖 No AI usage yet"
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2">

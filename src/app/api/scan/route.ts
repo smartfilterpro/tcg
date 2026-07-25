@@ -3,6 +3,8 @@ import { anthropic, MODEL } from "@/lib/anthropic";
 import { matchDetectedCard, numberKey } from "@/lib/pokemontcg";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
+import { logAiUsage } from "@/lib/usage";
+import { createClient } from "@/lib/supabase/server";
 import type { DetectedCard, ScanMatch } from "@/lib/types";
 
 export const maxDuration = 120; // vision + N lookups can take a while
@@ -70,7 +72,7 @@ roughly left-to-right, top-to-bottom.`;
 
 export async function POST(req: Request) {
   try {
-    await requireUser();
+    const { user } = await requireUser();
     const { image, mediaType } = (await req.json()) as {
       image?: string;
       mediaType?: string;
@@ -107,6 +109,8 @@ export async function POST(req: Request) {
         },
       ],
     });
+
+    await logAiUsage(await createClient(), user.id, "scan", MODEL, response.usage);
 
     if (response.stop_reason === "refusal") {
       return NextResponse.json(
