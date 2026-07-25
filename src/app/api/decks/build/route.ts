@@ -81,11 +81,30 @@ export async function POST(req: Request) {
     ]);
     if (error) throw error;
 
-    const collection = (items ?? [])
-      .map((i) => {
-        const c = i.card as unknown as CardSummaryRow;
-        if (!c) return null;
-        return {
+    // Aggregate quantities per card id — the same card can exist in several
+    // finishes (normal / holo / reverse holo), which are one card for deck rules.
+    const byId = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        qty: number;
+        supertype: string | null;
+        subtypes: string[] | null;
+        types: string[] | null;
+        hp: string | null;
+        rarity: string | null;
+        set: string;
+      }
+    >();
+    for (const i of items ?? []) {
+      const c = i.card as unknown as CardSummaryRow;
+      if (!c) continue;
+      const prev = byId.get(c.id);
+      if (prev) {
+        prev.qty += i.quantity as number;
+      } else {
+        byId.set(c.id, {
           id: c.id,
           name: c.name,
           qty: i.quantity as number,
@@ -95,9 +114,10 @@ export async function POST(req: Request) {
           hp: c.hp,
           rarity: c.rarity,
           set: c.set_name,
-        };
-      })
-      .filter(Boolean);
+        });
+      }
+    }
+    const collection = [...byId.values()];
 
     if (collection.length === 0) {
       return NextResponse.json(

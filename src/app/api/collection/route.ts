@@ -21,18 +21,23 @@ export async function GET() {
   }
 }
 
-/** POST: bulk-add cards (from the scan review screen).
- *  Body: { items: [{ card: CardSummary, quantity: number }] }
- *  Upserts the shared card cache, then increments quantities. */
+/** POST: bulk-add cards (from scan review or manual add).
+ *  Body: { items: [{ card: CardSummary, quantity: number, variant?: string }] }
+ *  Upserts the shared card cache, then increments quantities per (card, finish). */
 export async function POST(req: Request) {
   try {
     const { user } = await requireUser();
     const supabase = await createClient();
     const body = (await req.json()) as {
-      items?: Array<{ card: CardSummary; quantity: number }>;
+      items?: Array<{ card: CardSummary; quantity: number; variant?: string }>;
     };
     const items = (body.items ?? []).filter(
-      (i) => i?.card?.id && Number.isInteger(i.quantity) && i.quantity > 0 && i.quantity <= 999
+      (i) =>
+        i?.card?.id &&
+        Number.isInteger(i.quantity) &&
+        i.quantity > 0 &&
+        i.quantity <= 999 &&
+        (i.variant === undefined || (typeof i.variant === "string" && i.variant.length <= 40))
     );
     if (items.length === 0) {
       return NextResponse.json({ error: "No valid items" }, { status: 400 });
@@ -45,38 +50,43 @@ export async function POST(req: Request) {
       .upsert(cardRows, { onConflict: "id" });
     if (cardErr) throw cardErr;
 
-    // 2) Merge quantities per card id (same card may appear twice in one scan)
-    const wanted = new Map<string, number>();
+    // 2) Merge quantities per (card id, finish)
+    const wanted = new Map<string, { cardId: string; variant: string; qty: number }>();
     for (const i of items) {
-      wanted.set(i.card.id, (wanted.get(i.card.id) ?? 0) + i.quantity);
+      const variant = i.variant || "normal";
+      const key = `${i.card.id}|${variant}`;
+      const prev = wanted.get(key);
+      wanted.set(key, { cardId: i.card.id, variant, qty: (prev?.qty ?? 0) + i.quantity });
     }
 
     // 3) Increment existing rows or insert new ones
-    const cardIds = [...wanted.keys()];
+    const cardIds = [...new Set([...wanted.values()].map((w) => w.cardId))];
     const { data: existing, error: exErr } = await supabase
       .from("collection_items")
-      .select("id, card_id, quantity")
+      .select("id, card_id, variant, quantity")
       .eq("user_id", user.id)
       .in("card_id", cardIds);
     if (exErr) throw exErr;
 
-    const existingByCard = new Map((existing ?? []).map((r) => [r.card_id as string, r]));
+    const existingByKey = new Map(
+      (existing ?? []).map((r) => [`${r.card_id}|${r.variant ?? "normal"}`, r])
+    );
     let added = 0;
-    for (const [cardId, qty] of wanted) {
-      const row = existingByCard.get(cardId);
+    for (const [key, w] of wanted) {
+      const row = existingByKey.get(key);
       if (row) {
         const { error } = await supabase
           .from("collection_items")
-          .update({ quantity: (row.quantity as number) + qty, updated_at: new Date().toISOString() })
+          .update({ quantity: (row.quantity as number) + w.qty, updated_at: new Date().toISOString() })
           .eq("id", row.id);
         if (error) throw error;
       } else {
         const { error } = await supabase
           .from("collection_items")
-          .insert({ user_id: user.id, card_id: cardId, quantity: qty });
+          .insert({ user_id: user.id, card_id: w.cardId, variant: w.variant, quantity: w.qty });
         if (error) throw error;
       }
-      added += qty;
+      added += w.qty;
     }
 
     return NextResponse.json({ ok: true, added });

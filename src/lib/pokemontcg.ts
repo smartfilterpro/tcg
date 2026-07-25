@@ -64,6 +64,18 @@ function extractPrice(card: RawCard): number | null {
   return null;
 }
 
+/** Per-finish price map — the keys tell us which finishes exist for the card. */
+function extractPriceMap(card: RawCard): Record<string, number | null> | null {
+  const prices = card.tcgplayer?.prices;
+  if (!prices) return null;
+  const map: Record<string, number | null> = {};
+  for (const key of Object.keys(prices)) {
+    const v = prices[key];
+    map[key] = v?.market ?? v?.mid ?? v?.low ?? null;
+  }
+  return Object.keys(map).length > 0 ? map : null;
+}
+
 export function toSummary(card: RawCard): CardSummary {
   return {
     id: card.id,
@@ -82,6 +94,7 @@ export function toSummary(card: RawCard): CardSummary {
     imageSmall: card.images?.small ?? null,
     imageLarge: card.images?.large ?? null,
     marketPrice: extractPrice(card),
+    prices: extractPriceMap(card),
   };
 }
 

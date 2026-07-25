@@ -34,6 +34,7 @@ export async function POST() {
           .from("cards")
           .update({
             market_price: fresh.marketPrice,
+            prices: fresh.prices,
             price_updated_at: new Date().toISOString(),
           })
           .eq("id", card.id);

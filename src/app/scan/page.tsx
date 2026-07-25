@@ -3,7 +3,13 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import CardPickerModal from "@/components/CardPickerModal";
-import type { CardSummary, ScanMatch } from "@/lib/types";
+import {
+  availableVariants,
+  defaultVariantFor,
+  variantLabel,
+  type CardSummary,
+  type ScanMatch,
+} from "@/lib/types";
 
 interface ReviewRow {
   key: number;
@@ -11,6 +17,7 @@ interface ReviewRow {
   card: CardSummary | null; // the (possibly corrected) identification
   candidates: CardSummary[];
   quantity: number;
+  variant: string; // finish: normal | holofoil | reverseHolofoil | ...
 }
 
 /** Downscale a photo client-side so uploads stay fast and under limits. */
@@ -62,6 +69,7 @@ export default function ScanPage() {
           card: r.match,
           candidates: r.candidates,
           quantity: 1,
+          variant: r.match ? defaultVariantFor(r.match, r.detected.rarityHint) : "normal",
         }))
       );
       setPhase("review");
@@ -89,7 +97,7 @@ export default function ScanPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          items: valid.map((r) => ({ card: r.card, quantity: r.quantity })),
+          items: valid.map((r) => ({ card: r.card, quantity: r.quantity, variant: r.variant })),
         }),
       });
       const json = await res.json();
@@ -223,6 +231,23 @@ export default function ScanPage() {
                         +
                       </button>
                     </div>
+                    {row.card && (
+                      <select
+                        className="input w-auto py-1.5 text-xs"
+                        value={row.variant}
+                        onChange={(e) => updateRow(row.key, { variant: e.target.value })}
+                        title="Finish — the scanner can't always tell holo from reverse holo; correct it here"
+                      >
+                        {availableVariants(row.card).map((v) => (
+                          <option key={v} value={v}>
+                            {variantLabel(v)}
+                            {row.card!.prices?.[v] != null
+                              ? ` · $${row.card!.prices![v]!.toFixed(2)}`
+                              : ""}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <button className="btn-secondary text-xs" onClick={() => setPickerRow(row)}>
                       {row.card ? "Change card" : "Find card"}
                     </button>
@@ -273,7 +298,10 @@ export default function ScanPage() {
           candidates={pickerRow.candidates}
           onClose={() => setPickerRow(null)}
           onPick={(card) => {
-            updateRow(pickerRow.key, { card });
+            updateRow(pickerRow.key, {
+              card,
+              variant: defaultVariantFor(card, pickerRow.detected.rarityHint),
+            });
             setPickerRow(null);
           }}
         />

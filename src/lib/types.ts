@@ -19,6 +19,9 @@ export interface CardSummary {
   imageSmall: string | null;
   imageLarge: string | null;
   marketPrice: number | null; // USD, best-effort from TCGplayer/cardmarket
+  /** Per-finish USD prices from TCGplayer, e.g. { normal, holofoil, reverseHolofoil }.
+   *  The keys double as the list of finishes that exist for this card. */
+  prices: Record<string, number | null> | null;
 }
 
 /** What Claude vision extracts from a photo for each card it sees. */
@@ -43,6 +46,7 @@ export interface CollectionItem {
   user_id: string;
   card_id: string;
   quantity: number;
+  variant: string; // finish: normal | holofoil | reverseHolofoil | ...
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -67,7 +71,60 @@ export interface CardSummaryRow {
   image_small: string | null;
   image_large: string | null;
   market_price: number | null;
+  prices: Record<string, number | null> | null;
   price_updated_at: string | null;
+}
+
+// ===== Variant (finish) helpers =====
+
+export const VARIANT_LABELS: Record<string, string> = {
+  normal: "Normal",
+  holofoil: "Holo",
+  reverseHolofoil: "Reverse Holo",
+  "1stEditionNormal": "1st Edition",
+  "1stEditionHolofoil": "1st Ed. Holo",
+  unlimitedHolofoil: "Unlimited Holo",
+};
+
+export function variantLabel(variant: string): string {
+  return (
+    VARIANT_LABELS[variant] ??
+    variant.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase())
+  );
+}
+
+/** Finishes known to exist for a card (from TCGplayer price keys), with a
+ *  sensible fallback when no price data exists. */
+export function availableVariants(card: {
+  prices?: Record<string, number | null> | null;
+}): string[] {
+  const keys = card.prices ? Object.keys(card.prices) : [];
+  if (keys.length > 0) return keys;
+  return ["normal", "holofoil", "reverseHolofoil"];
+}
+
+/** Best default finish given the card + what the scanner thought it saw. */
+export function defaultVariantFor(
+  card: { prices?: Record<string, number | null> | null; rarity?: string | null },
+  rarityHint?: string | null
+): string {
+  const avail = availableVariants(card);
+  const hint = (rarityHint ?? "").toLowerCase();
+  if (hint.includes("reverse") && avail.includes("reverseHolofoil")) return "reverseHolofoil";
+  if (hint.includes("holo") && avail.includes("holofoil")) return "holofoil";
+  const rarity = (card.rarity ?? "").toLowerCase();
+  if (rarity.includes("holo") && !avail.includes("normal") && avail.includes("holofoil"))
+    return "holofoil";
+  if (avail.includes("normal")) return "normal";
+  return avail[0];
+}
+
+/** USD price for a specific finish, falling back to the headline price. */
+export function priceForVariant(
+  card: { prices?: Record<string, number | null> | null; market_price?: number | null },
+  variant: string
+): number | null {
+  return card.prices?.[variant] ?? card.market_price ?? null;
 }
 
 export interface Profile {
@@ -113,6 +170,7 @@ export function rowToSummary(row: CardSummaryRow): CardSummary {
     imageSmall: row.image_small,
     imageLarge: row.image_large,
     marketPrice: row.market_price,
+    prices: row.prices ?? null,
   };
 }
 
@@ -134,6 +192,7 @@ export function summaryToRow(c: CardSummary): Omit<CardSummaryRow, "price_update
     image_small: c.imageSmall,
     image_large: c.imageLarge,
     market_price: c.marketPrice,
+    prices: c.prices,
     price_updated_at: new Date().toISOString(),
   };
 }

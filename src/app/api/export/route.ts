@@ -24,7 +24,7 @@ export async function GET(req: Request) {
     admin.from("profiles").select("display_name, email").eq("id", tokenRow.user_id).single(),
     admin
       .from("collection_items")
-      .select("quantity, card:cards(*)")
+      .select("quantity, variant, notes, card:cards(*)")
       .eq("user_id", tokenRow.user_id)
       .limit(5000),
     admin
@@ -35,11 +35,17 @@ export async function GET(req: Request) {
   ]);
 
   const collection = (items ?? []).map((i) => {
-    const c = i.card as unknown as Record<string, unknown>;
+    const c = i.card as unknown as Record<string, unknown> & {
+      prices?: Record<string, number | null> | null;
+      market_price?: number | null;
+    };
+    const variant = (i.variant as string) ?? "normal";
     return {
       id: c.id,
       name: c.name,
       quantity: i.quantity,
+      finish: variant,
+      notes: i.notes ?? null,
       supertype: c.supertype,
       subtypes: c.subtypes,
       types: c.types,
@@ -47,7 +53,7 @@ export async function GET(req: Request) {
       rarity: c.rarity,
       set: c.set_name,
       number: c.number,
-      market_price_usd: c.market_price,
+      market_price_usd: c.prices?.[variant] ?? c.market_price ?? null,
     };
   });
 
