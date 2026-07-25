@@ -46,11 +46,23 @@ export interface CollectionItem {
   user_id: string;
   card_id: string;
   quantity: number;
-  variant: string; // finish: normal | holofoil | reverseHolofoil | ...
+  variant: string; // finish: normal | holofoil | reverseHolofoil | pcStamp | ...
+  price_override: number | null; // owner-set value (stamped promos, graded cards)
   notes: string | null;
   created_at: string;
   updated_at: string;
   card: CardSummaryRow;
+}
+
+/** The value of one copy: the owner's custom value if set, else the
+ *  market price for its finish. */
+export function itemPrice(item: {
+  price_override?: number | null;
+  variant?: string;
+  card: { prices?: Record<string, number | null> | null; market_price?: number | null };
+}): number | null {
+  if (item.price_override != null) return item.price_override;
+  return priceForVariant(item.card, item.variant ?? "normal");
 }
 
 /** DB row shape of the cards table (snake_case). */
@@ -84,7 +96,15 @@ export const VARIANT_LABELS: Record<string, string> = {
   "1stEditionNormal": "1st Edition",
   "1stEditionHolofoil": "1st Ed. Holo",
   unlimitedHolofoil: "Unlimited Holo",
+  pcStamp: "Pokémon Center Stamp",
+  prereleaseStamp: "Prerelease Stamp",
+  staffStamp: "Staff Stamp",
 };
+
+/** Stamped versions exist physically but not as separate database entries —
+ *  the databases key on set+number, and a stamp doesn't change the number.
+ *  We track them as finishes; prices fall back to the unstamped market value. */
+export const STAMP_VARIANTS = ["pcStamp", "prereleaseStamp", "staffStamp"] as const;
 
 export function variantLabel(variant: string): string {
   return (
@@ -110,6 +130,10 @@ export function defaultVariantFor(
 ): string {
   const avail = availableVariants(card);
   const hint = (rarityHint ?? "").toLowerCase();
+  // Stamped versions take priority — the stamp is the defining feature
+  if (hint.includes("center") || hint.includes("pokemon center")) return "pcStamp";
+  if (hint.includes("prerelease")) return "prereleaseStamp";
+  if (hint.includes("staff")) return "staffStamp";
   if (hint.includes("reverse") && avail.includes("reverseHolofoil")) return "reverseHolofoil";
   if (hint.includes("holo") && avail.includes("holofoil")) return "holofoil";
   const rarity = (card.rarity ?? "").toLowerCase();

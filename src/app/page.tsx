@@ -6,8 +6,9 @@ import CardPickerModal from "@/components/CardPickerModal";
 import {
   availableVariants,
   defaultVariantFor,
-  priceForVariant,
+  itemPrice,
   variantLabel,
+  STAMP_VARIANTS,
   type CardSummary,
   type CollectionItem,
 } from "@/lib/types";
@@ -31,6 +32,8 @@ export default function CollectionPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [notesDraft, setNotesDraft] = useState("");
   const [notesSaved, setNotesSaved] = useState(false);
+  const [valueDraft, setValueDraft] = useState("");
+  const [valueSaved, setValueSaved] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function load() {
@@ -86,10 +89,7 @@ export default function CollectionPage() {
         list = [...list].sort((a, b) => a.card.name.localeCompare(b.card.name));
         break;
       case "price":
-        list = [...list].sort(
-          (a, b) =>
-            (priceForVariant(b.card, b.variant) ?? 0) - (priceForVariant(a.card, a.variant) ?? 0)
-        );
+        list = [...list].sort((a, b) => (itemPrice(b) ?? 0) - (itemPrice(a) ?? 0));
         break;
       case "set":
         list = [...list].sort(
@@ -107,10 +107,7 @@ export default function CollectionPage() {
     return {
       cards: all.reduce((s, i) => s + i.quantity, 0),
       unique: all.length,
-      value: all.reduce(
-        (s, i) => s + (priceForVariant(i.card, i.variant) ?? 0) * i.quantity,
-        0
-      ),
+      value: all.reduce((s, i) => s + (itemPrice(i) ?? 0) * i.quantity, 0),
     };
   }, [items]);
 
@@ -184,6 +181,28 @@ export default function CollectionPage() {
     setSelected(item);
     setNotesDraft(item.notes ?? "");
     setNotesSaved(false);
+    setValueDraft(item.price_override != null ? String(item.price_override) : "");
+    setValueSaved(false);
+  }
+
+  async function saveValue(item: CollectionItem) {
+    const trimmed = valueDraft.trim();
+    const parsed = trimmed === "" ? null : parseFloat(trimmed);
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0)) return;
+    const res = await fetch(`/api/collection/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ priceOverride: parsed }),
+    });
+    if (res.ok) {
+      setItems(
+        (prev) =>
+          prev?.map((i) => (i.id === item.id ? { ...i, price_override: parsed } : i)) ?? null
+      );
+      setSelected((s) => (s?.id === item.id ? { ...s, price_override: parsed } : s));
+      setValueSaved(true);
+      setTimeout(() => setValueSaved(false), 2000);
+    }
   }
 
   function closeAdd() {
@@ -239,6 +258,11 @@ export default function CollectionPage() {
                 <option value="normal">Normal</option>
                 <option value="holofoil">Holo</option>
                 <option value="reverseHolofoil">Reverse Holo</option>
+                <optgroup label="Stamped versions">
+                  <option value="pcStamp">Pokémon Center Stamp</option>
+                  <option value="prereleaseStamp">Prerelease Stamp</option>
+                  <option value="staffStamp">Staff Stamp</option>
+                </optgroup>
               </select>
             }
           />
@@ -355,9 +379,10 @@ export default function CollectionPage() {
             </div>
             <div className="mt-1 flex items-center justify-between text-xs">
               <span className="truncate text-slate-400">{item.card.rarity ?? ""}</span>
-              {priceForVariant(item.card, item.variant) != null && (
+              {itemPrice(item) != null && (
                 <span className="font-semibold text-green-700">
-                  ${priceForVariant(item.card, item.variant)!.toFixed(2)}
+                  ${itemPrice(item)!.toFixed(2)}
+                  {item.price_override != null ? "*" : ""}
                 </span>
               )}
             </div>
@@ -414,6 +439,7 @@ export default function CollectionPage() {
                       {[
                         ...new Set([
                           ...availableVariants(selected.card),
+                          ...STAMP_VARIANTS,
                           selected.variant ?? "normal",
                         ]),
                       ].map((v) => (
@@ -423,12 +449,31 @@ export default function CollectionPage() {
                       ))}
                     </select>
                   </div>
-                  {priceForVariant(selected.card, selected.variant) != null && (
+                  {itemPrice(selected) != null && (
                     <div className="font-semibold text-green-700">
-                      Market ({variantLabel(selected.variant ?? "normal")}): $
-                      {priceForVariant(selected.card, selected.variant)!.toFixed(2)} each
+                      {selected.price_override != null ? "Your value" : "Market"} (
+                      {variantLabel(selected.variant ?? "normal")}): $
+                      {itemPrice(selected)!.toFixed(2)} each
                     </div>
                   )}
+                  <div className="flex items-center gap-2 pt-1">
+                    <span className="text-xs text-slate-500">Your value $</span>
+                    <input
+                      className="input w-24 py-1 text-xs"
+                      inputMode="decimal"
+                      placeholder="auto"
+                      value={valueDraft}
+                      onChange={(e) => setValueDraft(e.target.value)}
+                    />
+                    <button className="btn-secondary px-2 py-1 text-xs" onClick={() => saveValue(selected)}>
+                      Set
+                    </button>
+                    {valueSaved && <span className="text-xs text-green-600">✓</span>}
+                  </div>
+                  <p className="text-[11px] leading-snug text-slate-400">
+                    Overrides the market price — use for Pokémon Center stamps, graded cards,
+                    etc. Clear the box and Set to go back to market pricing.
+                  </p>
                 </dl>
               </div>
             </div>
