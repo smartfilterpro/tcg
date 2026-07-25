@@ -57,6 +57,12 @@ export async function GET(req: Request) {
     if (cards.length === 0 && parsed.number && !parsed.name) {
       cards = await searchCards({ name: q, pageSize: 16 });
     }
+    // XY-era Mega Evolutions are named "M Gengar-EX", not "Mega Gengar EX" —
+    // retry "Mega X" queries with the old naming convention.
+    if (cards.length === 0 && parsed.name && /^mega\s+/i.test(parsed.name)) {
+      const oldStyle = parsed.name.replace(/^mega\s+/i, "M ").replace(/\s*ex$/i, "");
+      cards = await searchCards({ name: oldStyle, number: parsed.number, pageSize: 16 });
+    }
 
     return NextResponse.json({ cards });
   } catch (err) {
