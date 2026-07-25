@@ -8,6 +8,7 @@ import {
   availableVariants,
   defaultVariantFor,
   variantLabel,
+  STAMP_VARIANTS,
   type CardSummary,
   type ScanMatch,
 } from "@/lib/types";
@@ -276,7 +277,7 @@ export default function ScanPage() {
                         className="input w-auto py-1.5 text-xs"
                         value={row.variant}
                         onChange={(e) => updateRow(row.key, { variant: e.target.value })}
-                        title="Finish — the scanner can't always tell holo from reverse holo; correct it here"
+                        title="Finish — the scanner can't always tell holo from reverse holo or spot stamps; correct it here"
                       >
                         {availableVariants(row.card).map((v) => (
                           <option key={v} value={v}>
@@ -286,6 +287,13 @@ export default function ScanPage() {
                               : ""}
                           </option>
                         ))}
+                        <optgroup label="Stamped versions">
+                          {STAMP_VARIANTS.map((v) => (
+                            <option key={v} value={v}>
+                              {variantLabel(v)}
+                            </option>
+                          ))}
+                        </optgroup>
                       </select>
                     )}
                     <button className="btn-secondary text-xs" onClick={() => setPickerRow(row)}>

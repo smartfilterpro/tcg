@@ -24,7 +24,7 @@ export async function GET(req: Request) {
     admin.from("profiles").select("display_name, email").eq("id", tokenRow.user_id).single(),
     admin
       .from("collection_items")
-      .select("quantity, variant, notes, card:cards(*)")
+      .select("quantity, variant, notes, price_override, card:cards(*)")
       .eq("user_id", tokenRow.user_id)
       .limit(5000),
     admin
@@ -53,7 +53,8 @@ export async function GET(req: Request) {
       rarity: c.rarity,
       set: c.set_name,
       number: c.number,
-      market_price_usd: c.prices?.[variant] ?? c.market_price ?? null,
+      market_price_usd:
+        (i.price_override as number | null) ?? c.prices?.[variant] ?? c.market_price ?? null,
     };
   });
 

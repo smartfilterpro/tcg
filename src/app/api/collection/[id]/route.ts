@@ -10,10 +10,11 @@ export async function PATCH(req: Request, { params }: Params) {
   try {
     const { user } = await requireUser();
     const { id } = await params;
-    const { quantity, variant, notes } = (await req.json()) as {
+    const { quantity, variant, notes, priceOverride } = (await req.json()) as {
       quantity?: number;
       variant?: string;
       notes?: string | null;
+      priceOverride?: number | null;
     };
 
     const supabase = await createClient();
@@ -46,6 +47,16 @@ export async function PATCH(req: Request, { params }: Params) {
         return NextResponse.json({ error: "Notes too long (max 500 chars)" }, { status: 400 });
       }
       patch.notes = notes || null;
+    }
+    if (priceOverride !== undefined) {
+      if (
+        priceOverride !== null &&
+        (typeof priceOverride !== "number" || !Number.isFinite(priceOverride) ||
+          priceOverride < 0 || priceOverride > 1_000_000)
+      ) {
+        return NextResponse.json({ error: "Invalid value" }, { status: 400 });
+      }
+      patch.price_override = priceOverride;
     }
 
     const { error } = await supabase

@@ -40,7 +40,7 @@ const SCAN_SCHEMA = {
           rarity_hint: {
             type: ["string", "null"],
             description:
-              "Best guess at rarity/finish from visual cues (e.g. 'Special Illustration Rare', 'Full Art', 'Holo', 'Common'). Null if unsure.",
+              "Best guess at rarity/finish from visual cues (e.g. 'Special Illustration Rare', 'Full Art', 'Holo', 'Common'). IMPORTANT: if the card carries a special stamp — a gold 'Pokémon Center' logo stamp, a 'PRERELEASE' stamp, or a 'STAFF' stamp — include that in this field (e.g. 'Holo, Pokémon Center stamp'). Null if unsure.",
           },
           confidence: {
             type: "string",
