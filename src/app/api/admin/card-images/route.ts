@@ -35,9 +35,10 @@ export async function GET() {
           .select("id, card_id, url, uploaded_by, created_at")
           .order("created_at", { ascending: false })
           .limit(1000),
+        // select("*") — image_locked only exists after migration 007
         admin
           .from("cards")
-          .select("id, name, set_name, number, image_small, image_locked")
+          .select("*")
           .is("image_small", null)
           .order("name")
           .limit(300),
@@ -55,7 +56,7 @@ export async function GET() {
     if (extraIds.length > 0) {
       const { data, error } = await admin
         .from("cards")
-        .select("id, name, set_name, number, image_small, image_locked")
+        .select("*")
         .in("id", extraIds);
       if (error) throw error;
       extraCards = data;

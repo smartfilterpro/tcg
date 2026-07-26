@@ -36,11 +36,10 @@ export async function POST(_req: Request, { params }: Params) {
         .eq("card_id", id)
         .limit(1)
         .maybeSingle(),
-      supabase
-        .from("cards")
-        .select("name, set_name, number, rarity, image_locked")
-        .eq("id", id)
-        .maybeSingle(),
+      // select("*") rather than naming columns: image_locked only exists
+      // after migration 007, and a missing column would fail the whole
+      // lookup (surfacing as a bogus "not in your collection" error).
+      supabase.from("cards").select("*").eq("id", id).maybeSingle(),
     ]);
     if (!owned || !card) {
       return NextResponse.json(

@@ -56,9 +56,11 @@ export async function POST(req: Request) {
     // the shared record already has one (a user photo, a found image, cached
     // prices), keep the existing values. Admin-locked images are never
     // replaced by anything.
+    // select("*") — image_locked only exists after migration 007; naming it
+    // would fail the query (and skip preservation) on older databases.
     const { data: existingCards } = await supabase
       .from("cards")
-      .select("id, image_small, image_large, image_locked, market_price, prices")
+      .select("*")
       .in("id", cardRows.map((r) => r.id));
     const existingById = new Map((existingCards ?? []).map((c) => [c.id as string, c]));
     const storagePrefix = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/card-photos/`;
