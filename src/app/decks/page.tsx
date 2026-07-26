@@ -2,14 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
-import type { CardSummary, Deck, DeckCardEntry } from "@/lib/types";
+import type { Deck, DeckCardEntry, DeckSuggestion } from "@/lib/types";
 
-interface UpgradeSuggestion {
-  name: string;
-  quantity: number;
-  reason: string;
-  card?: CardSummary | null;
-}
+type UpgradeSuggestion = DeckSuggestion;
 
 function CoachBox({ deck }: { deck: { name: string; strategy: string | null; cards: DeckCardEntry[] } }) {
   const [question, setQuestion] = useState("");
@@ -290,7 +285,12 @@ export default function DecksPage() {
     const res = await fetch("/api/decks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: built.name, strategy: built.strategy, cards: built.cards }),
+      body: JSON.stringify({
+        name: built.name,
+        strategy: built.strategy,
+        cards: built.cards,
+        suggestions: built.missing_suggestions ?? [],
+      }),
     });
     const json = await res.json();
     if (res.ok) {
@@ -476,6 +476,9 @@ export default function DecksPage() {
               <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{viewing.strategy}</p>
             )}
             <DeckList cards={viewing.cards ?? []} />
+            {(viewing.suggestions?.length ?? 0) > 0 && (
+              <UpgradeList suggestions={viewing.suggestions!} />
+            )}
             <CoachBox
               deck={{ name: viewing.name, strategy: viewing.strategy, cards: viewing.cards ?? [] }}
             />

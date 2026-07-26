@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
-import type { DeckCardEntry } from "@/lib/types";
+import type { DeckCardEntry, DeckSuggestion } from "@/lib/types";
 
 export async function GET() {
   try {
@@ -26,21 +26,38 @@ export async function POST(req: Request) {
       name?: string;
       strategy?: string;
       cards?: DeckCardEntry[];
+      suggestions?: DeckSuggestion[];
     };
     if (!body.name?.trim() || !Array.isArray(body.cards) || body.cards.length === 0) {
       return NextResponse.json({ error: "Name and cards are required" }, { status: 400 });
     }
+    const suggestions = Array.isArray(body.suggestions) ? body.suggestions.slice(0, 10) : [];
     const supabase = await createClient();
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("decks")
       .insert({
         user_id: user.id,
         name: body.name.trim(),
         strategy: body.strategy ?? null,
         cards: body.cards,
+        suggestions,
       })
       .select()
       .single();
+    // Graceful pre-migration fallback: save without suggestions rather than
+    // failing the whole deck save if migration 006 hasn't been run yet.
+    if (error && /suggestions/i.test(error.message ?? "")) {
+      ({ data, error } = await supabase
+        .from("decks")
+        .insert({
+          user_id: user.id,
+          name: body.name.trim(),
+          strategy: body.strategy ?? null,
+          cards: body.cards,
+        })
+        .select()
+        .single());
+    }
     if (error) throw error;
     return NextResponse.json({ deck: data });
   } catch (err) {
