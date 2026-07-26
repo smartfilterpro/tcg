@@ -41,6 +41,7 @@ export default function CollectionPage() {
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
   const detailPhotoRef = useRef<HTMLInputElement>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [findBusy, setFindBusy] = useState(false);
 
   function markBroken(cardId: string) {
     setBrokenImages((prev) => new Set(prev).add(cardId));
@@ -48,6 +49,20 @@ export default function CollectionPage() {
 
   function hasImage(item: CollectionItem) {
     return !!item.card.image_small && !brokenImages.has(item.card.id);
+  }
+
+  function applyCardImage(cardId: string, url: string) {
+    const patchCard = (i: CollectionItem) =>
+      i.card_id === cardId
+        ? { ...i, card: { ...i.card, image_small: url, image_large: url } }
+        : i;
+    setItems((prev) => prev?.map(patchCard) ?? null);
+    setSelected((s) => (s && s.card_id === cardId ? patchCard(s) : s));
+    setBrokenImages((prev) => {
+      const next = new Set(prev);
+      next.delete(cardId);
+      return next;
+    });
   }
 
   async function setCardPhoto(item: CollectionItem, file: File) {
@@ -68,19 +83,26 @@ export default function CollectionPage() {
         alert(json.error ?? "Couldn't save the photo");
         return;
       }
-      const patchCard = (i: CollectionItem) =>
-        i.card_id === item.card_id
-          ? { ...i, card: { ...i.card, image_small: url, image_large: url } }
-          : i;
-      setItems((prev) => prev?.map(patchCard) ?? null);
-      setSelected((s) => (s && s.card_id === item.card_id ? patchCard(s) : s));
-      setBrokenImages((prev) => {
-        const next = new Set(prev);
-        next.delete(item.card_id);
-        return next;
-      });
+      applyCardImage(item.card_id, url);
     } finally {
       setPhotoBusy(false);
+    }
+  }
+
+  async function findImageOnline(item: CollectionItem) {
+    setFindBusy(true);
+    try {
+      const res = await fetch(`/api/cards/${encodeURIComponent(item.card_id)}/find-image`, {
+        method: "POST",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json.error ?? "Couldn't find an image online — try your own photo.");
+        return;
+      }
+      applyCardImage(item.card_id, json.imageUrl as string);
+    } finally {
+      setFindBusy(false);
     }
   }
 
@@ -488,10 +510,17 @@ export default function CollectionPage() {
                   No card art available
                   <button
                     className="btn-primary px-3 py-1.5 text-xs"
-                    disabled={photoBusy}
+                    disabled={photoBusy || findBusy}
+                    onClick={() => findImageOnline(selected)}
+                  >
+                    {findBusy ? "Searching…" : "🔍 Find image online"}
+                  </button>
+                  <button
+                    className="btn-secondary px-3 py-1.5 text-xs"
+                    disabled={photoBusy || findBusy}
                     onClick={() => detailPhotoRef.current?.click()}
                   >
-                    {photoBusy ? "Uploading…" : "Use your photo"}
+                    {photoBusy ? "Uploading…" : "📷 Use your photo"}
                   </button>
                 </div>
               )}
