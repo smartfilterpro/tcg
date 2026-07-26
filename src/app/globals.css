@@ -6,6 +6,13 @@
   color-scheme: light;
 }
 
+html,
+body {
+  /* No sideways scroll on phones — any accidental overflow gets clipped
+     instead of stretching the page wider than the screen. */
+  overflow-x: hidden;
+}
+
 body {
   @apply bg-slate-100 text-slate-900 antialiased;
 }
