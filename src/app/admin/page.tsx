@@ -161,6 +161,26 @@ export default function AdminPage() {
     loadReview();
   }
 
+  async function findImageOnline(cardId: string, cardName: string) {
+    setError(null);
+    setMessage(null);
+    setReviewBusy(cardId);
+    try {
+      const res = await fetch(`/api/cards/${encodeURIComponent(cardId)}/find-image`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asAdmin: true }),
+      });
+      const json = await res.json();
+      if (!res.ok) setError(json.error || "Image search failed");
+      else setMessage(`Found and set an image for ${cardName}.`);
+    } catch {
+      setError("Image search failed — try again.");
+    }
+    setReviewBusy(null);
+    loadReview();
+  }
+
   async function removeCandidate(candidateId: string) {
     await fetch("/api/admin/card-images", {
       method: "DELETE",
@@ -371,6 +391,13 @@ export default function AdminPage() {
                         onClick={() => pickUpload(card.id)}
                       >
                         📷 Upload image
+                      </button>
+                      <button
+                        className="btn-secondary px-2 py-1 text-xs"
+                        disabled={reviewBusy === card.id}
+                        onClick={() => findImageOnline(card.id, card.name)}
+                      >
+                        {reviewBusy === card.id ? "Searching…" : "🔍 Find online"}
                       </button>
                       {card.image_locked && (
                         <button

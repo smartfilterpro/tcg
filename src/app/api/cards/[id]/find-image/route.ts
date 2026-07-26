@@ -21,12 +21,17 @@ Respond with ONLY direct image file URLs (ending in .png, .jpg, .jpeg, or
 URLs. If you cannot find the exact card, respond with the single word NONE.`;
 
 /** POST: search the web for the card's image, store a copy in our bucket,
- *  and set it as the card's art. Only for cards the user owns a copy of. */
-export async function POST(_req: Request, { params }: Params) {
+ *  and set it as the card's art. Only for cards the user owns a copy of —
+ *  except admins, who can pass { asAdmin: true } to find an image for any
+ *  card (used by the review page); admin-found images are locked. */
+export async function POST(req: Request, { params }: Params) {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
     const { id } = await params;
     const supabase = await createClient();
+
+    const body = (await req.json().catch(() => ({}))) as { asAdmin?: boolean };
+    const asAdmin = body?.asAdmin === true && profile?.role === "admin";
 
     const [{ data: owned }, { data: card }] = await Promise.all([
       supabase
@@ -41,13 +46,13 @@ export async function POST(_req: Request, { params }: Params) {
       // lookup (surfacing as a bogus "not in your collection" error).
       supabase.from("cards").select("*").eq("id", id).maybeSingle(),
     ]);
-    if (!owned || !card) {
+    if (!card || (!owned && !asAdmin)) {
       return NextResponse.json(
         { error: "You can only find images for cards in your collection." },
         { status: 403 }
       );
     }
-    if (card.image_locked) {
+    if (card.image_locked && !asAdmin) {
       return NextResponse.json(
         { error: "This card's image was set by the admin and can't be replaced." },
         { status: 409 }
@@ -109,10 +114,22 @@ export async function POST(_req: Request, { params }: Params) {
         if (uploadErr) continue;
         const publicUrl = admin.storage.from("card-photos").getPublicUrl(path).data.publicUrl;
 
-        const { error: updateErr } = await supabase
+        // Admin-found images lock, like every other admin image decision.
+        // Retry without the lock flag on failure (pre-migration-007 DBs).
+        let { error: updateErr } = await supabase
           .from("cards")
-          .update({ image_small: publicUrl, image_large: publicUrl })
+          .update({
+            image_small: publicUrl,
+            image_large: publicUrl,
+            ...(asAdmin ? { image_locked: true } : {}),
+          })
           .eq("id", id);
+        if (updateErr && asAdmin) {
+          ({ error: updateErr } = await supabase
+            .from("cards")
+            .update({ image_small: publicUrl, image_large: publicUrl })
+            .eq("id", id));
+        }
         if (updateErr) throw updateErr;
 
         // Keep as a candidate for admin review (best-effort)
