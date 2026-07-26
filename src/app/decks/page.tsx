@@ -161,6 +161,34 @@ export default function DecksPage() {
   const [viewing, setViewing] = useState<Deck | null>(null);
   const [exportUrl, setExportUrl] = useState<string | null>(null);
   const [showCowork, setShowCowork] = useState(false);
+  // card_id → image url, for showing real card pictures in deck lists
+  const [cardImages, setCardImages] = useState<Record<string, string | null>>({});
+
+  async function ensureImages(cards: DeckCardEntry[]) {
+    const wanted = [
+      ...new Set(
+        cards
+          .map((c) => c.card_id)
+          .filter((id): id is string => !!id && !(id in cardImages))
+      ),
+    ];
+    if (wanted.length === 0) return;
+    try {
+      const res = await fetch(`/api/cards/images?ids=${encodeURIComponent(wanted.join(","))}`);
+      const json = await res.json();
+      if (res.ok) setCardImages((prev) => ({ ...prev, ...json.images }));
+    } catch {}
+  }
+
+  useEffect(() => {
+    if (built) ensureImages(built.cards);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [built]);
+
+  useEffect(() => {
+    if (viewing) ensureImages(viewing.cards ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewing]);
 
   useEffect(() => {
     fetch("/api/decks")
@@ -460,24 +488,44 @@ export default function DecksPage() {
   function DeckList({ cards }: { cards: DeckCardEntry[] }) {
     const groups = groupCards(cards);
     return (
-      <div className="mt-3 grid gap-4 sm:grid-cols-3">
-        {(["pokemon", "trainer", "energy"] as const).map((cat) => (
-          <div key={cat}>
-            <h4 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">
-              {cat} ({groups[cat].reduce((s, c) => s + c.quantity, 0)})
-            </h4>
-            <ul className="space-y-0.5 text-sm">
-              {groups[cat].map((c, i) => (
-                <li key={i} className="flex justify-between gap-2">
-                  <span className="truncate" title={c.reason ?? undefined}>
-                    {c.name}
-                  </span>
-                  <span className="shrink-0 font-semibold text-slate-500">×{c.quantity}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
+      <div className="mt-3 space-y-4">
+        {(["pokemon", "trainer", "energy"] as const).map(
+          (cat) =>
+            groups[cat].length > 0 && (
+              <div key={cat}>
+                <h4 className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-400">
+                  {cat} ({groups[cat].reduce((s, c) => s + c.quantity, 0)})
+                </h4>
+                <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+                  {groups[cat].map((c, i) => (
+                    <div key={i} title={c.reason ?? c.name}>
+                      <div className="relative">
+                        {c.card_id && cardImages[c.card_id] ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={cardImages[c.card_id]!}
+                            alt={c.name}
+                            className="w-full rounded"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="flex aspect-[63/88] items-center justify-center rounded bg-slate-100 p-1 text-center text-[10px] font-medium leading-tight text-slate-500">
+                            {c.name}
+                          </div>
+                        )}
+                        <span className="absolute -right-1 -top-1 rounded-full bg-poke-dark px-1.5 py-0.5 text-[10px] font-bold text-white shadow">
+                          ×{c.quantity}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 truncate text-center text-[10px] text-slate-500">
+                        {c.name}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+        )}
       </div>
     );
   }
