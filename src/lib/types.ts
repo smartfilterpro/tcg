@@ -167,12 +167,20 @@ export interface DeckCardEntry {
   reason: string | null;
 }
 
+export interface DeckSuggestion {
+  name: string;
+  quantity: number;
+  reason: string;
+  card?: CardSummary | null;
+}
+
 export interface Deck {
   id: string;
   user_id: string;
   name: string;
   strategy: string | null;
   cards: DeckCardEntry[];
+  suggestions?: DeckSuggestion[];
   created_at: string;
 }
 
