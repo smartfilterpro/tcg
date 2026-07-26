@@ -186,7 +186,6 @@ export default function ScanPage() {
         ref={photoInputRef}
         type="file"
         accept="image/*"
-        capture="environment"
         className="hidden"
         onChange={async (e) => {
           const f = e.target.files?.[0];
@@ -207,7 +206,6 @@ export default function ScanPage() {
             ref={fileRef}
             type="file"
             accept="image/*"
-            capture="environment"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
