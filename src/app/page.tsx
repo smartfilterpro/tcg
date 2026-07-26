@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
+import { uploadCardPhoto } from "@/lib/photos";
 import {
   availableVariants,
   defaultVariantFor,
@@ -35,6 +36,53 @@ export default function CollectionPage() {
   const [valueDraft, setValueDraft] = useState("");
   const [valueSaved, setValueSaved] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Cards whose image URL failed to load (broken fallback-database links) —
+  // treated exactly like having no image, so the photo button appears.
+  const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
+  const detailPhotoRef = useRef<HTMLInputElement>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+
+  function markBroken(cardId: string) {
+    setBrokenImages((prev) => new Set(prev).add(cardId));
+  }
+
+  function hasImage(item: CollectionItem) {
+    return !!item.card.image_small && !brokenImages.has(item.card.id);
+  }
+
+  async function setCardPhoto(item: CollectionItem, file: File) {
+    setPhotoBusy(true);
+    try {
+      const url = await uploadCardPhoto(file);
+      if (!url) {
+        alert("Photo upload failed — has the card-photos storage migration (005) been run?");
+        return;
+      }
+      const res = await fetch(`/api/cards/${encodeURIComponent(item.card_id)}/image`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl: url }),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        alert(json.error ?? "Couldn't save the photo");
+        return;
+      }
+      const patchCard = (i: CollectionItem) =>
+        i.card_id === item.card_id
+          ? { ...i, card: { ...i.card, image_small: url, image_large: url } }
+          : i;
+      setItems((prev) => prev?.map(patchCard) ?? null);
+      setSelected((s) => (s && s.card_id === item.card_id ? patchCard(s) : s));
+      setBrokenImages((prev) => {
+        const next = new Set(prev);
+        next.delete(item.card_id);
+        return next;
+      });
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
 
   async function load() {
     try {
@@ -360,17 +408,19 @@ export default function CollectionPage() {
                 {variantLabel(item.variant)}
               </span>
             )}
-            {item.card.image_small ? (
+            {hasImage(item) ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={item.card.image_small}
+                src={item.card.image_small!}
                 alt={item.card.name}
                 className="w-full rounded"
                 loading="lazy"
+                onError={() => markBroken(item.card.id)}
               />
             ) : (
-              <div className="flex aspect-[63/88] items-center justify-center rounded bg-slate-100 text-xs text-slate-400">
-                No image
+              <div className="flex aspect-[63/88] flex-col items-center justify-center gap-1 rounded bg-slate-100 text-center text-xs text-slate-400">
+                <span className="text-xl">📷</span>
+                No image — tap to add a photo
               </div>
             )}
             <div className="mt-2 truncate text-sm font-semibold">{item.card.name}</div>
@@ -389,6 +439,20 @@ export default function CollectionPage() {
           </button>
         ))}
       </div>
+
+      {/* Detail-modal photo capture for cards without art */}
+      <input
+        ref={detailPhotoRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (f && selected) setCardPhoto(selected, f);
+        }}
+      />
 
       {showAdd && (
         <CardPickerModal
@@ -410,14 +474,27 @@ export default function CollectionPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex gap-4">
-              {selected.card.image_large || selected.card.image_small ? (
+              {hasImage(selected) ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={selected.card.image_large ?? selected.card.image_small!}
                   alt={selected.card.name}
                   className="w-40 rounded-lg shadow"
+                  onError={() => markBroken(selected.card.id)}
                 />
-              ) : null}
+              ) : (
+                <div className="flex aspect-[63/88] w-40 flex-col items-center justify-center gap-2 self-start rounded-lg bg-slate-100 p-3 text-center text-xs text-slate-400">
+                  <span className="text-2xl">📷</span>
+                  No card art available
+                  <button
+                    className="btn-primary px-3 py-1.5 text-xs"
+                    disabled={photoBusy}
+                    onClick={() => detailPhotoRef.current?.click()}
+                  >
+                    {photoBusy ? "Uploading…" : "Use your photo"}
+                  </button>
+                </div>
+              )}
               <div className="min-w-0 flex-1">
                 <h2 className="text-lg font-bold">{selected.card.name}</h2>
                 <dl className="mt-2 space-y-1 text-sm text-slate-600">
