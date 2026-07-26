@@ -463,14 +463,23 @@ export default function DecksPage() {
             className="card-panel max-h-[90vh] w-full max-w-lg overflow-y-auto p-5"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between">
+            <div className="flex items-start justify-between gap-2">
               <h2 className="text-xl font-bold">{viewing.name}</h2>
-              <button
-                className="btn text-sm text-red-600 hover:bg-red-50"
-                onClick={() => deleteDeck(viewing.id)}
-              >
-                Delete
-              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  className="btn text-sm text-red-600 hover:bg-red-50"
+                  onClick={() => deleteDeck(viewing.id)}
+                >
+                  Delete
+                </button>
+                <button
+                  aria-label="Close"
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200"
+                  onClick={() => setViewing(null)}
+                >
+                  ✕
+                </button>
+              </div>
             </div>
             {viewing.strategy && (
               <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{viewing.strategy}</p>
@@ -504,13 +513,15 @@ export default function DecksPage() {
                     <div key={i} title={c.reason ?? c.name}>
                       <div className="relative">
                         {c.card_id && cardImages[c.card_id] ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={cardImages[c.card_id]!}
-                            alt={c.name}
-                            className="w-full rounded"
-                            loading="lazy"
-                          />
+                          <div className="aspect-[63/88] w-full overflow-hidden rounded">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={cardImages[c.card_id]!}
+                              alt={c.name}
+                              className="h-full w-full object-cover"
+                              loading="lazy"
+                            />
+                          </div>
                         ) : (
                           <div className="flex aspect-[63/88] items-center justify-center rounded bg-slate-100 p-1 text-center text-[10px] font-medium leading-tight text-slate-500">
                             {c.name}

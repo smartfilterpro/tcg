@@ -268,12 +268,14 @@ export default function ScanPage() {
             {rows.map((row) => (
               <div key={row.key} className="card-panel flex gap-3 p-3">
                 {row.card?.imageSmall || row.photoUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={row.card?.imageSmall ?? row.photoUrl!}
-                    alt={row.card?.name ?? "your photo"}
-                    className="w-20 self-start rounded"
-                  />
+                  <div className="aspect-[63/88] w-20 shrink-0 self-start overflow-hidden rounded">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={row.card?.imageSmall ?? row.photoUrl!}
+                      alt={row.card?.name ?? "your photo"}
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
                 ) : (
                   <div className="flex aspect-[63/88] w-20 items-center justify-center self-start rounded bg-slate-100 text-center text-[10px] text-slate-400">
                     {row.card ? "No image in database" : "No match"}

@@ -431,14 +431,18 @@ export default function CollectionPage() {
               </span>
             )}
             {hasImage(item) ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={item.card.image_small!}
-                alt={item.card.name}
-                className="w-full rounded"
-                loading="lazy"
-                onError={() => markBroken(item.card.id)}
-              />
+              // Fixed card aspect ratio — user-taken photos (arbitrary shapes)
+              // otherwise distort the grid
+              <div className="aspect-[63/88] w-full overflow-hidden rounded">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={item.card.image_small!}
+                  alt={item.card.name}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                  onError={() => markBroken(item.card.id)}
+                />
+              </div>
             ) : (
               <div className="flex aspect-[63/88] flex-col items-center justify-center gap-1 rounded bg-slate-100 text-center text-xs text-slate-400">
                 <span className="text-xl">📷</span>
@@ -492,18 +496,27 @@ export default function CollectionPage() {
           onClick={() => setSelected(null)}
         >
           <div
-            className="card-panel max-h-[90vh] w-full max-w-md overflow-y-auto p-5"
+            className="card-panel relative max-h-[90vh] w-full max-w-md overflow-y-auto p-5"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex gap-4">
+            <button
+              aria-label="Close"
+              className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200"
+              onClick={() => setSelected(null)}
+            >
+              ✕
+            </button>
+            <div className="flex gap-4 pr-6">
               {hasImage(selected) ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={selected.card.image_large ?? selected.card.image_small!}
-                  alt={selected.card.name}
-                  className="w-40 rounded-lg shadow"
-                  onError={() => markBroken(selected.card.id)}
-                />
+                <div className="flex aspect-[63/88] w-40 shrink-0 items-center justify-center self-start overflow-hidden rounded-lg bg-slate-100 shadow">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={selected.card.image_large ?? selected.card.image_small!}
+                    alt={selected.card.name}
+                    className="h-full w-full object-contain"
+                    onError={() => markBroken(selected.card.id)}
+                  />
+                </div>
               ) : (
                 <div className="flex aspect-[63/88] w-40 flex-col items-center justify-center gap-2 self-start rounded-lg bg-slate-100 p-3 text-center text-xs text-slate-400">
                   <span className="text-2xl">📷</span>
