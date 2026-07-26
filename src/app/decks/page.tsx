@@ -2,7 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
-import type { Deck, DeckCardEntry } from "@/lib/types";
+import type { CardSummary, Deck, DeckCardEntry } from "@/lib/types";
+
+interface UpgradeSuggestion {
+  name: string;
+  quantity: number;
+  reason: string;
+  card?: CardSummary | null;
+}
 
 function CoachBox({ deck }: { deck: { name: string; strategy: string | null; cards: DeckCardEntry[] } }) {
   const [question, setQuestion] = useState("");
@@ -63,7 +70,55 @@ interface BuiltDeck {
   name: string;
   strategy: string;
   cards: DeckCardEntry[];
-  missing_suggestions: string[];
+  missing_suggestions: UpgradeSuggestion[];
+}
+
+/** Wishlist of unowned cards that would strengthen the deck. */
+function UpgradeList({ suggestions }: { suggestions: UpgradeSuggestion[] }) {
+  const total = suggestions.reduce(
+    (s, u) => s + (u.card?.marketPrice ?? 0) * u.quantity,
+    0
+  );
+  return (
+    <div className="mt-3 rounded-lg bg-amber-50 p-3">
+      <div className="mb-2 flex items-baseline justify-between">
+        <span className="text-sm font-bold text-amber-900">💪 Cards to buy for a stronger deck</span>
+        {total > 0 && (
+          <span className="text-xs font-semibold text-amber-800">
+            upgrade cost: ~${total.toFixed(2)}
+          </span>
+        )}
+      </div>
+      <ul className="space-y-2">
+        {suggestions.map((u, i) => (
+          <li key={i} className="flex gap-2">
+            {u.card?.imageSmall ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={u.card.imageSmall} alt={u.name} className="w-12 shrink-0 self-start rounded" />
+            ) : (
+              <div className="flex aspect-[63/88] w-12 shrink-0 items-center justify-center self-start rounded bg-amber-100 text-[9px] text-amber-400">
+                ?
+              </div>
+            )}
+            <div className="min-w-0 text-xs text-amber-900">
+              <div className="font-semibold">
+                {u.quantity}× {u.name}
+                {u.card?.marketPrice != null && (
+                  <span className="ml-1 font-normal text-amber-700">
+                    (~${(u.card.marketPrice * u.quantity).toFixed(2)})
+                  </span>
+                )}
+                {u.card && (
+                  <span className="ml-1 font-normal text-amber-600">· {u.card.setName}</span>
+                )}
+              </div>
+              <div className="mt-0.5 text-amber-800">{u.reason}</div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 /** Parse a response body defensively — an empty/cut-off reply becomes a
@@ -317,9 +372,7 @@ export default function DecksPage() {
             <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{built.strategy}</p>
             <DeckList cards={built.cards} />
             {built.missing_suggestions?.length > 0 && (
-              <div className="mt-3 rounded bg-amber-50 p-3 text-xs text-amber-800">
-                <strong>Wishlist upgrades:</strong> {built.missing_suggestions.join(", ")}
-              </div>
+              <UpgradeList suggestions={built.missing_suggestions} />
             )}
             <CoachBox deck={{ name: built.name, strategy: built.strategy, cards: built.cards }} />
           </div>
