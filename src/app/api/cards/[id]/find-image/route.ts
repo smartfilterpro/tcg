@@ -38,7 +38,7 @@ export async function POST(_req: Request, { params }: Params) {
         .maybeSingle(),
       supabase
         .from("cards")
-        .select("name, set_name, number, rarity")
+        .select("name, set_name, number, rarity, image_locked")
         .eq("id", id)
         .maybeSingle(),
     ]);
@@ -46,6 +46,12 @@ export async function POST(_req: Request, { params }: Params) {
       return NextResponse.json(
         { error: "You can only find images for cards in your collection." },
         { status: 403 }
+      );
+    }
+    if (card.image_locked) {
+      return NextResponse.json(
+        { error: "This card's image was set by the admin and can't be replaced." },
+        { status: 409 }
       );
     }
 
@@ -109,6 +115,15 @@ export async function POST(_req: Request, { params }: Params) {
           .update({ image_small: publicUrl, image_large: publicUrl })
           .eq("id", id);
         if (updateErr) throw updateErr;
+
+        // Keep as a candidate for admin review (best-effort)
+        await supabase
+          .from("card_image_candidates")
+          .upsert(
+            { card_id: id, url: publicUrl, uploaded_by: user.id },
+            { onConflict: "card_id,url", ignoreDuplicates: true }
+          )
+          .then(() => {});
 
         return NextResponse.json({ imageUrl: publicUrl });
       } catch {
