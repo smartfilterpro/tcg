@@ -32,7 +32,9 @@ export async function PATCH(req: Request, { params }: Params) {
         .eq("card_id", id)
         .limit(1)
         .maybeSingle(),
-      supabase.from("cards").select("image_locked").eq("id", id).maybeSingle(),
+      // select("*") — image_locked only exists after migration 007; naming
+      // it would error the query on older databases.
+      supabase.from("cards").select("*").eq("id", id).maybeSingle(),
     ]);
     if (!owned) {
       return NextResponse.json(
