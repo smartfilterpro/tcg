@@ -1,12 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Profile } from "@/lib/types";
+import { uploadCardPhoto } from "@/lib/photos";
 
 interface Invite {
   id: string;
   email: string;
   created_at: string;
+}
+
+interface ReviewCandidate {
+  id: string;
+  url: string;
+  uploadedByEmail: string | null;
+  createdAt: string;
+}
+
+interface ReviewRow {
+  card: {
+    id: string;
+    name: string;
+    set_name: string | null;
+    number: string | null;
+    image_small: string | null;
+    image_locked: boolean;
+  };
+  candidates: ReviewCandidate[];
 }
 
 interface UserUsage {
@@ -31,6 +51,10 @@ export default function AdminPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [reviewRows, setReviewRows] = useState<ReviewRow[]>([]);
+  const [reviewBusy, setReviewBusy] = useState<string | null>(null); // card id being acted on
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const uploadCardIdRef = useRef<string | null>(null);
 
   async function load() {
     const res = await fetch("/api/admin/users");
@@ -45,8 +69,15 @@ export default function AdminPage() {
     setLoading(false);
   }
 
+  async function loadReview() {
+    const res = await fetch("/api/admin/card-images");
+    const json = await res.json();
+    if (res.ok) setReviewRows(json.rows ?? []);
+  }
+
   useEffect(() => {
     load();
+    loadReview();
   }, []);
 
   async function invite(e: React.FormEvent) {
@@ -100,6 +131,64 @@ export default function AdminPage() {
     const json = await res.json();
     if (!res.ok) setError(json.error);
     load();
+  }
+
+  async function setCardImage(cardId: string, url: string) {
+    setError(null);
+    setReviewBusy(cardId);
+    const res = await fetch("/api/admin/card-images", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "set", cardId, url }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    setReviewBusy(null);
+    loadReview();
+  }
+
+  async function unlockCard(cardId: string) {
+    setError(null);
+    setReviewBusy(cardId);
+    const res = await fetch("/api/admin/card-images", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "unlock", cardId }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    setReviewBusy(null);
+    loadReview();
+  }
+
+  async function removeCandidate(candidateId: string) {
+    await fetch("/api/admin/card-images", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidateId }),
+    });
+    loadReview();
+  }
+
+  function pickUpload(cardId: string) {
+    uploadCardIdRef.current = cardId;
+    uploadInputRef.current?.click();
+  }
+
+  async function onUploadChosen(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    const cardId = uploadCardIdRef.current;
+    if (!file || !cardId) return;
+    setError(null);
+    setReviewBusy(cardId);
+    const url = await uploadCardPhoto(file);
+    if (!url) {
+      setError("Photo upload failed — try again.");
+      setReviewBusy(null);
+      return;
+    }
+    await setCardImage(cardId, url);
   }
 
   if (loading) return <p className="text-slate-500">Loading…</p>;
@@ -188,6 +277,117 @@ export default function AdminPage() {
             </li>
           ))}
         </ul>
+      </div>
+
+      <div className="card-panel p-4">
+        <h2 className="mb-2 font-semibold">🖼 Card image review ({reviewRows.length})</h2>
+        <p className="mb-2 text-xs text-slate-500">
+          Cards with no picture, or with photos submitted by members. Picking an image locks
+          it — only an admin can change it afterwards.
+        </p>
+        <input
+          ref={uploadInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={onUploadChosen}
+        />
+        {reviewRows.length === 0 ? (
+          <p className="text-sm text-slate-400">Nothing to review — every card has art. 🎉</p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {reviewRows.map(({ card, candidates }) => (
+              <li key={card.id} className="py-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-14 shrink-0 overflow-hidden rounded aspect-[63/88] bg-slate-100">
+                    {card.image_small ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={card.image_small}
+                        alt={card.name}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-lg text-slate-300">
+                        ?
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">{card.name}</span>
+                      {card.image_locked && (
+                        <span className="chip bg-poke-gold/30 text-yellow-900">🔒 locked</span>
+                      )}
+                      {!card.image_small && (
+                        <span className="chip bg-red-50 text-red-700">no image</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {card.set_name || "Unknown set"}
+                      {card.number ? ` · #${card.number}` : ""}
+                    </div>
+                    {candidates.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-3">
+                        {candidates.map((cand) => (
+                          <div key={cand.id} className="w-20">
+                            <div className="overflow-hidden rounded aspect-[63/88] bg-slate-100">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={cand.url}
+                                alt="candidate"
+                                className="h-full w-full object-cover"
+                              />
+                            </div>
+                            {cand.uploadedByEmail && (
+                              <div className="mt-0.5 truncate text-[10px] text-slate-400">
+                                {cand.uploadedByEmail}
+                              </div>
+                            )}
+                            <div className="mt-1 flex gap-1">
+                              <button
+                                className="btn flex-1 bg-green-600 px-1 py-0.5 text-[11px] text-white hover:bg-green-700"
+                                disabled={reviewBusy === card.id}
+                                onClick={() => setCardImage(card.id, cand.url)}
+                              >
+                                Use
+                              </button>
+                              <button
+                                className="btn px-1 py-0.5 text-[11px] text-red-600 hover:bg-red-50"
+                                title="Remove this candidate"
+                                onClick={() => removeCandidate(cand.id)}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        className="btn-secondary px-2 py-1 text-xs"
+                        disabled={reviewBusy === card.id}
+                        onClick={() => pickUpload(card.id)}
+                      >
+                        📷 Upload image
+                      </button>
+                      {card.image_locked && (
+                        <button
+                          className="btn px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
+                          disabled={reviewBusy === card.id}
+                          onClick={() => unlockCard(card.id)}
+                        >
+                          🔓 Unlock
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <div className="card-panel p-4">

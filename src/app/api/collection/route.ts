@@ -50,10 +50,52 @@ export async function POST(req: Request) {
     const cardRows = [
       ...new Map(items.map((i) => [i.card.id, summaryToRow(i.card)])).values(),
     ];
+
+    // Never let a data-less save clobber shared enrichments: if the incoming
+    // row has no image/price (typical for promos the card databases lack) but
+    // the shared record already has one (a user photo, a found image, cached
+    // prices), keep the existing values. Admin-locked images are never
+    // replaced by anything.
+    const { data: existingCards } = await supabase
+      .from("cards")
+      .select("id, image_small, image_large, image_locked, market_price, prices")
+      .in("id", cardRows.map((r) => r.id));
+    const existingById = new Map((existingCards ?? []).map((c) => [c.id as string, c]));
+    const storagePrefix = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/card-photos/`;
+    const candidateRows: Array<{ card_id: string; url: string; uploaded_by: string }> = [];
+    for (const row of cardRows) {
+      // A user-attached photo (our storage bucket) is always kept as a
+      // candidate for admin review, whatever ends up displayed.
+      if (row.image_small?.startsWith(storagePrefix)) {
+        candidateRows.push({ card_id: row.id, url: row.image_small, uploaded_by: user.id });
+      }
+      const existing = existingById.get(row.id);
+      if (!existing) continue;
+      if (existing.image_locked || (!row.image_small && existing.image_small)) {
+        row.image_small = existing.image_small;
+        row.image_large = existing.image_large ?? existing.image_small;
+      }
+      if (row.market_price == null && existing.market_price != null) {
+        row.market_price = existing.market_price;
+      }
+      if (!row.prices && existing.prices) {
+        row.prices = existing.prices as typeof row.prices;
+      }
+    }
+
+    // image_locked is not part of the upsert payload, so it's preserved.
     const { error: cardErr } = await supabase
       .from("cards")
       .upsert(cardRows, { onConflict: "id" });
     if (cardErr) throw cardErr;
+
+    if (candidateRows.length > 0) {
+      // Best-effort (table exists after migration 007)
+      await supabase
+        .from("card_image_candidates")
+        .upsert(candidateRows, { onConflict: "card_id,url", ignoreDuplicates: true })
+        .then(() => {});
+    }
 
     // 2) Merge quantities per (card id, finish)
     const wanted = new Map<string, { cardId: string; variant: string; qty: number }>();
