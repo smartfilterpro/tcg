@@ -3,7 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
-import type { CardSummaryRow, DeckCardEntry } from "@/lib/types";
+import { searchCards } from "@/lib/pokemontcg";
+import type { CardSummary, CardSummaryRow, DeckCardEntry } from "@/lib/types";
 
 export const maxDuration = 300;
 
@@ -65,8 +66,24 @@ const DECK_SCHEMA = {
     missing_suggestions: {
       type: "array",
       description:
-        "Cards the player does NOT own that would meaningfully upgrade the deck (max 5).",
-      items: { type: "string" },
+        "Up to 5 real cards the player does NOT own that would most strengthen THIS deck.",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Exact card name as printed." },
+          quantity: {
+            type: "integer",
+            description: "How many copies the deck wants (1-4).",
+          },
+          reason: {
+            type: "string",
+            description:
+              "One concrete sentence: what this card fixes or enables in this exact deck, and what it would replace.",
+          },
+        },
+        required: ["name", "quantity", "reason"],
+        additionalProperties: false,
+      },
     },
   },
   required: ["name", "strategy", "cards", "missing_suggestions"],
@@ -112,6 +129,15 @@ DECK QUALITY CRAFT — apply these principles:
   mulligans.
 - If the collection can't support a competitive 60, build the best casual
   deck possible and say so honestly in the strategy.
+
+UPGRADE SUGGESTIONS (missing_suggestions):
+Recommend up to 5 real, currently-purchasable cards the player does NOT own
+that would most strengthen THIS exact deck — consistency staples (draw
+supporters, search items), a stronger attacker for the chosen line, or the
+missing piece of a combo the collection almost supports. For each: the exact
+card name, how many copies the deck wants, and one concrete sentence on what
+it fixes and what it would replace. Prefer impactful, reasonably-priced
+staples over chase rares unless the deck truly needs them.
 
 EXPLAINING THE DECK:
 Tailor to the player's play style profile and experience level when provided.
@@ -251,7 +277,12 @@ export async function POST(req: Request) {
           name: string;
           strategy: string;
           cards: DeckCardEntry[];
-          missing_suggestions: string[];
+          missing_suggestions: Array<{
+            name: string;
+            quantity: number;
+            reason: string;
+            card?: CardSummary | null;
+          }>;
         };
         try {
           deck = JSON.parse(textBlock.text);
@@ -262,6 +293,18 @@ export async function POST(req: Request) {
               : "The deck came back malformed — please try again."
           );
         }
+
+        // Enrich upgrade suggestions with real card data (image + market
+        // price) so the wishlist shows what to buy and what it costs.
+        for (const suggestion of (deck.missing_suggestions ?? []).slice(0, 5)) {
+          try {
+            const found = await searchCards({ name: suggestion.name, pageSize: 1 });
+            suggestion.card = found[0] ?? null;
+          } catch {
+            suggestion.card = null;
+          }
+        }
+
         jobs.set(jobId, { userId: user.id, status: "done", deck, created: Date.now() });
       } catch (err) {
         console.error("deck build job error", err);
