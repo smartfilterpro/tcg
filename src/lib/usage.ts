@@ -19,7 +19,7 @@ export function estimateCostUsd(model: string, inputTokens: number, outputTokens
 export async function logAiUsage(
   supabase: SupabaseClient,
   userId: string,
-  endpoint: "scan" | "deck_build" | "coach",
+  endpoint: "scan" | "deck_build" | "coach" | "find_image",
   model: string,
   usage: { input_tokens?: number | null; output_tokens?: number | null } | undefined
 ): Promise<void> {
