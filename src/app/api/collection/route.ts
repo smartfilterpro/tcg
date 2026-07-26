@@ -50,6 +50,31 @@ export async function POST(req: Request) {
     const cardRows = [
       ...new Map(items.map((i) => [i.card.id, summaryToRow(i.card)])).values(),
     ];
+
+    // Never let a data-less save clobber shared enrichments: if the incoming
+    // row has no image/price (typical for promos the card databases lack) but
+    // the shared record already has one (a user photo, a found image, cached
+    // prices), keep the existing values.
+    const { data: existingCards } = await supabase
+      .from("cards")
+      .select("id, image_small, image_large, market_price, prices")
+      .in("id", cardRows.map((r) => r.id));
+    const existingById = new Map((existingCards ?? []).map((c) => [c.id as string, c]));
+    for (const row of cardRows) {
+      const existing = existingById.get(row.id);
+      if (!existing) continue;
+      if (!row.image_small && existing.image_small) {
+        row.image_small = existing.image_small;
+        row.image_large = existing.image_large ?? existing.image_small;
+      }
+      if (row.market_price == null && existing.market_price != null) {
+        row.market_price = existing.market_price;
+      }
+      if (!row.prices && existing.prices) {
+        row.prices = existing.prices as typeof row.prices;
+      }
+    }
+
     const { error: cardErr } = await supabase
       .from("cards")
       .upsert(cardRows, { onConflict: "id" });
