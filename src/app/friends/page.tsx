@@ -1422,6 +1422,19 @@ function CardPicker({
 }
 
 function SharedDeckList({ cards }: { cards: DeckCardEntry[] }) {
+  // card_id → image url, same visual grid as your own decks
+  const [images, setImages] = useState<Record<string, string | null>>({});
+
+  useEffect(() => {
+    const ids = [...new Set(cards.map((c) => c.card_id).filter((id): id is string => !!id))];
+    if (ids.length === 0) return;
+    fetch(`/api/cards/images?ids=${encodeURIComponent(ids.join(","))}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j?.images && setImages(j.images))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cards]);
+
   const groups: Record<"pokemon" | "trainer" | "energy", DeckCardEntry[]> = {
     pokemon: [],
     trainer: [],
@@ -1429,21 +1442,43 @@ function SharedDeckList({ cards }: { cards: DeckCardEntry[] }) {
   };
   for (const c of cards) (groups[c.category] ?? groups.trainer).push(c);
   return (
-    <div className="mt-3 space-y-3">
+    <div className="mt-3 space-y-4">
       {(["pokemon", "trainer", "energy"] as const).map(
         (cat) =>
           groups[cat].length > 0 && (
             <div key={cat}>
-              <h4 className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">
+              <h4 className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-400">
                 {cat} ({groups[cat].reduce((s, c) => s + c.quantity, 0)})
               </h4>
-              <ul className="space-y-0.5 text-sm">
+              <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
                 {groups[cat].map((c, i) => (
-                  <li key={i}>
-                    {c.quantity}x {c.name}
-                  </li>
+                  <div key={i} title={c.name}>
+                    <div className="relative">
+                      {c.card_id && images[c.card_id] ? (
+                        <div className="aspect-[63/88] w-full overflow-hidden rounded">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={images[c.card_id]!}
+                            alt={c.name}
+                            className="h-full w-full object-cover"
+                            loading="lazy"
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex aspect-[63/88] items-center justify-center rounded bg-slate-100 p-1 text-center text-[10px] font-medium leading-tight text-slate-500">
+                          {c.name}
+                        </div>
+                      )}
+                      <span className="absolute -right-1 -top-1 rounded-full bg-poke-dark px-1.5 py-0.5 text-[10px] font-bold text-white shadow">
+                        ×{c.quantity}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 truncate text-center text-[10px] text-slate-500">
+                      {c.name}
+                    </div>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </div>
           )
       )}
