@@ -10,6 +10,30 @@ interface Invite {
   created_at: string;
 }
 
+interface ScanStats {
+  scans: number;
+  avgSeconds: number | null;
+  avgCardsPerScan: number | null;
+  matchRate: number | null;
+  accuracy: number | null;
+}
+
+interface Analytics {
+  scanTracking: boolean;
+  community: {
+    members: number;
+    totalCards: number;
+    totalValue: number;
+    decks: number;
+    sharedDecks: number;
+    openTradePosts: number;
+    openTickets: number;
+    aiCostMonth: number;
+  };
+  scansAllTime: ScanStats;
+  scans30d: ScanStats;
+}
+
 interface TicketMessage {
   id: string;
   user_id: string;
@@ -56,6 +80,16 @@ interface UserUsage {
   costUsd: number;
   costUsd30d: number;
   costUsdMonth: number;
+}
+
+function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="rounded-lg bg-slate-50 p-2.5">
+      <div className="text-lg font-bold leading-tight">{value}</div>
+      <div className="text-[11px] text-slate-500">{label}</div>
+      {sub && <div className="text-[10px] text-slate-400">{sub}</div>}
+    </div>
+  );
 }
 
 function formatTokens(n: number): string {
@@ -114,10 +148,16 @@ export default function AdminPage() {
     if (res.ok) setTickets(json.tickets ?? []);
   }
 
+  const [analytics, setAnalytics] = useState<Analytics | null>(null);
+
   useEffect(() => {
     load();
     loadReview();
     loadTickets();
+    fetch("/api/admin/analytics")
+      .then((r) => r.json())
+      .then((j) => j?.community && setAnalytics(j))
+      .catch(() => {});
   }, []);
 
   async function setTicketStatus(t: Ticket, status: Ticket["status"]) {
@@ -461,6 +501,80 @@ export default function AdminPage() {
           ))}
         </ul>
       </div>
+
+      {analytics && (
+        <div className="card-panel p-4">
+          <h2 className="mb-2 font-semibold">📊 Analytics</h2>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <StatTile label="Members" value={String(analytics.community.members)} />
+            <StatTile label="Cards tracked" value={analytics.community.totalCards.toLocaleString()} />
+            <StatTile label="Est. total value" value={`$${Math.round(analytics.community.totalValue).toLocaleString()}`} />
+            <StatTile label="AI spend this month" value={`~$${analytics.community.aiCostMonth.toFixed(2)}`} />
+            <StatTile
+              label="Decks"
+              value={`${analytics.community.decks}`}
+              sub={`${analytics.community.sharedDecks} shared`}
+            />
+            <StatTile label="Open trade posts" value={String(analytics.community.openTradePosts)} />
+            <StatTile label="Open tickets" value={String(analytics.community.openTickets)} />
+            <StatTile
+              label="Scans (30d)"
+              value={String(analytics.scans30d.scans)}
+              sub={`${analytics.scansAllTime.scans} all-time`}
+            />
+          </div>
+          <h3 className="mb-1 mt-4 text-sm font-semibold">🔎 Scanning quality</h3>
+          {!analytics.scanTracking ? (
+            <p className="text-xs text-yellow-800">
+              Scan tracking needs a one-time database update — run{" "}
+              <code>supabase/migrations/012_analytics.sql</code>. Stats start collecting from
+              then on.
+            </p>
+          ) : analytics.scansAllTime.scans === 0 ? (
+            <p className="text-xs text-slate-400">
+              No scans recorded yet — stats collect from each saved scan.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <StatTile
+                label="Avg. time to identify"
+                value={
+                  analytics.scans30d.avgSeconds != null
+                    ? `${analytics.scans30d.avgSeconds.toFixed(0)}s`
+                    : "—"
+                }
+                sub="last 30 days"
+              />
+              <StatTile
+                label="Avg. cards per scan"
+                value={
+                  analytics.scans30d.avgCardsPerScan != null
+                    ? analytics.scans30d.avgCardsPerScan.toFixed(1)
+                    : "—"
+                }
+              />
+              <StatTile
+                label="Auto-match rate"
+                value={
+                  analytics.scans30d.matchRate != null
+                    ? `${analytics.scans30d.matchRate.toFixed(0)}%`
+                    : "—"
+                }
+                sub="cards found in the database"
+              />
+              <StatTile
+                label="Scan accuracy"
+                value={
+                  analytics.scans30d.accuracy != null
+                    ? `${analytics.scans30d.accuracy.toFixed(0)}%`
+                    : "—"
+                }
+                sub="saved without correction"
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card-panel p-4">
         <h2 className="mb-2 font-semibold">

@@ -22,6 +22,7 @@ interface ReviewRow {
   quantity: number;
   variant: string; // finish: normal | holofoil | reverseHolofoil | ...
   photoUrl: string | null; // user-taken photo, used when the DB has no image
+  originalCardId: string | null; // the scan's auto-match, to measure accuracy
 }
 
 /** Downscale a photo client-side so uploads stay fast and under limits. */
@@ -61,6 +62,7 @@ export default function ScanPage() {
   const photoInputRef = useRef<HTMLInputElement>(null);
   const [photoRowKey, setPhotoRowKey] = useState<number | null>(null);
   const [photoUploading, setPhotoUploading] = useState<number | null>(null);
+  const [scanSeconds, setScanSeconds] = useState<number | null>(null);
 
   // Rotate through status messages while a scan is running so the page
   // clearly isn't frozen (scans take 10-30s depending on card count).
@@ -78,6 +80,7 @@ export default function ScanPage() {
     setError(null);
     setPhase("scanning");
     setPreview(URL.createObjectURL(file));
+    const startedAt = Date.now();
     try {
       const { data, mediaType } = await fileToBase64(file);
       const res = await fetch("/api/scan", {
@@ -100,8 +103,10 @@ export default function ScanPage() {
           quantity: 1,
           variant: r.match ? defaultVariantFor(r.match, r.detected.rarityHint) : "normal",
           photoUrl: null,
+          originalCardId: r.match?.id ?? null,
         }))
       );
+      setScanSeconds(Math.round((Date.now() - startedAt) / 1000));
       setPhase("review");
       // Single-card scan with no database image (common for promos): use the
       // photo just taken as the card's image, automatically.
@@ -149,6 +154,20 @@ export default function ScanPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Save failed");
       setAddedCount(json.added);
+      // Best-effort analytics: how long the scan took and how often the
+      // auto-match was kept (admin dashboard fodder).
+      fetch("/api/scan/telemetry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          durationMs: (scanSeconds ?? 0) * 1000,
+          detected: rows.length,
+          autoMatched: rows.filter((r) => r.originalCardId).length,
+          saved: valid.length,
+          keptMatch: valid.filter((r) => r.originalCardId && r.card?.id === r.originalCardId)
+            .length,
+        }),
+      }).catch(() => {});
       setPhase("done");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
@@ -255,7 +274,11 @@ export default function ScanPage() {
         <div>
           <div className="mb-3 flex items-center justify-between">
             <p className="text-sm font-semibold">
-              {rows.length} card{rows.length === 1 ? "" : "s"} detected — review before saving
+              {rows.length} card{rows.length === 1 ? "" : "s"} detected
+              {scanSeconds != null && (
+                <span className="font-normal text-slate-400"> in {scanSeconds}s</span>
+              )}{" "}
+              — review before saving
             </p>
             <button className="btn-secondary text-xs" onClick={reset}>
               Start over
