@@ -366,49 +366,53 @@ export default function CollectionPage() {
         </div>
       </div>
 
-      <div className="card-panel mb-4 flex flex-wrap gap-2 p-3">
+      <div className="card-panel mb-4 space-y-2 p-3">
+        {/* Full-width search on its own row; filters in a tidy grid below */}
         <input
-          className="input max-w-56 flex-1"
-          placeholder="Search by name…"
+          className="input w-full"
+          type="search"
+          placeholder="🔍 Search your cards by name…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <select className="input w-auto" value={supertypeFilter} onChange={(e) => setSupertypeFilter(e.target.value)}>
-          <option value="">All card types</option>
-          {facets.supertypes.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
-        <select className="input w-auto" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-          <option value="">All energy types</option>
-          {facets.types.map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
-        <select className="input w-auto max-w-48" value={setFilter} onChange={(e) => setSetFilter(e.target.value)}>
-          <option value="">All sets</option>
-          {facets.sets.map(([id, name]) => (
-            <option key={id} value={id}>{name}</option>
-          ))}
-        </select>
-        <select className="input w-auto max-w-52" value={rarityFilter} onChange={(e) => setRarityFilter(e.target.value)}>
-          <option value="">All rarities</option>
-          {facets.rarities.map((r) => (
-            <option key={r} value={r}>{r}</option>
-          ))}
-        </select>
-        <select className="input w-auto" value={variantFilter} onChange={(e) => setVariantFilter(e.target.value)}>
-          <option value="">All finishes</option>
-          {facets.variants.map((v) => (
-            <option key={v} value={v}>{variantLabel(v)}</option>
-          ))}
-        </select>
-        <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
-          <option value="newest">Newest first</option>
-          <option value="name">Name A–Z</option>
-          <option value="price">Highest value</option>
-          <option value="set">By set</option>
-        </select>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <select className="input w-full min-w-0" value={supertypeFilter} onChange={(e) => setSupertypeFilter(e.target.value)}>
+            <option value="">All card types</option>
+            {facets.supertypes.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <select className="input w-full min-w-0" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+            <option value="">All energy types</option>
+            {facets.types.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+          <select className="input w-full min-w-0" value={setFilter} onChange={(e) => setSetFilter(e.target.value)}>
+            <option value="">All sets</option>
+            {facets.sets.map(([id, name]) => (
+              <option key={id} value={id}>{name}</option>
+            ))}
+          </select>
+          <select className="input w-full min-w-0" value={rarityFilter} onChange={(e) => setRarityFilter(e.target.value)}>
+            <option value="">All rarities</option>
+            {facets.rarities.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+          <select className="input w-full min-w-0" value={variantFilter} onChange={(e) => setVariantFilter(e.target.value)}>
+            <option value="">All finishes</option>
+            {facets.variants.map((v) => (
+              <option key={v} value={v}>{variantLabel(v)}</option>
+            ))}
+          </select>
+          <select className="input w-full min-w-0" value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
+            <option value="newest">Newest first</option>
+            <option value="name">Name A–Z</option>
+            <option value="price">Highest value</option>
+            <option value="set">By set</option>
+          </select>
+        </div>
       </div>
 
       <p className="mb-2 text-xs text-slate-400">{filtered.length} shown</p>
