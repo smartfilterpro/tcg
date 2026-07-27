@@ -590,11 +590,11 @@ export default function CollectionPage() {
 
       {selected && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/60 p-4"
           onClick={() => setSelected(null)}
         >
           <div
-            className="card-panel relative max-h-[90vh] w-full max-w-md overflow-y-auto p-5"
+            className="card-panel relative mx-auto my-6 w-full max-w-md p-5"
             onClick={(e) => e.stopPropagation()}
           >
             <button

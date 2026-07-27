@@ -61,6 +61,7 @@ interface OfferLine {
   label: string;
   qty: number;
   value: number | null;
+  image?: string | null;
 }
 
 interface TradeOffer {
@@ -252,7 +253,12 @@ export default function FriendsPage() {
   function tradeLines(side: TradeSide, items: CollectionItem[]) {
     return items
       .filter((it) => (side[it.id] ?? 0) > 0)
-      .map((it) => ({ label: itemLabel(it), qty: side[it.id], value: itemPrice(it) }));
+      .map((it) => ({
+        label: itemLabel(it),
+        qty: side[it.id],
+        value: itemPrice(it),
+        image: it.card.image_small,
+      }));
   }
 
   async function sendChat(text: string) {
@@ -412,30 +418,14 @@ export default function FriendsPage() {
                         </span>
                       </div>
                       <div className="mt-1 grid gap-2 text-xs sm:grid-cols-2">
-                        <div className="rounded bg-slate-50 p-2">
-                          <div className="font-bold uppercase tracking-wide text-slate-400">
-                            {o.direction === "incoming" ? "You get" : "You give"}
-                          </div>
-                          {o.give.map((l, i) => (
-                            <div key={i}>
-                              {l.qty}x {l.label}
-                              {l.value != null ? ` ~$${l.value.toFixed(2)}` : ""}
-                            </div>
-                          ))}
-                          {o.give.length === 0 && <div className="text-slate-400">nothing</div>}
-                        </div>
-                        <div className="rounded bg-slate-50 p-2">
-                          <div className="font-bold uppercase tracking-wide text-slate-400">
-                            {o.direction === "incoming" ? "You give" : "You get"}
-                          </div>
-                          {o.get.map((l, i) => (
-                            <div key={i}>
-                              {l.qty}x {l.label}
-                              {l.value != null ? ` ~$${l.value.toFixed(2)}` : ""}
-                            </div>
-                          ))}
-                          {o.get.length === 0 && <div className="text-slate-400">nothing</div>}
-                        </div>
+                        <OfferSide
+                          label={o.direction === "incoming" ? "You get" : "You give"}
+                          lines={o.give}
+                        />
+                        <OfferSide
+                          label={o.direction === "incoming" ? "You give" : "You get"}
+                          lines={o.get}
+                        />
                       </div>
                       {o.message && (
                         <p className="mt-1 text-xs italic text-slate-500">&ldquo;{o.message}&rdquo;</p>
@@ -706,14 +696,15 @@ export default function FriendsPage() {
         </div>
       )}
 
-      {/* Shared deck viewer */}
+      {/* Shared deck viewer — the OVERLAY scrolls (not the panel): inner
+          scroll areas inside fixed overlays are unreliable on iOS Safari */}
       {viewingDeck && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/60 p-4"
           onClick={() => setViewingDeck(null)}
         >
           <div
-            className="card-panel max-h-[90vh] w-full max-w-lg overflow-y-auto p-5"
+            className="card-panel mx-auto my-6 w-full max-w-lg p-5"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-2">
@@ -1307,6 +1298,36 @@ function AttachCards({
             </ul>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+function OfferSide({ label, lines }: { label: string; lines: OfferLine[] }) {
+  return (
+    <div className="rounded bg-slate-50 p-2">
+      <div className="font-bold uppercase tracking-wide text-slate-400">{label}</div>
+      {lines.length === 0 ? (
+        <div className="text-slate-400">nothing</div>
+      ) : (
+        <ul className="mt-1 space-y-1">
+          {lines.map((l, i) => (
+            <li key={i} className="flex items-center gap-1.5">
+              <div className="relative h-10 w-7 shrink-0 overflow-hidden rounded bg-slate-200">
+                {l.image && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={l.image} alt="" className="h-full w-full object-cover" loading="lazy" />
+                )}
+              </div>
+              <span className="min-w-0">
+                {l.qty}x {l.label}
+                {l.value != null ? (
+                  <span className="text-slate-400"> ~${l.value.toFixed(2)}</span>
+                ) : null}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

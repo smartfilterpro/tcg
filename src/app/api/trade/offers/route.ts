@@ -6,6 +6,7 @@ export interface OfferLine {
   label: string;
   qty: number;
   value: number | null;
+  image: string | null;
 }
 
 function sanitizeLines(input: unknown, cap = 30): OfferLine[] {
@@ -17,6 +18,7 @@ function sanitizeLines(input: unknown, cap = 30): OfferLine[] {
       label: String(l.label).slice(0, 300),
       qty: Math.min(99, l.qty as number),
       value: typeof l.value === "number" && Number.isFinite(l.value) ? l.value : null,
+      image: typeof l.image === "string" ? l.image.slice(0, 500) : null,
     }));
 }
 
