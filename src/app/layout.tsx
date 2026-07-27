@@ -27,7 +27,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                 <span className="inline-block h-5 w-5 rounded-full border-2 border-white bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
                 <span className="hidden sm:inline">PokéDeck</span>
               </Link>
-              <nav className="flex items-center gap-0.5 text-sm">
+              {/* Scrolls sideways on narrow screens instead of pushing items off-screen */}
+              <nav className="no-scrollbar flex min-w-0 items-center gap-0.5 overflow-x-auto text-sm">
                 <Link
                   href="/"
                   className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
@@ -64,7 +65,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                   href="/support"
                   aria-label="Help & support"
                   title="Help & support"
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-white/70 hover:bg-white/10"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white/70 hover:bg-white/10"
                 >
                   <svg
                     width="17"

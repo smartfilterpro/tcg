@@ -41,6 +41,15 @@ body {
   }
 }
 
+/* Hide scrollbars on scrollable strips (e.g. the mobile nav) */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Scanning animation: a beam that sweeps down the photo repeatedly */
 @keyframes scan-sweep {
   0% {
