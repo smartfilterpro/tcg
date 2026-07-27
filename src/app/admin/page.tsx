@@ -204,6 +204,22 @@ export default function AdminPage() {
 
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
 
+  // Sub-pages within the Admin tab — everything was getting too long for
+  // one scroll. The chosen tab lives in the URL hash so refreshes and
+  // shared links keep it.
+  type AdminTab = "analytics" | "members" | "cards" | "support";
+  const [tab, setTab] = useState<AdminTab>("analytics");
+  useEffect(() => {
+    const h = window.location.hash.replace("#", "");
+    if (["analytics", "members", "cards", "support"].includes(h)) setTab(h as AdminTab);
+  }, []);
+  function switchTab(t: AdminTab) {
+    setTab(t);
+    try {
+      window.history.replaceState(null, "", `#${t}`);
+    } catch {}
+  }
+
   useEffect(() => {
     load();
     loadReview();
@@ -435,12 +451,35 @@ export default function AdminPage() {
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Admin</h1>
-        <p className="text-sm text-slate-500">Invite friends and manage who has access.</p>
+        <p className="text-sm text-slate-500">Analytics, members, card images, and support.</p>
       </div>
 
       {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       {message && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-800">{message}</div>}
 
+      <div className="no-scrollbar flex gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1">
+        {(
+          [
+            ["analytics", "📊 Analytics"],
+            ["members", `👥 Members (${users.length})`],
+            ["cards", `🖼 Cards (${reviewRows.length})`],
+            ["support", `🎫 Support (${tickets.filter((t) => t.status !== "resolved").length})`],
+          ] as Array<[AdminTab, string]>
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+              tab === key ? "bg-white shadow-sm" : "text-slate-500 hover:text-slate-700"
+            }`}
+            onClick={() => switchTab(key)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "members" && (
+      <>
       <div className="card-panel p-4">
         <h2 className="mb-2 font-semibold">Invite a friend</h2>
         <p className="mb-2 text-xs text-slate-500">
@@ -558,8 +597,10 @@ export default function AdminPage() {
           ))}
         </ul>
       </div>
+      </>
+      )}
 
-      {analytics && (
+      {tab === "analytics" && analytics && (
         <div className="card-panel p-4">
           <h2 className="mb-2 font-semibold">📊 Analytics</h2>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -692,6 +733,7 @@ export default function AdminPage() {
         </div>
       )}
 
+      {tab === "support" && (
       <div className="card-panel p-4">
         <h2 className="mb-2 font-semibold">
           🎫 Support tickets ({tickets.filter((t) => t.status !== "resolved").length} active)
@@ -780,7 +822,9 @@ export default function AdminPage() {
           </>
         )}
       </div>
+      )}
 
+      {tab === "cards" && (
       <div className="card-panel p-4">
         <h2 className="mb-2 font-semibold">🖼 Card image review ({reviewRows.length})</h2>
         <p className="mb-2 text-xs text-slate-500">
@@ -963,7 +1007,9 @@ export default function AdminPage() {
           </ul>
         )}
       </div>
+      )}
 
+      {tab === "members" && (
       <div className="card-panel p-4">
         <h2 className="mb-2 font-semibold">Pending invites ({invites.length})</h2>
         {invites.length === 0 ? (
@@ -984,6 +1030,7 @@ export default function AdminPage() {
           </ul>
         )}
       </div>
+      )}
     </div>
   );
 }
