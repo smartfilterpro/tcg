@@ -12,6 +12,9 @@ import {
   makeBattleCode,
 } from "./lib";
 
+// First battle with a deck fetches card data + compiles trainer effects.
+export const maxDuration = 120;
+
 /** GET: my battles (host or guest), newest activity first. */
 export async function GET() {
   try {
@@ -91,7 +94,7 @@ export async function POST(req: Request) {
     const allowSharedDecks = allowShared === true || borrowed;
 
     const admin = createAdminClient();
-    const cards = await expandDeck(admin, deck, "h");
+    const cards = await expandDeck(admin, deck, "h", { userId: user.id });
     const myName = displayName(profile, user.email);
 
     const state: BattleState = {

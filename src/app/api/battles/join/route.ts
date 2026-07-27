@@ -5,6 +5,9 @@ import { requireUser } from "@/lib/auth";
 import { buildSide, pushLogRaw, type BattleState } from "@/lib/battle";
 import { battleErrorResponse, displayName, expandDeck, loadBattleDeck } from "../lib";
 
+// First battle with a deck fetches card data + compiles trainer effects.
+export const maxDuration = 120;
+
 /** POST: join a friend's waiting battle. Body: { code, deckId } */
 export async function POST(req: Request) {
   try {
@@ -50,7 +53,7 @@ export async function POST(req: Request) {
     }
     const { deck, borrowed } = loaded;
 
-    const cards = await expandDeck(admin, deck, "g");
+    const cards = await expandDeck(admin, deck, "g", { userId: user.id });
     const myName = displayName(profile, user.email);
     state.sides[user.id] = buildSide(cards);
     state.names[user.id] = myName;

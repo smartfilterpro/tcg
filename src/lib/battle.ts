@@ -44,6 +44,13 @@ export interface BattleCard {
   resist?: string;
   /** Retreat cost (energy to discard). */
   retreat?: number;
+  /** Large image, for the tap-to-read zoom view. */
+  big?: string | null;
+  /** Printed rules text (Trainer / Special Energy / rule-box lines). */
+  rules?: string[];
+  abilities?: Array<{ name: string; text: string }>;
+  /** AI-compiled effect ops, executed when a Trainer is played. */
+  fx?: { ops: Array<{ op: string; n?: number; note?: string }> } | null;
 }
 
 export const STATUS_CONDITIONS = ["poisoned", "burned", "asleep", "paralyzed", "confused"] as const;
@@ -107,6 +114,9 @@ export type BattleAction = { override?: boolean } & (
   | { type: "handToBench"; handIndex: number; benchIndex?: number; mode: "new" | "evolve" | "attach" }
   | { type: "handToDiscard"; handIndex: number }
   | { type: "playCard"; handIndex: number }
+  | { type: "deckTake"; uid: string }
+  | { type: "millDeck"; n: number }
+  | { type: "discardToHand"; discardIndex: number }
   | { type: "promote"; benchIndex: number }
   | { type: "attack"; attackIndex: number }
   | { type: "setStatus"; side: "me" | "opp"; target: "active" | number; status: StatusCondition; on: boolean }
@@ -475,7 +485,67 @@ export function applyAction(
       }
       takeHandCard(me, action.handIndex);
       me.discard.push(card);
-      return { text: `played ${card.name}${card.sup ? " (Supporter)" : ""}${effectNote}` };
+      let text = `played ${card.name}${card.sup ? " (Supporter)" : ""}${effectNote}`;
+      if (card.rules?.length) {
+        const cardText = card.rules.join(" ");
+        text += ` — “${cardText.length > 200 ? cardText.slice(0, 200) + "…" : cardText}”`;
+      }
+      // Execute the AI-compiled effect script: deterministic ops happen
+      // automatically, interactive/conditional ones become instructions.
+      for (const op of card.fx?.ops?.slice(0, 3) ?? []) {
+        const n = typeof op.n === "number" ? Math.max(1, Math.min(12, Math.round(op.n))) : null;
+        if (op.op === "draw" && n) {
+          const drawn = me.deck.splice(0, n);
+          me.hand.push(...drawn);
+          text += `. Drew ${drawn.length} card${drawn.length === 1 ? "" : "s"}`;
+        } else if (op.op === "millDeck" && n) {
+          const milled = me.deck.splice(0, n);
+          me.discard.push(...milled);
+          text += `. Discarded from deck: ${milled.map((c) => c.name).join(", ") || "nothing (deck empty)"}`;
+        } else if (op.op === "heal" && n) {
+          if (me.active) {
+            me.active.damage = Math.max(0, me.active.damage - n);
+            text += `. Healed ${n} from ${me.active.face.name} (now ${me.active.damage})`;
+          }
+        } else if (op.op === "shuffleHandIntoDeckDraw" && n) {
+          me.deck.push(...me.hand);
+          me.hand = [];
+          me.deck = shuffle(me.deck);
+          me.hand = me.deck.splice(0, n);
+          text += `. Shuffled their hand into their deck and drew ${me.hand.length}`;
+        } else if (op.op === "searchDeckToHand") {
+          text += `. → Now search your deck (deck pile → 🔍 Search)${op.note ? ` for: ${op.note}` : ""}`;
+        } else if (op.note) {
+          text += `. → ${op.note}`;
+        }
+      }
+      return { text };
+    }
+    case "deckTake": {
+      // The player already saw their (alphabetized) deck via the search
+      // view; take the chosen card, then shuffle — like a real deck search.
+      const idx = me.deck.findIndex((c) => c.uid === action.uid);
+      if (idx === -1) throw new BattleError("That card isn't in your deck.");
+      const [card] = me.deck.splice(idx, 1);
+      me.hand.push(card);
+      me.deck = shuffle(me.deck);
+      return { text: `searched their deck, took 1 card, and shuffled${effectNote}` };
+    }
+    case "millDeck": {
+      const n = Math.max(1, Math.min(5, Math.round(action.n)));
+      const milled = me.deck.splice(0, n);
+      if (milled.length === 0) throw new BattleError("Your deck is empty.");
+      me.discard.push(...milled);
+      return {
+        text: `discarded the top ${milled.length} card${milled.length === 1 ? "" : "s"} of their deck: ${milled.map((c) => c.name).join(", ")}`,
+      };
+    }
+    case "discardToHand": {
+      const card = me.discard[action.discardIndex];
+      if (!card) throw new BattleError("That card isn't in your discard pile.");
+      me.discard.splice(action.discardIndex, 1);
+      me.hand.push(card);
+      return { text: `returned ${card.name} from their discard pile to their hand${effectNote}` };
     }
     case "handToDiscard": {
       const card = takeHandCard(me, action.handIndex);

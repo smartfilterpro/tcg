@@ -3,7 +3,93 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { AuthError } from "@/lib/auth";
 import { BattleError, type BattleCard } from "@/lib/battle";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
+import { anthropic } from "@/lib/anthropic";
+import { logAiUsage } from "@/lib/usage";
 import type { Deck, Profile } from "@/lib/types";
+
+/** AI effect compiler: turns a Trainer card's printed text into a tiny op
+ *  script the referee can execute — ONCE per unique card, ever. The result
+ *  is cached in cards.battle_data.fx, so battles themselves never call AI. */
+const FX_MODEL = "claude-haiku-4-5-20251001";
+
+const FX_SCHEMA = {
+  type: "object",
+  properties: {
+    ops: {
+      type: "array",
+      maxItems: 3,
+      items: {
+        type: "object",
+        properties: {
+          op: {
+            type: "string",
+            enum: ["draw", "millDeck", "heal", "searchDeckToHand", "shuffleHandIntoDeckDraw", "manual"],
+          },
+          n: { type: ["integer", "null"] },
+          note: { type: ["string", "null"] },
+        },
+        required: ["op", "n", "note"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["ops"],
+  additionalProperties: false,
+} as const;
+
+const FX_SYSTEM = `You convert one Pokémon TCG Trainer card's printed text into a tiny JSON
+effect script a battle app executes for the player who played the card.
+
+Allowed ops:
+- draw {n}: draw n cards
+- millDeck {n}: discard the top n cards of YOUR OWN deck
+- heal {n}: heal n damage from your Active Pokémon
+- searchDeckToHand {n, note}: search your deck for card(s) — interactive, the
+  app opens a deck-search picker; note says what to search for
+- shuffleHandIntoDeckDraw {n}: shuffle your hand into your deck, draw n
+- manual {note}: anything else — coin flips, effects on the opponent,
+  switching, damage, conditions, "you may" choices. Short imperative note.
+
+Rules: at most 3 ops, in card order. Only use a concrete op when the card
+text states that effect unconditionally for the player. Anything conditional
+("flip a coin", "if", "you may") or targeting the opponent → manual. When
+unsure → manual.`;
+
+async function compileTrainerFx(
+  cardName: string,
+  rules: string[],
+  userId: string | null,
+  admin: SupabaseClient
+): Promise<CardBattleData["fx"]> {
+  try {
+    const client = anthropic();
+    const response = await client.messages.create({
+      model: FX_MODEL,
+      max_tokens: 500,
+      system: FX_SYSTEM,
+      output_config: {
+        format: { type: "json_schema", schema: FX_SCHEMA as unknown as Record<string, unknown> },
+      },
+      messages: [
+        { role: "user", content: `Card: "${cardName}"\nText: ${rules.join(" / ")}` },
+      ],
+    });
+    if (userId) await logAiUsage(admin, userId, "card_fx", FX_MODEL, response.usage);
+    const text = response.content.find((b) => b.type === "text");
+    if (!text || text.type !== "text") return null;
+    const parsed = JSON.parse(text.text) as { ops?: Array<{ op: string; n?: number | null; note?: string | null }> };
+    if (!Array.isArray(parsed.ops)) return null;
+    return {
+      ops: parsed.ops.slice(0, 3).map((o) => ({
+        op: String(o.op),
+        ...(typeof o.n === "number" ? { n: o.n } : {}),
+        ...(o.note ? { note: String(o.note).slice(0, 160) } : {}),
+      })),
+    };
+  } catch {
+    return null; // no fx this time — retried on a future battle
+  }
+}
 
 export const MIGRATION_HINT =
   "Battles need a one-time database update — run supabase/migrations/017_battles.sql in the Supabase SQL Editor.";
@@ -26,7 +112,8 @@ export function displayName(profile: Profile | null, fallbackEmail?: string | nu
 export async function expandDeck(
   admin: SupabaseClient,
   deck: Deck,
-  uidPrefix: string
+  uidPrefix: string,
+  opts?: { userId?: string }
 ): Promise<BattleCard[]> {
   const entries = (deck.cards ?? []).filter((e) => e?.name && (e.quantity ?? 0) > 0);
   if (entries.length === 0) throw new BattleError("That deck has no cards in it.");
@@ -34,6 +121,7 @@ export async function expandDeck(
   interface CardMeta {
     id: string | null;
     image: string | null;
+    big: string | null;
     cat: "pokemon" | "trainer" | "energy" | null;
     basic: boolean | null;
     sup: boolean;
@@ -49,6 +137,7 @@ export async function expandDeck(
     return {
       id: (row.id as string | null) ?? null,
       image: (row.image_small as string | null) ?? null,
+      big: (row.image_large as string | null) ?? null,
       cat: supertype.includes("pok")
         ? "pokemon"
         : supertype.includes("trainer")
@@ -105,19 +194,19 @@ export async function expandDeck(
     metaByName.set(name, meta);
   }
 
-  // Backfill combat stats (attacks/weakness/retreat) for Pokémon that don't
-  // have them cached yet — one API fetch per card, ever. Custom and TCGdex
-  // cards are skipped (no pokemontcg.io id); they fall back to manual damage.
+  // Backfill card knowledge (attacks/weakness/retreat for Pokémon, printed
+  // rules text for Trainers & Special Energy) — one API fetch per card,
+  // ever. Custom and TCGdex cards are skipped (no pokemontcg.io id).
   const needsBd = [...metaById.values()].filter(
     (m) =>
-      m.cat === "pokemon" &&
       !m.bd &&
+      m.cat !== null &&
       m.id &&
       !m.id.startsWith("custom-") &&
       !m.id.startsWith("tcgdex-")
   );
   const BD_BATCH = 5;
-  for (let i = 0; i < Math.min(needsBd.length, 20); i += BD_BATCH) {
+  for (let i = 0; i < Math.min(needsBd.length, 25); i += BD_BATCH) {
     const batch = needsBd.slice(i, i + BD_BATCH);
     await Promise.all(
       batch.map(async (m) => {
@@ -136,6 +225,27 @@ export async function expandDeck(
     );
   }
 
+  // AI effect compile for Trainers that have text but no fx yet — Haiku,
+  // once per unique card, cached forever. A failed compile just retries on
+  // a future battle; the card stays fully playable manually either way.
+  const needsFx = [...metaById.values()]
+    .filter((m) => m.cat === "trainer" && m.bd?.rules?.length && m.bd.fx === undefined)
+    .slice(0, 8);
+  const FX_BATCH = 4;
+  for (let i = 0; i < needsFx.length; i += FX_BATCH) {
+    await Promise.all(
+      needsFx.slice(i, i + FX_BATCH).map(async (m) => {
+        const entry = entries.find((e) => e.card_id === m.id);
+        const fx = await compileTrainerFx(entry?.name ?? "Trainer card", m.bd!.rules!, opts?.userId ?? null, admin);
+        if (!fx) return;
+        m.bd = { ...m.bd!, fx };
+        if (m.hasBdColumn) {
+          await admin.from("cards").update({ battle_data: m.bd }).eq("id", m.id!).then(() => {});
+        }
+      })
+    );
+  }
+
   const cards: BattleCard[] = [];
   entries.forEach((entry, i) => {
     const meta = (entry.card_id ? metaById.get(entry.card_id) : null) ?? metaByName.get(entry.name);
@@ -145,6 +255,7 @@ export async function expandDeck(
         uid: `${uidPrefix}${i}-${c}`,
         name: entry.name,
         image: meta?.image ?? null,
+        big: meta?.big ?? undefined,
         // The deck entry's own category is the fallback when the database
         // doesn't know the card (custom/manual entries).
         cat: meta?.cat ?? entry.category ?? null,
@@ -156,6 +267,9 @@ export async function expandDeck(
         weak: meta?.bd?.weak?.type ?? undefined,
         resist: meta?.bd?.resist?.type ?? undefined,
         retreat: meta?.bd?.retreat ?? undefined,
+        rules: meta?.bd?.rules?.length ? meta.bd.rules : undefined,
+        abilities: meta?.bd?.abilities?.length ? meta.bd.abilities : undefined,
+        fx: meta?.bd?.fx ?? undefined,
       });
     }
   });
