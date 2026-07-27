@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
 import { searchCards } from "@/lib/pokemontcg";
+import { checkAiBudget } from "@/lib/usage";
 import type { CardSummary, CardSummaryRow, DeckCardEntry } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -147,9 +148,14 @@ what to search for first, and how the deck wants to trade prizes.`;
 /** POST: start a deck build. Returns { jobId } immediately. */
 export async function POST(req: Request) {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
     const { prompt } = (await req.json()) as { prompt?: string };
     const supabase = await createClient();
+
+    const budget = await checkAiBudget(supabase, user, profile);
+    if (!budget.ok) {
+      return NextResponse.json({ error: budget.message }, { status: 429 });
+    }
 
     // Gather everything the job needs BEFORE returning (request-scoped
     // resources like cookies aren't reliable in the detached task).

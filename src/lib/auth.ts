@@ -23,6 +23,9 @@ export async function getUserAndProfile(): Promise<{
 export async function requireUser() {
   const result = await getUserAndProfile();
   if (!result) throw new AuthError("Not authenticated");
+  if (result.profile?.suspended === true) {
+    throw new AuthError("Your account is suspended — contact the admin.", 403);
+  }
   return result;
 }
 

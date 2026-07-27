@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
-import { logAiUsage } from "@/lib/usage";
+import { logAiUsage, checkAiBudget } from "@/lib/usage";
 import { createClient } from "@/lib/supabase/server";
 import type { DeckCardEntry } from "@/lib/types";
 
@@ -29,7 +29,7 @@ be newer to the game unless the question suggests otherwise.`;
 
 export async function POST(req: Request) {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
     const { deck, question } = (await req.json()) as {
       deck?: { name?: string; strategy?: string | null; cards?: DeckCardEntry[] };
       question?: string;
@@ -39,6 +39,12 @@ export async function POST(req: Request) {
     }
     if (!deck?.cards || deck.cards.length === 0) {
       return NextResponse.json({ error: "No deck provided." }, { status: 400 });
+    }
+
+    const supabase = await createClient();
+    const budget = await checkAiBudget(supabase, user, profile);
+    if (!budget.ok) {
+      return NextResponse.json({ error: budget.message }, { status: 429 });
     }
 
     const client = anthropic();
@@ -60,7 +66,7 @@ export async function POST(req: Request) {
     });
     const response = await stream.finalMessage();
 
-    await logAiUsage(await createClient(), user.id, "coach", MODEL, response.usage);
+    await logAiUsage(supabase, user.id, "coach", MODEL, response.usage);
 
     if (response.stop_reason === "refusal") {
       return NextResponse.json(

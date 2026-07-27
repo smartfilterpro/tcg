@@ -55,6 +55,7 @@ interface UserUsage {
   outputTokens: number;
   costUsd: number;
   costUsd30d: number;
+  costUsdMonth: number;
 }
 
 function formatTokens(n: number): string {
@@ -193,6 +194,49 @@ export default function AdminPage() {
     const res = await fetch(`/api/admin/users/${id}`, { method: "DELETE" });
     const json = await res.json();
     if (!res.ok) setError(json.error);
+    load();
+  }
+
+  async function toggleSuspend(u: Profile) {
+    const next = !(u.suspended === true);
+    if (
+      next &&
+      !confirm(
+        `Suspend ${u.display_name || u.email}? They won't be able to sign in or use the app until you unsuspend them. Their collection is kept.`
+      )
+    )
+      return;
+    const res = await fetch(`/api/admin/users/${u.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ suspended: next }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else setMessage(`${u.display_name || u.email} ${next ? "suspended" : "unsuspended"}.`);
+    load();
+  }
+
+  async function setAiBudget(u: Profile) {
+    const current = u.ai_budget_usd != null ? Number(u.ai_budget_usd) : 10;
+    const answer = prompt(
+      `Monthly AI limit for ${u.display_name || u.email} in USD.\nThey've spent ~$${(usage[u.id]?.costUsdMonth ?? 0).toFixed(2)} this month. Set 0 to block AI features entirely.`,
+      String(current)
+    );
+    if (answer == null) return;
+    const value = Number(answer);
+    if (!Number.isFinite(value) || value < 0) {
+      setError("Enter a number, e.g. 10");
+      return;
+    }
+    const res = await fetch(`/api/admin/users/${u.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ aiBudgetUsd: value }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else setMessage(`AI limit for ${u.display_name || u.email} set to $${value}/month.`);
     load();
   }
 
@@ -343,15 +387,34 @@ export default function AdminPage() {
                       {formatTokens(usage[u.id].inputTokens + usage[u.id].outputTokens)} tokens ·{" "}
                       <span className="font-semibold">
                         ~${usage[u.id].costUsd.toFixed(2)} all-time
-                      </span>{" "}
-                      · ~${usage[u.id].costUsd30d.toFixed(2)} last 30d
+                      </span>
                     </>
                   ) : (
                     "🤖 No AI usage yet"
+                  )}{" "}
+                  ·{" "}
+                  {u.role === "admin" ? (
+                    <span className="text-slate-400">no monthly cap</span>
+                  ) : (
+                    <span
+                      className={
+                        (usage[u.id]?.costUsdMonth ?? 0) >=
+                        (u.ai_budget_usd != null ? Number(u.ai_budget_usd) : 10)
+                          ? "font-semibold text-red-600"
+                          : ""
+                      }
+                    >
+                      ~${(usage[u.id]?.costUsdMonth ?? 0).toFixed(2)} of $
+                      {(u.ai_budget_usd != null ? Number(u.ai_budget_usd) : 10).toFixed(0)} this
+                      month
+                    </span>
                   )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {u.suspended === true && (
+                  <span className="chip bg-red-100 text-red-700">suspended</span>
+                )}
                 <span
                   className={`chip ${
                     u.role === "admin" ? "bg-poke-gold/30 text-yellow-900" : "bg-slate-100 text-slate-600"
@@ -359,6 +422,14 @@ export default function AdminPage() {
                 >
                   {u.role}
                 </span>
+                {u.role !== "admin" && (
+                  <button
+                    className="btn text-xs text-slate-500 hover:bg-slate-100"
+                    onClick={() => setAiBudget(u)}
+                  >
+                    AI limit
+                  </button>
+                )}
                 <button
                   className="btn text-xs text-slate-500 hover:bg-slate-100"
                   onClick={() => resetPassword(u.id, u.email)}
@@ -366,12 +437,24 @@ export default function AdminPage() {
                   Reset password
                 </button>
                 {u.role !== "admin" && (
-                  <button
-                    className="btn text-xs text-red-600 hover:bg-red-50"
-                    onClick={() => removeUser(u.id, u.email)}
-                  >
-                    Remove
-                  </button>
+                  <>
+                    <button
+                      className={`btn text-xs ${
+                        u.suspended === true
+                          ? "text-green-700 hover:bg-green-50"
+                          : "text-yellow-700 hover:bg-yellow-50"
+                      }`}
+                      onClick={() => toggleSuspend(u)}
+                    >
+                      {u.suspended === true ? "Unsuspend" : "Suspend"}
+                    </button>
+                    <button
+                      className="btn text-xs text-red-600 hover:bg-red-50"
+                      onClick={() => removeUser(u.id, u.email)}
+                    >
+                      Remove
+                    </button>
+                  </>
                 )}
               </div>
             </li>

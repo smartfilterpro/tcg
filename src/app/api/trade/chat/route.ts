@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
-import { logAiUsage } from "@/lib/usage";
+import { logAiUsage, checkAiBudget } from "@/lib/usage";
 import { createClient } from "@/lib/supabase/server";
 import { itemPrice, variantLabel, type CollectionItem } from "@/lib/types";
 
@@ -71,7 +71,7 @@ function formatTrade(side: string, lines: TradeLine[]): string {
 
 export async function POST(req: Request) {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
     const body = (await req.json()) as {
       friendId?: string;
       messages?: Array<{ role: "user" | "assistant"; content: string }>;
@@ -90,6 +90,11 @@ export async function POST(req: Request) {
     }
 
     const supabase = await createClient();
+
+    const budget = await checkAiBudget(supabase, user, profile);
+    if (!budget.ok) {
+      return NextResponse.json({ error: budget.message }, { status: 429 });
+    }
 
     // The friend must be sharing; my own items are always readable.
     const { data: friend } = await supabase

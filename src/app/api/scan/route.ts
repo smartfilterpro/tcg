@@ -3,7 +3,7 @@ import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { matchDetectedCard, numberKey, cleanCardName } from "@/lib/pokemontcg";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
-import { logAiUsage } from "@/lib/usage";
+import { logAiUsage, checkAiBudget } from "@/lib/usage";
 import { createClient } from "@/lib/supabase/server";
 import { rowToSummary, type CardSummaryRow } from "@/lib/types";
 import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
@@ -107,7 +107,7 @@ async function matchFromLocalDb(
 
 export async function POST(req: Request) {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
     const { image, mediaType } = (await req.json()) as {
       image?: string;
       mediaType?: string;
@@ -117,6 +117,10 @@ export async function POST(req: Request) {
     }
 
     const supabase = await createClient();
+    const budget = await checkAiBudget(supabase, user, profile);
+    if (!budget.ok) {
+      return NextResponse.json({ error: budget.message }, { status: 429 });
+    }
     const client = anthropic();
     // Streamed with a generous cap: thinking + per-card JSON both draw from
     // max_tokens, and big multi-card spreads need the headroom.
