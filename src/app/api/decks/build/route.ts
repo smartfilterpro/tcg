@@ -161,7 +161,8 @@ what to search for first, and how the deck wants to trade prizes.`;
 export async function POST(req: Request) {
   try {
     const { user, profile } = await requireUser();
-    const { prompt } = (await req.json()) as { prompt?: string };
+    const { prompt, format } = (await req.json()) as { prompt?: string; format?: string };
+    const fmt = format === "standard" || format === "expanded" ? format : null;
     const supabase = await createClient();
 
     const budget = await checkAiBudget(supabase, user, profile);
@@ -260,8 +261,31 @@ export async function POST(req: Request) {
           );
         }
 
+        // Format filter: remove cards the cached legality data says are out.
+        // Cards with unknown legality stay in — the prompt tells the model
+        // to exclude any it knows are rotated.
+        let pool = collection;
+        let excluded = 0;
+        if (fmt) {
+          pool = collection.filter((c) => {
+            const legal = c.bd?.legal;
+            if (!legal) return true;
+            return fmt === "standard" ? legal.std !== false : legal.exp !== false;
+          });
+          excluded = collection.length - pool.length;
+          if (pool.length === 0) {
+            jobs.set(jobId, {
+              userId: user.id,
+              status: "error",
+              error: `None of your cards have ${fmt === "standard" ? "Standard" : "Expanded"}-legal data — try "Anything goes".`,
+              created: Date.now(),
+            });
+            return;
+          }
+        }
+
         const trim = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "…" : s);
-        const leanCollection = collection.map(({ bd, ...c }) => {
+        const leanCollection = pool.map(({ bd, ...c }) => {
           const text = bd?.rules?.length
             ? trim(bd.rules.join(" "), 180)
             : bd?.abilities?.length
@@ -279,6 +303,9 @@ export async function POST(req: Request) {
         });
         const userContent = [
           styleNotes ? `PLAYER'S PLAY STYLE PROFILE:\n${styleNotes}` : null,
+          fmt
+            ? `FORMAT: ${fmt === "standard" ? "Standard" : "Expanded"} — ${excluded} ineligible cards were already removed from the list below. Entries without legality data remain: exclude any YOU know are not legal in this format, and only suggest format-legal upgrade cards.`
+            : null,
           `PLAYER'S COLLECTION (JSON):\n${JSON.stringify(leanCollection)}`,
           `REQUEST: ${prompt?.trim() || "Build me the best deck you can from my collection."}`,
         ]

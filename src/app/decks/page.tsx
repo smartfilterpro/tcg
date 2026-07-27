@@ -315,6 +315,8 @@ function ManualBuilder({ onSaved }: { onSaved: (deck: Deck) => void }) {
             )}
           </div>
 
+          {total >= 7 && <HandSimulator getCards={toEntries} />}
+
           {error && <p className="text-sm text-red-600">{error}</p>}
 
           <div className="flex gap-2">
@@ -489,6 +491,7 @@ export default function DecksPage() {
   const [styleNotes, setStyleNotes] = useState("");
   const [styleSaved, setStyleSaved] = useState(false);
   const [prompt, setPrompt] = useState("");
+  const [format, setFormat] = useState("any");
   const [building, setBuilding] = useState(false);
   const [buildStep, setBuildStep] = useState(0);
   const [built, setBuilt] = useState<BuiltDeck | null>(null);
@@ -628,7 +631,7 @@ export default function DecksPage() {
       const res = await fetch("/api/decks/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, format }),
       });
       const start = await safeJson(res);
       if (!res.ok) throw new Error((start.error as string) || "Deck build failed");
@@ -736,7 +739,7 @@ export default function DecksPage() {
           {AI_NAME} looks at your whole collection and builds a legal 60-card deck. Basic energy
           is assumed — no need to scan energy cards. Can take a minute.
         </p>
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row">
           <input
             className="input"
             placeholder='e.g. "an aggressive fire deck" or leave blank for the best deck possible'
@@ -744,9 +747,21 @@ export default function DecksPage() {
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !building && build()}
           />
-          <button className="btn-primary shrink-0" onClick={build} disabled={building}>
-            {building ? "Building…" : "Build deck"}
-          </button>
+          <div className="flex shrink-0 gap-2">
+            <select
+              className="input w-auto text-sm"
+              title="Tournament format — filters which of your cards are allowed"
+              value={format}
+              onChange={(e) => setFormat(e.target.value)}
+            >
+              <option value="any">🃏 Anything goes</option>
+              <option value="standard">🏆 Standard</option>
+              <option value="expanded">📚 Expanded</option>
+            </select>
+            <button className="btn-primary shrink-0" onClick={build} disabled={building}>
+              {building ? "Building…" : "Build deck"}
+            </button>
+          </div>
         </div>
         {building && (
           <div className="mt-2 flex items-center gap-2">
@@ -865,6 +880,7 @@ export default function DecksPage() {
             {(viewing.suggestions?.length ?? 0) > 0 && (
               <UpgradeList suggestions={viewing.suggestions!} />
             )}
+            <HandSimulator getCards={() => viewing.cards ?? []} />
             <CoachBox
               deck={{ name: viewing.name, strategy: viewing.strategy, cards: viewing.cards ?? [] }}
             />
@@ -1002,6 +1018,100 @@ function DeckDirectShares({ deckId }: { deckId: string }) {
             </option>
           ))}
         </select>
+      )}
+    </div>
+  );
+}
+
+/** 🎲 Deal thousands of simulated opening hands from a deck list — instant,
+ *  free, and brutally honest about how the deck actually starts. */
+function HandSimulator({ getCards }: { getCards: () => DeckCardEntry[] }) {
+  interface SimResult {
+    trials: number;
+    mulliganPct: number;
+    withDrawPct: number;
+    withEnergyPct: number;
+    dreamStartPct: number;
+    issues: string[];
+  }
+  const [result, setResult] = useState<SimResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/decks/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cards: getCards() }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Simulation failed");
+      setResult(json);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Simulation failed");
+    }
+    setBusy(false);
+  }
+
+  const pct = (n: number) => `${n.toFixed(0)}%`;
+  const grade = (n: number, goodBelow: number, badAbove: number, invert = false) => {
+    const v = invert ? 100 - n : n;
+    return v <= goodBelow ? "text-green-700" : v >= badAbove ? "text-red-600" : "text-amber-700";
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold">🎲 Opening hands</span>
+        <button className="btn-secondary text-xs" disabled={busy} onClick={run}>
+          {busy ? "Dealing…" : result ? "Deal again" : "Test 2,000 opening hands"}
+        </button>
+      </div>
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      {result && (
+        <>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="rounded bg-slate-50 p-2 text-center">
+              <div className={`text-lg font-bold ${grade(result.mulliganPct, 12, 20)}`}>
+                {pct(result.mulliganPct)}
+              </div>
+              <div className="text-[10px] text-slate-500">mulligans</div>
+            </div>
+            <div className="rounded bg-slate-50 p-2 text-center">
+              <div className={`text-lg font-bold ${grade(result.withDrawPct, 40, 65, true)}`}>
+                {pct(result.withDrawPct)}
+              </div>
+              <div className="text-[10px] text-slate-500">start with draw/search</div>
+            </div>
+            <div className="rounded bg-slate-50 p-2 text-center">
+              <div className={`text-lg font-bold ${grade(result.withEnergyPct, 30, 60, true)}`}>
+                {pct(result.withEnergyPct)}
+              </div>
+              <div className="text-[10px] text-slate-500">start with energy</div>
+            </div>
+            <div className="rounded bg-slate-50 p-2 text-center">
+              <div className={`text-lg font-bold ${grade(result.dreamStartPct, 55, 75, true)}`}>
+                {pct(result.dreamStartPct)}
+              </div>
+              <div className="text-[10px] text-slate-500">dream start (all three)</div>
+            </div>
+          </div>
+          {result.issues.length > 0 && (
+            <ul className="mt-2 space-y-0.5 text-xs text-amber-800">
+              {result.issues.map((issue, i) => (
+                <li key={i}>⚠️ {issue}</li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-1 text-[10px] text-slate-400">
+            {result.trials.toLocaleString()} simulated hands — swap cards and deal again to
+            compare.
+          </p>
+        </>
       )}
     </div>
   );

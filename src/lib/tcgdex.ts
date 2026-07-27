@@ -25,6 +25,7 @@ interface TcgdexCard extends TcgdexBrief {
   retreat?: number;
   attacks?: Array<{ cost?: string[]; name: string; effect?: string; damage?: number | string }>;
   abilities?: Array<{ type?: string; name: string; effect?: string }>;
+  legal?: { standard?: boolean; expanded?: boolean };
   weaknesses?: Array<{ type: string; value?: string }>;
   resistances?: Array<{ type: string; value?: string }>;
   set?: {
@@ -143,6 +144,7 @@ export async function getTcgdexBattleDataById(
     stage: card.stage ? card.stage.replace(/^Stage(\d)$/, "Stage $1") : null,
     hp: Number.isFinite(hpNum) && hpNum > 0 ? hpNum : null,
     trainerType: card.trainerType ?? null,
+    ...(card.legal ? { legal: { std: card.legal.standard === true, exp: card.legal.expanded === true } } : {}),
   };
 }
 
