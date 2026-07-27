@@ -47,6 +47,13 @@ interface Analytics {
     updated: number;
     unpriced: number;
     suspicious: Array<{ id: string; name: string; old: number; next: number }>;
+    pt?: {
+      matched: number;
+      unmatched: number;
+      priced: number;
+      requests: number;
+      error?: string;
+    } | null;
   } | null;
 }
 
@@ -989,6 +996,13 @@ function PriceRefreshPanel({
     updated: number;
     unpriced: number;
     suspicious: Array<{ id: string; name: string; old: number; next: number }>;
+    pt?: {
+      matched: number;
+      unmatched: number;
+      priced: number;
+      requests: number;
+      error?: string;
+    } | null;
   } | null;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1031,6 +1045,14 @@ function PriceRefreshPanel({
         </button>
       </div>
       {error && <p className="text-xs text-red-600">{error}</p>}
+      {current?.pt && (
+        <p className="text-xs text-slate-500">
+          PokeTrace: {current.pt.priced} priced, {current.pt.matched} newly matched
+          {current.pt.unmatched > 0 && `, ${current.pt.unmatched} no match`} (
+          {current.pt.requests} of the daily 250 requests used
+          {current.pt.error ? ` — stopped early: ${current.pt.error}` : ""}).
+        </p>
+      )}
       {(current?.suspicious?.length ?? 0) > 0 && (
         <div className="rounded-lg bg-yellow-50 p-2 text-xs text-yellow-800">
           <b>Held for review (price jumped &gt;5×, not applied):</b>{" "}

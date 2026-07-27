@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getCardById } from "@/lib/pokemontcg";
 import { getTcgdexPriceById } from "@/lib/tcgdex";
+import { poketraceEnabled, searchPoketraceCard, getPoketracePrices } from "@/lib/poketrace";
 
 /** Background price refresher.
  *
@@ -21,6 +22,14 @@ export interface PriceRefreshSummary {
   updated: number;
   unpriced: number;
   suspicious: Array<{ id: string; name: string; old: number; next: number }>;
+  /** PokeTrace source stats (present only when POKETRACE_API_KEY is set). */
+  pt?: {
+    matched: number;
+    unmatched: number;
+    priced: number;
+    requests: number;
+    error?: string;
+  } | null;
 }
 
 const STATE_KEY = "price_refresh";
@@ -43,13 +52,16 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
     .limit(20000);
   if (ownedErr) throw ownedErr;
   const ownedIds = [...new Set((owned ?? []).map((r) => r.card_id as string))].filter(
-    (id) => !id.startsWith("custom-") // custom entries have no price source
+    // Custom entries have no API price source — unless PokeTrace can try a
+    // name+number search for them.
+    (id) => !id.startsWith("custom-") || poketraceEnabled()
   );
   if (ownedIds.length === 0) return summary;
 
+  // select("*") — poketrace_id/graded_prices only exist after migration 023
   const { data: cards, error: cardsErr } = await admin
     .from("cards")
-    .select("id, name, market_price, price_updated_at")
+    .select("*")
     .in("id", ownedIds);
   if (cardsErr) throw cardsErr;
 
@@ -58,20 +70,75 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
     .sort((a, b) => (a.price_updated_at ?? "").localeCompare(b.price_updated_at ?? ""))
     .slice(0, limit);
 
+  // PokeTrace usage budget per run: with the free plan's 1-req/2s pacing,
+  // ~80 requests ≈ 3 minutes — fits the admin route's time limit and stays
+  // far inside the 250/day cap even with a manual run on top of the nightly.
+  const PT_BUDGET = 80;
+  const pt = poketraceEnabled()
+    ? { matched: 0, unmatched: 0, priced: 0, requests: 0, error: undefined as string | undefined }
+    : null;
+
   const BATCH = 4;
   for (let i = 0; i < queue.length; i += BATCH) {
     await Promise.all(
       queue.slice(i, i + BATCH).map(async (card) => {
         try {
+          // PokeTrace first (when configured): id cached on the card after
+          // the one-time search, so steady state is one request per card.
+          let ptMarket: number | null = null;
+          if (pt && !pt.error && pt.requests < PT_BUDGET) {
+            try {
+              const hasIdColumn = "poketrace_id" in card;
+              let pid = (card.poketrace_id as string | null | undefined) ?? null;
+              if (!pid) {
+                const found = await searchPoketraceCard(
+                  card.name as string,
+                  (card.number as string | null) ?? null,
+                  (card.set_name as string | null) ?? null
+                );
+                pt.requests += found.requests;
+                pid = found.id;
+                if (pid) pt.matched += 1;
+                else pt.unmatched += 1;
+                if (hasIdColumn) {
+                  await admin
+                    .from("cards")
+                    .update({ poketrace_id: pid ?? "unmatched" })
+                    .eq("id", card.id)
+                    .then(() => {});
+                }
+              }
+              if (pid && pid !== "unmatched") {
+                pt.requests += 1;
+                const prices = await getPoketracePrices(pid);
+                if (prices?.market != null) {
+                  ptMarket = prices.market;
+                  pt.priced += 1;
+                }
+                if (prices?.graded && "graded_prices" in card) {
+                  await admin
+                    .from("cards")
+                    .update({ graded_prices: prices.graded })
+                    .eq("id", card.id)
+                    .then(() => {});
+                }
+              }
+            } catch (e) {
+              pt.error ??= e instanceof Error ? e.message : "PokeTrace error";
+            }
+          }
+
           let nextMarket: number | null = null;
           let nextPrices: Record<string, number | null> | null = null;
           if ((card.id as string).startsWith("tcgdex-")) {
             nextMarket = await getTcgdexPriceById(card.id as string);
-          } else {
+          } else if (!(card.id as string).startsWith("custom-")) {
             const fresh = await getCardById(card.id as string);
             nextMarket = fresh?.marketPrice ?? null;
             nextPrices = fresh?.prices ?? null;
           }
+          // PokeTrace's daily-updated market number wins when it exists.
+          if (ptMarket != null) nextMarket = ptMarket;
           summary.checked += 1;
 
           const old = (card.market_price as number | null) ?? null;
@@ -113,6 +180,8 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
     );
   }
 
+  if (pt) summary.pt = pt;
+
   // Remember the run for the admin dashboard (best-effort — app_state exists
   // after migration 022).
   await admin
@@ -143,6 +212,7 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
       updated: value.updated ?? 0,
       unpriced: value.unpriced ?? 0,
       suspicious: Array.isArray(value.suspicious) ? value.suspicious : [],
+      pt: value.pt ?? null,
     };
   } catch {
     return null;
