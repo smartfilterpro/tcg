@@ -93,6 +93,7 @@ export default function CollectionPage() {
   const [selected, setSelected] = useState<CollectionItem | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [changingCard, setChangingCard] = useState(false);
   const [addVariant, setAddVariant] = useState("auto");
   const [variantFilter, setVariantFilter] = useState("");
   const [toast, setToast] = useState<string | null>(null);
@@ -271,6 +272,24 @@ export default function CollectionPage() {
       if (quantity === 0) setSelected(null);
       else setSelected((s) => (s?.id === item.id ? { ...s, quantity } : s));
     }
+  }
+
+  async function changeCard(item: CollectionItem, card: CardSummary) {
+    setError(null);
+    const res = await fetch(`/api/collection/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ card }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setError(json.error || "Couldn't change the card");
+      setChangingCard(false);
+      return;
+    }
+    setChangingCard(false);
+    setSelected(null);
+    await load(); // re-fetch so the row shows the new card's data
   }
 
   async function addCard(card: CardSummary) {
@@ -710,15 +729,33 @@ export default function CollectionPage() {
                   +
                 </button>
               </div>
-              <button
-                className="btn text-sm text-red-600 hover:bg-red-50"
-                onClick={() => updateQuantity(selected, 0)}
-              >
-                Remove all
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  className="btn text-sm text-slate-600 hover:bg-slate-100"
+                  title="Matched to the wrong card? Search and swap the identification — quantity and notes are kept."
+                  onClick={() => setChangingCard(true)}
+                >
+                  🔁 Change card
+                </button>
+                <button
+                  className="btn text-sm text-red-600 hover:bg-red-50"
+                  onClick={() => updateQuantity(selected, 0)}
+                >
+                  Remove all
+                </button>
+              </div>
             </div>
           </div>
         </div>
+      )}
+
+      {selected && changingCard && (
+        <CardPickerModal
+          initialQuery={`${selected.card.name} ${selected.card.number}`}
+          candidates={[]}
+          onClose={() => setChangingCard(false)}
+          onPick={(card) => changeCard(selected, card)}
+        />
       )}
     </div>
   );
