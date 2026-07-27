@@ -408,7 +408,16 @@ export default function BattleBoardPage() {
       <div className="card-panel space-y-2 p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="text-sm font-semibold">{data.myName ?? "You"}</div>
-          {!finished && view.myTurn && <span className="chip bg-green-50 text-green-700">your turn</span>}
+          <span className="flex items-center gap-1">
+            {!finished && view.myTurn && view.rules && view.phase === "play" && (
+              <span
+                className={`chip ${view.energyUsed ? "bg-slate-100 text-slate-400" : "bg-yellow-50 text-yellow-800"}`}
+              >
+                {view.energyUsed ? "⚡ energy used" : "⚡ energy available"}
+              </span>
+            )}
+            {!finished && view.myTurn && <span className="chip bg-green-50 text-green-700">your turn</span>}
+          </span>
         </div>
         {!finished && view.rules && view.phase === "setup" && (
           <div className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
