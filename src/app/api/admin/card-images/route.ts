@@ -21,12 +21,84 @@ export interface ReviewRow {
   candidates: ReviewCandidate[];
 }
 
+/** Build ReviewRows from card records + their candidate rows. */
+async function toRows(
+  admin: ReturnType<typeof createAdminClient>,
+  cards: Array<Record<string, unknown>>,
+  candidates: Array<Record<string, unknown>>
+): Promise<ReviewRow[]> {
+  const uploaderIds = [
+    ...new Set(candidates.map((c) => c.uploaded_by as string | null).filter(Boolean)),
+  ] as string[];
+  let emailById = new Map<string, string>();
+  if (uploaderIds.length > 0) {
+    const { data: profiles } = await admin
+      .from("profiles")
+      .select("id, email")
+      .in("id", uploaderIds);
+    emailById = new Map((profiles ?? []).map((p) => [p.id as string, p.email as string]));
+  }
+  const candidatesByCard = new Map<string, ReviewCandidate[]>();
+  for (const c of candidates) {
+    const list = candidatesByCard.get(c.card_id as string) ?? [];
+    list.push({
+      id: c.id as string,
+      url: c.url as string,
+      uploadedByEmail: c.uploaded_by ? emailById.get(c.uploaded_by as string) ?? null : null,
+      createdAt: c.created_at as string,
+    });
+    candidatesByCard.set(c.card_id as string, list);
+  }
+  return cards.map((card) => ({
+    card: {
+      id: card.id as string,
+      name: card.name as string,
+      set_name: card.set_name as string | null,
+      number: card.number as string | null,
+      image_small: card.image_small as string | null,
+      image_locked: !!card.image_locked,
+    },
+    candidates: candidatesByCard.get(card.id as string) ?? [],
+  }));
+}
+
 /** GET: cards that need image review (admin only) — every card that has
- *  submitted photo candidates, plus cards with no image at all. */
-export async function GET() {
+ *  submitted photo candidates, plus cards with no image at all.
+ *  With ?q=, instead searches the whole shared card database by name/number
+ *  so the admin can fix ANY card's image, not just flagged ones. */
+export async function GET(req: Request) {
   try {
     await requireAdmin();
     const admin = createAdminClient();
+
+    const q = new URL(req.url).searchParams.get("q")?.trim() ?? "";
+    if (q) {
+      // Strip characters that would break the .or() filter syntax
+      const clean = q.replace(/[%_,()]/g, " ").trim();
+      if (!clean) return NextResponse.json({ rows: [] });
+      const { data: found, error } = await admin
+        .from("cards")
+        .select("*")
+        .or(`name.ilike.%${clean}%,number.ilike.%${clean}%`)
+        .order("name")
+        .limit(30);
+      if (error) throw error;
+
+      const ids = (found ?? []).map((c) => c.id as string);
+      let cands: Array<Record<string, unknown>> = [];
+      if (ids.length > 0) {
+        const { data, error: cErr } = await admin
+          .from("card_image_candidates")
+          .select("id, card_id, url, uploaded_by, created_at")
+          .in("card_id", ids)
+          .order("created_at", { ascending: false })
+          .limit(300);
+        if (cErr) console.error("card_image_candidates unavailable", cErr.message);
+        else cands = data ?? [];
+      }
+      const rows = await toRows(admin, found ?? [], cands);
+      return NextResponse.json({ rows });
+    }
 
     const [{ data: candidates, error: candErr }, { data: missing, error: missErr }] =
       await Promise.all([
