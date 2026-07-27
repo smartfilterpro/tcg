@@ -73,6 +73,8 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [reviewRows, setReviewRows] = useState<ReviewRow[]>([]);
   const [reviewBusy, setReviewBusy] = useState<string | null>(null); // card id being acted on
+  const [reviewQuery, setReviewQuery] = useState(""); // active search, "" = needs-review list
+  const [reviewSearchDraft, setReviewSearchDraft] = useState("");
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadCardIdRef = useRef<string | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -94,8 +96,12 @@ export default function AdminPage() {
     setLoading(false);
   }
 
-  async function loadReview() {
-    const res = await fetch("/api/admin/card-images");
+  async function loadReview(q?: string) {
+    const query = q ?? reviewQuery;
+    const url = query
+      ? `/api/admin/card-images?q=${encodeURIComponent(query)}`
+      : "/api/admin/card-images";
+    const res = await fetch(url);
     const json = await res.json();
     if (res.ok) setReviewRows(json.rows ?? []);
   }
@@ -448,8 +454,45 @@ export default function AdminPage() {
         <h2 className="mb-2 font-semibold">🖼 Card image review ({reviewRows.length})</h2>
         <p className="mb-2 text-xs text-slate-500">
           Cards with no picture, or with photos submitted by members. Picking an image locks
-          it — only an admin can change it afterwards.
+          it — only an admin can change it afterwards. Wrong picture on some other card?
+          Search for it below to fix it directly.
         </p>
+        <form
+          className="mb-3 flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const q = reviewSearchDraft.trim();
+            setReviewQuery(q);
+            loadReview(q);
+          }}
+        >
+          <input
+            className="input text-sm"
+            placeholder="Search any card to fix its image (name or number)…"
+            value={reviewSearchDraft}
+            onChange={(e) => setReviewSearchDraft(e.target.value)}
+          />
+          <button className="btn-secondary shrink-0 text-sm">Search</button>
+          {reviewQuery && (
+            <button
+              type="button"
+              className="btn shrink-0 text-sm text-slate-500 hover:bg-slate-100"
+              onClick={() => {
+                setReviewQuery("");
+                setReviewSearchDraft("");
+                loadReview("");
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </form>
+        {reviewQuery && (
+          <p className="mb-2 text-xs text-slate-500">
+            Showing search results for &ldquo;{reviewQuery}&rdquo; — every matching card in
+            the database, whatever its current image.
+          </p>
+        )}
         <input
           ref={uploadInputRef}
           type="file"
@@ -458,7 +501,11 @@ export default function AdminPage() {
           onChange={onUploadChosen}
         />
         {reviewRows.length === 0 ? (
-          <p className="text-sm text-slate-400">Nothing to review — every card has art. 🎉</p>
+          <p className="text-sm text-slate-400">
+            {reviewQuery
+              ? "No cards match that search."
+              : "Nothing to review — every card has art. 🎉"}
+          </p>
         ) : (
           <ul className="divide-y divide-slate-100">
             {reviewRows.map(({ card, candidates }) => (
