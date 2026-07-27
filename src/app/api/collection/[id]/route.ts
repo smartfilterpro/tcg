@@ -1,23 +1,57 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { summaryToRow, defaultVariantFor, type CardSummary } from "@/lib/types";
 
 type Params = { params: Promise<{ id: string }> };
 
-/** PATCH: update quantity (0 deletes), variant, and/or notes.
- *  Body: { quantity?, variant?, notes? } */
+/** PATCH: update quantity (0 deletes), variant, notes, value override — or
+ *  re-identify the copy as a different card entirely (body: { card }),
+ *  keeping quantity/notes/photos of the row.
+ *  Body: { quantity?, variant?, notes?, priceOverride?, card? } */
 export async function PATCH(req: Request, { params }: Params) {
   try {
     const { user } = await requireUser();
     const { id } = await params;
-    const { quantity, variant, notes, priceOverride } = (await req.json()) as {
+    const { quantity, variant, notes, priceOverride, card } = (await req.json()) as {
       quantity?: number;
       variant?: string;
       notes?: string | null;
       priceOverride?: number | null;
+      card?: CardSummary;
     };
 
     const supabase = await createClient();
+
+    // Re-identify: swap which card this row points at (wrong match fix).
+    if (card?.id && typeof card.id === "string") {
+      // Make sure the card exists in the shared cache — but never clobber an
+      // existing record's images/prices (ignoreDuplicates keeps the old row).
+      const { error: cardErr } = await supabase
+        .from("cards")
+        .upsert([summaryToRow(card)], { onConflict: "id", ignoreDuplicates: true });
+      if (cardErr) throw cardErr;
+
+      const { error } = await supabase
+        .from("collection_items")
+        .update({
+          card_id: card.id,
+          variant: defaultVariantFor(card),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .eq("user_id", user.id);
+      if (error) {
+        if ((error as { code?: string }).code === "23505") {
+          return NextResponse.json(
+            { error: "You already have that card in your collection — adjust its quantity there and remove this copy instead." },
+            { status: 409 }
+          );
+        }
+        throw error;
+      }
+      return NextResponse.json({ ok: true });
+    }
 
     if (quantity !== undefined) {
       if (!Number.isInteger(quantity) || quantity < 0 || quantity > 999) {
