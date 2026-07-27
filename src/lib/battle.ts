@@ -77,6 +77,9 @@ export interface SideState {
   discard: BattleCard[];
   active: BattleStack | null;
   bench: BattleStack[];
+  /** Trainers played THIS turn, face-up on the table for the opponent to
+   *  see — swept into the discard pile when the turn ends. */
+  played?: BattleCard[];
   /** Referee mode: player finished setup (Active placed, prizes set). */
   ready?: boolean;
 }
@@ -134,12 +137,14 @@ export type BattleAction = { override?: boolean } & (
   | { type: "reveal"; handIndex: number }
   | { type: "useAbility"; target: "active" | number; abilityIndex: number }
   | { type: "promote"; benchIndex: number }
+  | { type: "benchActive" }
+  | { type: "useStadium" }
   | { type: "attack"; attackIndex: number }
   | { type: "setStatus"; side: "me" | "opp"; target: "active" | number; status: StatusCondition; on: boolean }
   | { type: "damage"; side: "me" | "opp"; target: "active" | number; delta: number }
   | { type: "knockout"; target: "active" | number }
   | { type: "stackToHand"; target: "active" | number }
-  | { type: "detach"; target: "active" | number; attachedIndex: number; to: "discard" | "hand" }
+  | { type: "detach"; target: "active" | number; attachedIndex: number; to: "discard" | "hand"; side?: "me" | "opp" }
   | { type: "takePrize" }
   | { type: "flipCoin" }
   | { type: "endTurn" }
@@ -368,6 +373,16 @@ export function applyAction(
     return { text: parts.length ? parts.join(" ") + " " : "" };
   }
 
+  /** End-of-turn sweep: Trainers played this turn leave the table and land
+   *  in their owner's discard pile. */
+  function sweepPlayed(side: SideState): string {
+    if (!side.played?.length) return "";
+    const n = side.played.length;
+    side.discard.push(...side.played);
+    side.played = [];
+    return ` (${n} played Trainer${n === 1 ? "" : "s"} to the discard)`;
+  }
+
   switch (action.type) {
     case "draw": {
       needTurn("draw");
@@ -516,7 +531,9 @@ export function applyAction(
         }
       }
       takeHandCard(me, action.handIndex);
-      me.discard.push(card);
+      // Face-up on the table so the opponent can see what was played —
+      // swept into the discard pile when this turn ends.
+      (me.played ??= []).push(card);
       let text = `played ${card.name}${card.sup ? " (Supporter)" : ""}${effectNote}`;
       if (card.rules?.length) {
         const cardText = card.rules.join(" ");
@@ -798,6 +815,7 @@ export function applyAction(
       state.turnCount += 1;
       turnsTaken[meId] = myTurnsDone + 1;
       state.flags = {};
+      text += sweepPlayed(me);
       const checkup = runCheckup();
       if (checkup.winnerId) return { text: `${text}. ${checkup.text}`, winnerId: checkup.winnerId };
       const drawn = opp.deck.shift();
@@ -859,16 +877,38 @@ export function applyAction(
       return { text: `picked ${stack.face.name} (and everything attached) up into their hand` };
     }
     case "detach": {
-      const stack = getStack(me, action.target);
+      // side "opp": attack/card effects that strip energy off the OPPOSING
+      // Pokémon — the cards always go to their owner's discard/hand.
+      const owner = action.side === "opp" ? opp : me;
+      const stack = getStack(owner, action.target);
       const card = stack.attached[action.attachedIndex];
       if (!card) throw new BattleError("That attached card isn't there anymore.");
       stack.attached.splice(action.attachedIndex, 1);
+      const whose = action.side === "opp" ? `the opposing ${stack.face.name}` : stack.face.name;
+      const suffix = action.side === "opp" ? " (card effect)" : effectNote;
       if (action.to === "hand") {
-        me.hand.push(card);
-        return { text: `returned ${card.name} from ${stack.face.name} to their hand` };
+        owner.hand.push(card);
+        return { text: `returned ${card.name} from ${whose} to ${action.side === "opp" ? `${oppName}'s` : "their"} hand${suffix}` };
       }
-      me.discard.push(card);
-      return { text: `discarded ${card.name} from ${stack.face.name}` };
+      owner.discard.push(card);
+      return { text: `discarded ${card.name} from ${whose}${suffix}` };
+    }
+    case "benchActive": {
+      if (!me.active) throw new BattleError("You have no Active Pokémon.");
+      if (me.bench.length >= MAX_BENCH) throw new BattleError("Your Bench is full (5 max).");
+      const stack = me.active;
+      stack.status = []; // leaving Active clears conditions
+      me.bench.push(stack);
+      me.active = null;
+      return { text: `moved ${stack.face.name} from Active to their Bench${effectNote || " (card effect)"}` };
+    }
+    case "useStadium": {
+      const st = state.stadium;
+      if (!st) throw new BattleError("There's no Stadium in play.");
+      const t = st.card.rules?.join(" ") ?? "";
+      return {
+        text: `used the Stadium ${st.card.name}${t ? ` — “${t.length > 160 ? t.slice(0, 160) + "…" : t}”` : ""}`,
+      };
     }
     case "takePrize": {
       const prize = me.prizes.shift();
@@ -890,23 +930,24 @@ export function applyAction(
       state.turnCount += 1;
       turnsTaken[meId] = myTurnsDone + 1;
       state.flags = {};
+      const swept = sweepPlayed(me);
       if (rules) {
         const checkup = runCheckup();
         if (checkup.winnerId) {
-          return { text: `ended their turn. ${checkup.text}`, winnerId: checkup.winnerId };
+          return { text: `ended their turn${swept}. ${checkup.text}`, winnerId: checkup.winnerId };
         }
         // Every turn begins with a mandatory draw; failing it loses the game.
         const drawn = opp.deck.shift();
         if (!drawn) {
           return {
-            text: `ended their turn. ${checkup.text}${oppName} has no cards left to draw. Deck-out!`,
+            text: `ended their turn${swept}. ${checkup.text}${oppName} has no cards left to draw. Deck-out!`,
             winnerId: meId,
           };
         }
         opp.hand.push(drawn);
-        return { text: `ended their turn. ${checkup.text}${oppName} drew a card` };
+        return { text: `ended their turn${swept}. ${checkup.text}${oppName} drew a card` };
       }
-      return { text: "ended their turn" };
+      return { text: `ended their turn${swept}` };
     }
     case "claimTurn": {
       // Unjam: if the table got out of sync with reality (someone forgot to
@@ -916,6 +957,7 @@ export function applyAction(
       if (myTurn) throw new BattleError("It's already your turn.");
       state.turnUser = meId;
       state.flags = {};
+      sweepPlayed(opp); // the interrupted player's table cards still discard
       return { text: "took the turn (out-of-turn fix — agreed at the table)" };
     }
     case "concede":
@@ -945,6 +987,8 @@ export interface SideView {
   discard: BattleCard[];
   active: BattleStack | null;
   bench: BattleStack[];
+  /** Trainers played this turn, face-up for both players. */
+  played: BattleCard[];
   ready: boolean;
 }
 
@@ -968,6 +1012,7 @@ function sideView(side: SideState): SideView {
     discard: side.discard,
     active: side.active,
     bench: side.bench,
+    played: side.played ?? [],
     ready: side.ready === true,
   };
 }

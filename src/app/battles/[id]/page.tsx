@@ -343,6 +343,20 @@ export default function BattleBoardPage() {
             ))}
           </div>
         )}
+        {opp.played.length > 0 && (
+          <div>
+            <span className="text-[10px] uppercase tracking-wide text-slate-400">
+              played this turn (tap to read)
+            </span>
+            <div className="mt-0.5 flex gap-1.5 overflow-x-auto">
+              {opp.played.map((c) => (
+                <button key={c.uid} type="button" className="shrink-0" onClick={() => setZoomCard(c)}>
+                  <CardTile card={c} className="w-12" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ===== Stadium (shared zone) ===== */}
@@ -357,6 +371,15 @@ export default function BattleBoardPage() {
               (played by {view.stadium.mine ? "you" : oppName} — tap to read)
             </span>
           </div>
+          {!finished && (
+            <button
+              className="shrink-0 text-xs text-poke-blue hover:underline"
+              disabled={busy}
+              onClick={() => act({ type: "useStadium" })}
+            >
+              ⚡ used it
+            </button>
+          )}
           {!finished && (
             <button
               className="shrink-0 text-xs text-red-500 hover:underline"
@@ -482,6 +505,20 @@ export default function BattleBoardPage() {
                   className="w-14"
                   onClick={() => setSheet({ kind: "mystack", target: i })}
                 />
+              ))}
+            </div>
+          </div>
+        )}
+        {me.played.length > 0 && (
+          <div>
+            <span className="text-[10px] uppercase tracking-wide text-slate-400">
+              played this turn (discards when your turn ends)
+            </span>
+            <div className="mt-0.5 flex gap-1.5 overflow-x-auto">
+              {me.played.map((c) => (
+                <button key={c.uid} type="button" className="shrink-0" onClick={() => setZoomCard(c)}>
+                  <CardTile card={c} className="w-12" />
+                </button>
               ))}
             </div>
           </div>
@@ -1120,6 +1157,18 @@ function SheetContent({
         </div>
       )}
 
+      {mine &&
+        sheet.target === "active" &&
+        rules &&
+        phase === "play" &&
+        stack.face.cat === "pokemon" &&
+        (stack.face.atk?.length ?? 0) === 0 && (
+          <p className="mb-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
+            No attack data found for this card yet — battles started after today&apos;s update
+            fetch it automatically. Meanwhile, use the damage buttons on your opponent&apos;s
+            Pokémon.
+          </p>
+        )}
       {mine && sheet.target === "active" && rules && phase === "play" && (stack.face.atk?.length ?? 0) > 0 && (
         <div className="mb-2">
           <span className="text-xs font-semibold text-slate-500">Attacks (ends your turn):</span>
@@ -1189,34 +1238,53 @@ function SheetContent({
 
       {stack.attached.length > 0 && (
         <div className="mb-1">
-          <span className="text-xs font-semibold text-slate-500">Attached / under:</span>
+          <span className="text-xs font-semibold text-slate-500">
+            Attached / under (tap a picture to read it):
+          </span>
           {stack.attached.map((c, i) => (
             <div key={c.uid} className="flex items-center gap-2 border-b border-slate-100 py-1.5">
+              <button type="button" className="shrink-0" onClick={() => zoom(c)}>
+                <CardTile card={c} className="w-8" />
+              </button>
               <span className="min-w-0 flex-1 truncate text-sm">{c.name}</span>
-              {mine && (
-                <>
-                  <button
-                    className="text-xs text-red-600"
-                    disabled={busy}
-                    onClick={() =>
-                      act({ type: "detach", target: sheet.target, attachedIndex: i, to: "discard" })
-                    }
-                  >
-                    discard
-                  </button>
-                  <button
-                    className="text-xs text-poke-blue"
-                    disabled={busy}
-                    onClick={() =>
-                      act({ type: "detach", target: sheet.target, attachedIndex: i, to: "hand" })
-                    }
-                  >
-                    to hand
-                  </button>
-                </>
-              )}
+              <button
+                className="text-xs text-red-600"
+                disabled={busy}
+                onClick={() =>
+                  act({
+                    type: "detach",
+                    target: sheet.target,
+                    attachedIndex: i,
+                    to: "discard",
+                    side: mine ? "me" : "opp",
+                  })
+                }
+              >
+                discard
+              </button>
+              <button
+                className="text-xs text-poke-blue"
+                disabled={busy}
+                onClick={() =>
+                  act({
+                    type: "detach",
+                    target: sheet.target,
+                    attachedIndex: i,
+                    to: "hand",
+                    side: mine ? "me" : "opp",
+                  })
+                }
+              >
+                to hand
+              </button>
             </div>
           ))}
+          {!mine && (
+            <p className="pt-1 text-[10px] text-slate-400">
+              Removing cards from {oppName}&apos;s Pokémon is for attack/card effects — it&apos;s
+              announced in the log.
+            </p>
+          )}
         </div>
       )}
 
@@ -1252,6 +1320,15 @@ function SheetContent({
                   : ""}
               </button>
             ))}
+          {sheet.target === "active" && me.bench.length < 5 && (
+            <button
+              className="block w-full border-b border-slate-100 py-2.5 text-left text-sm"
+              disabled={busy}
+              onClick={() => act({ type: "benchActive" })}
+            >
+              🪑 Move to your Bench — leave Active empty (card effect)
+            </button>
+          )}
           {stack.attached.some((c) => c.cat === "pokemon" || c.cat == null) && (
             <div className="flex items-center gap-2 border-b border-slate-100 py-2.5 text-sm">
               <span>⬇️ Devolve {stack.face.name} to:</span>
