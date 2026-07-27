@@ -10,6 +10,26 @@ interface Invite {
   created_at: string;
 }
 
+interface TicketMessage {
+  id: string;
+  user_id: string;
+  authorName: string;
+  isAdmin: boolean;
+  body: string;
+  created_at: string;
+}
+
+interface Ticket {
+  id: string;
+  user_id: string;
+  authorName: string;
+  subject: string;
+  status: "open" | "in_progress" | "resolved";
+  created_at: string;
+  updated_at: string;
+  messages: TicketMessage[];
+}
+
 interface ReviewCandidate {
   id: string;
   url: string;
@@ -55,6 +75,11 @@ export default function AdminPage() {
   const [reviewBusy, setReviewBusy] = useState<string | null>(null); // card id being acted on
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadCardIdRef = useRef<string | null>(null);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [ticketExpanded, setTicketExpanded] = useState<string | null>(null);
+  const [ticketReply, setTicketReply] = useState("");
+  const [ticketBusy, setTicketBusy] = useState(false);
+  const [showResolved, setShowResolved] = useState(false);
 
   async function load() {
     const res = await fetch("/api/admin/users");
@@ -75,10 +100,41 @@ export default function AdminPage() {
     if (res.ok) setReviewRows(json.rows ?? []);
   }
 
+  async function loadTickets() {
+    const res = await fetch("/api/support");
+    const json = await res.json();
+    if (res.ok) setTickets(json.tickets ?? []);
+  }
+
   useEffect(() => {
     load();
     loadReview();
+    loadTickets();
   }, []);
+
+  async function setTicketStatus(t: Ticket, status: Ticket["status"]) {
+    await fetch(`/api/support/${t.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    loadTickets();
+  }
+
+  async function replyToTicket(t: Ticket) {
+    if (!ticketReply.trim() || ticketBusy) return;
+    setTicketBusy(true);
+    const res = await fetch(`/api/support/${t.id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: ticketReply }),
+    });
+    if (res.ok) {
+      setTicketReply("");
+      await loadTickets();
+    }
+    setTicketBusy(false);
+  }
 
   async function invite(e: React.FormEvent) {
     e.preventDefault();
@@ -297,6 +353,95 @@ export default function AdminPage() {
             </li>
           ))}
         </ul>
+      </div>
+
+      <div className="card-panel p-4">
+        <h2 className="mb-2 font-semibold">
+          🎫 Support tickets ({tickets.filter((t) => t.status !== "resolved").length} active)
+        </h2>
+        {tickets.length === 0 ? (
+          <p className="text-sm text-slate-400">No tickets — smooth sailing. 🎉</p>
+        ) : (
+          <>
+            <ul className="divide-y divide-slate-100">
+              {tickets
+                .filter((t) => showResolved || t.status !== "resolved")
+                .map((t) => (
+                  <li key={t.id} className="py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        className="min-w-0 flex-1 text-left"
+                        onClick={() => {
+                          setTicketExpanded(ticketExpanded === t.id ? null : t.id);
+                          setTicketReply("");
+                        }}
+                      >
+                        <div className="truncate text-sm font-medium">{t.subject}</div>
+                        <div className="text-xs text-slate-400">
+                          {t.authorName} · updated {new Date(t.updated_at).toLocaleDateString()} ·{" "}
+                          {t.messages.length} message{t.messages.length === 1 ? "" : "s"}
+                        </div>
+                      </button>
+                      <select
+                        className="input w-auto shrink-0 py-1 text-xs"
+                        value={t.status}
+                        onChange={(e) => setTicketStatus(t, e.target.value as Ticket["status"])}
+                      >
+                        <option value="open">Open</option>
+                        <option value="in_progress">In progress</option>
+                        <option value="resolved">Resolved</option>
+                      </select>
+                    </div>
+                    {ticketExpanded === t.id && (
+                      <div className="mt-2 space-y-2 border-t border-slate-100 pt-2">
+                        {t.messages.map((m) => (
+                          <div
+                            key={m.id}
+                            className={`rounded-lg p-2 text-sm ${
+                              m.isAdmin ? "ml-6 bg-poke-blue/10" : "mr-6 bg-slate-50"
+                            }`}
+                          >
+                            <div className="text-xs font-semibold text-slate-500">
+                              {m.authorName}
+                              {m.isAdmin && " (admin)"} · {new Date(m.created_at).toLocaleString()}
+                            </div>
+                            <p className="whitespace-pre-wrap text-slate-800">{m.body}</p>
+                          </div>
+                        ))}
+                        <form
+                          className="flex gap-2"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            replyToTicket(t);
+                          }}
+                        >
+                          <input
+                            className="input text-sm"
+                            placeholder="Reply to the member…"
+                            value={ticketReply}
+                            maxLength={4000}
+                            onChange={(e) => setTicketReply(e.target.value)}
+                          />
+                          <button className="btn-secondary shrink-0 text-sm" disabled={ticketBusy}>
+                            Reply
+                          </button>
+                        </form>
+                      </div>
+                    )}
+                  </li>
+                ))}
+            </ul>
+            {tickets.some((t) => t.status === "resolved") && (
+              <button
+                className="mt-1 text-xs text-slate-400 hover:underline"
+                onClick={() => setShowResolved(!showResolved)}
+              >
+                {showResolved ? "Hide" : "Show"}{" "}
+                {tickets.filter((t) => t.status === "resolved").length} resolved
+              </button>
+            )}
+          </>
+        )}
       </div>
 
       <div className="card-panel p-4">

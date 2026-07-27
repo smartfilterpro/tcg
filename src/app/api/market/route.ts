@@ -9,6 +9,7 @@ export interface PostCardRef {
   image: string | null;
   set_name: string | null;
   number: string | null;
+  qty?: number;
 }
 
 export interface TradePostComment {
@@ -33,7 +34,7 @@ export interface TradePost {
   comments: TradePostComment[];
 }
 
-function sanitizeCards(input: unknown, cap = 6): PostCardRef[] {
+function sanitizeCards(input: unknown, cap = 10): PostCardRef[] {
   if (!Array.isArray(input)) return [];
   return input
     .filter((c) => c && typeof c.id === "string" && typeof c.name === "string")
@@ -44,6 +45,8 @@ function sanitizeCards(input: unknown, cap = 6): PostCardRef[] {
       image: typeof c.image === "string" ? c.image.slice(0, 500) : null,
       set_name: typeof c.set_name === "string" ? c.set_name.slice(0, 200) : null,
       number: typeof c.number === "string" ? c.number.slice(0, 40) : null,
+      qty:
+        Number.isInteger(c.qty) && c.qty > 1 ? Math.min(99, c.qty as number) : undefined,
     }));
 }
 

@@ -69,6 +69,7 @@ export async function GET() {
     return NextResponse.json({
       migrated,
       sharing: me?.share_collection === true,
+      myName: (me?.display_name || me?.email || "") as string,
       friends,
       sharedDecks,
     });
