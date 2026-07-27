@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { numberKey } from "@/lib/pokemontcg";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export interface OfferLine {
   label: string;
@@ -20,6 +22,37 @@ function sanitizeLines(input: unknown, cap = 30): OfferLine[] {
       value: typeof l.value === "number" && Number.isFinite(l.value) ? l.value : null,
       image: typeof l.image === "string" ? l.image.slice(0, 500) : null,
     }));
+}
+
+/** Offers created before images were snapshotted have no picture — resolve
+ *  them from the shared cards table by the "Name #number (…)" label. */
+async function backfillImages(supabase: SupabaseClient, lines: OfferLine[]): Promise<void> {
+  const cache = new Map<string, string | null>();
+  let lookups = 0;
+  for (const line of lines) {
+    if (line.image || lookups >= 30) continue;
+    if (cache.has(line.label)) {
+      line.image = cache.get(line.label) ?? null;
+      continue;
+    }
+    const m = /^(.+?) #(\S+) \(/.exec(line.label);
+    if (!m) continue;
+    lookups++;
+    try {
+      const { data } = await supabase
+        .from("cards")
+        .select("number, image_small")
+        .ilike("name", m[1].replace(/[%_]/g, ""))
+        .limit(10);
+      const hit =
+        (data ?? []).find((c) => numberKey(c.number) === numberKey(m[2])) ?? (data ?? [])[0];
+      const img = (hit?.image_small as string | null) ?? null;
+      cache.set(line.label, img);
+      line.image = img;
+    } catch {
+      cache.set(line.label, null);
+    }
+  }
 }
 
 /** GET: my trade offers, both directions, newest first. */
@@ -55,6 +88,10 @@ export async function GET() {
       status: o.status,
       created_at: o.created_at,
     }));
+    await backfillImages(
+      supabase,
+      result.flatMap((o) => [...o.give, ...o.get])
+    );
     return NextResponse.json({ migrated: true, offers: result, myId: user.id });
   } catch (err) {
     return errorResponse(err);

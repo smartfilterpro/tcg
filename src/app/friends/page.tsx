@@ -1313,12 +1313,12 @@ function OfferSide({ label, lines }: { label: string; lines: OfferLine[] }) {
         <ul className="mt-1 space-y-1">
           {lines.map((l, i) => (
             <li key={i} className="flex items-center gap-1.5">
-              <div className="relative h-10 w-7 shrink-0 overflow-hidden rounded bg-slate-200">
-                {l.image && (
-                  // eslint-disable-next-line @next/next/no-img-element
+              {l.image && (
+                <div className="relative h-10 w-7 shrink-0 overflow-hidden rounded bg-slate-200">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={l.image} alt="" className="h-full w-full object-cover" loading="lazy" />
-                )}
-              </div>
+                </div>
+              )}
               <span className="min-w-0">
                 {l.qty}x {l.label}
                 {l.value != null ? (
