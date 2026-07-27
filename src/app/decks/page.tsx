@@ -485,8 +485,6 @@ export default function DecksPage() {
   const [built, setBuilt] = useState<BuiltDeck | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<Deck | null>(null);
-  const [exportUrl, setExportUrl] = useState<string | null>(null);
-  const [showCowork, setShowCowork] = useState(false);
   // card_id → image url, for showing real card pictures in deck lists
   const [cardImages, setCardImages] = useState<Record<string, string | null>>({});
 
@@ -654,15 +652,6 @@ export default function DecksPage() {
     setViewing((v) => (v && v.id === deck.id ? { ...v, shared: next } : v));
   }
 
-  async function loadExportUrl() {
-    const res = await fetch("/api/export/token");
-    const json = await res.json();
-    if (res.ok) {
-      setExportUrl(`${window.location.origin}/api/export?token=${json.token}`);
-    }
-    setShowCowork(true);
-  }
-
   const groupCards = (cards: DeckCardEntry[]) => ({
     pokemon: cards.filter((c) => c.category === "pokemon"),
     trainer: cards.filter((c) => c.category === "trainer"),
@@ -782,29 +771,6 @@ export default function DecksPage() {
                 </div>
               </button>
             ))}
-          </div>
-        )}
-      </div>
-
-      {/* Claude Cowork integration */}
-      <div className="card-panel p-4">
-        <h2 className="font-semibold">🔗 Build decks in Claude Cowork</h2>
-        <p className="mb-2 mt-0.5 text-xs text-slate-500">
-          Prefer chatting with Claude directly? Get your personal collection link and paste it into
-          Claude Cowork (there&apos;s a ready-made deck-builder skill in the repo under{" "}
-          <code className="rounded bg-slate-100 px-1">.claude/skills/</code>).
-        </p>
-        {!showCowork ? (
-          <button className="btn-secondary text-sm" onClick={loadExportUrl}>
-            Show my collection link
-          </button>
-        ) : (
-          <div className="space-y-2">
-            <input readOnly className="input font-mono text-xs" value={exportUrl ?? "…"} onFocus={(e) => e.target.select()} />
-            <p className="text-xs text-slate-400">
-              Anyone with this link can read your collection list. Keep it private — you can
-              rotate it any time by asking the admin.
-            </p>
           </div>
         )}
       </div>

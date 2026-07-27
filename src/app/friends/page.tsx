@@ -57,6 +57,23 @@ interface ChatMsg {
   content: string;
 }
 
+interface OfferLine {
+  label: string;
+  qty: number;
+  value: number | null;
+}
+
+interface TradeOffer {
+  id: string;
+  direction: "incoming" | "outgoing";
+  otherName: string;
+  give: OfferLine[];
+  get: OfferLine[];
+  message: string | null;
+  status: "pending" | "accepted" | "declined" | "withdrawn";
+  created_at: string;
+}
+
 /** key = collection item id */
 type TradeSide = Record<string, number>;
 
@@ -94,6 +111,12 @@ export default function FriendsPage() {
   const [mySearch, setMySearch] = useState("");
   const [theirSearch, setTheirSearch] = useState("");
 
+  // Trade requests
+  const [offers, setOffers] = useState<TradeOffer[]>([]);
+  const [tradeMessage, setTradeMessage] = useState("");
+  const [sendingOffer, setSendingOffer] = useState(false);
+  const [offerNotice, setOfferNotice] = useState<string | null>(null);
+
   // Chat state
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -117,13 +140,64 @@ export default function FriendsPage() {
     setLoading(false);
   }
 
+  async function loadOffers() {
+    try {
+      const res = await fetch("/api/trade/offers");
+      const json = await res.json();
+      if (res.ok) setOffers(json.offers ?? []);
+    } catch {}
+  }
+
   useEffect(() => {
     load();
+    loadOffers();
   }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat, chatBusy]);
+
+  async function sendTradeRequest() {
+    if (!friend || sendingOffer) return;
+    setSendingOffer(true);
+    setOfferNotice(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/trade/offers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          toUserId: friend.id,
+          give: tradeLines(give, myItems),
+          get: tradeLines(get, theirItems),
+          message: tradeMessage,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't send the trade request");
+      setOfferNotice(
+        `Trade request sent to ${friend.name}! They'll see it on their Friends page.`
+      );
+      setGive({});
+      setGet({});
+      setTradeMessage("");
+      loadOffers();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't send the trade request");
+    }
+    setSendingOffer(false);
+  }
+
+  async function respondToOffer(offer: TradeOffer, status: "accepted" | "declined" | "withdrawn") {
+    const res = await fetch(`/api/trade/offers/${offer.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    loadOffers();
+  }
 
   async function toggleSharing() {
     setError(null);
@@ -305,6 +379,105 @@ export default function FriendsPage() {
 
       {!friend && (
         <>
+          {offers.length > 0 && (
+            <div className="card-panel p-4">
+              <h2 className="mb-2 font-semibold">
+                📨 Trade requests (
+                {offers.filter((o) => o.status === "pending").length} pending)
+              </h2>
+              <ul className="divide-y divide-slate-100">
+                {offers
+                  .filter((o, i) => o.status === "pending" || i < 8)
+                  .map((o) => (
+                    <li key={o.id} className="py-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-sm">
+                          <span className="font-semibold">
+                            {o.direction === "incoming" ? o.otherName : `To ${o.otherName}`}
+                          </span>{" "}
+                          <span className="text-xs text-slate-400">
+                            {new Date(o.created_at).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <span
+                          className={`chip shrink-0 ${
+                            o.status === "pending"
+                              ? "bg-yellow-50 text-yellow-800"
+                              : o.status === "accepted"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-slate-100 text-slate-500"
+                          }`}
+                        >
+                          {o.status}
+                        </span>
+                      </div>
+                      <div className="mt-1 grid gap-2 text-xs sm:grid-cols-2">
+                        <div className="rounded bg-slate-50 p-2">
+                          <div className="font-bold uppercase tracking-wide text-slate-400">
+                            {o.direction === "incoming" ? "You get" : "You give"}
+                          </div>
+                          {o.give.map((l, i) => (
+                            <div key={i}>
+                              {l.qty}x {l.label}
+                              {l.value != null ? ` ~$${l.value.toFixed(2)}` : ""}
+                            </div>
+                          ))}
+                          {o.give.length === 0 && <div className="text-slate-400">nothing</div>}
+                        </div>
+                        <div className="rounded bg-slate-50 p-2">
+                          <div className="font-bold uppercase tracking-wide text-slate-400">
+                            {o.direction === "incoming" ? "You give" : "You get"}
+                          </div>
+                          {o.get.map((l, i) => (
+                            <div key={i}>
+                              {l.qty}x {l.label}
+                              {l.value != null ? ` ~$${l.value.toFixed(2)}` : ""}
+                            </div>
+                          ))}
+                          {o.get.length === 0 && <div className="text-slate-400">nothing</div>}
+                        </div>
+                      </div>
+                      {o.message && (
+                        <p className="mt-1 text-xs italic text-slate-500">&ldquo;{o.message}&rdquo;</p>
+                      )}
+                      {o.status === "pending" && (
+                        <div className="mt-2 flex gap-2">
+                          {o.direction === "incoming" ? (
+                            <>
+                              <button
+                                className="btn-primary px-3 py-1 text-xs"
+                                onClick={() => respondToOffer(o, "accepted")}
+                              >
+                                ✓ Accept
+                              </button>
+                              <button
+                                className="btn px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                                onClick={() => respondToOffer(o, "declined")}
+                              >
+                                Decline
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              className="btn px-3 py-1 text-xs text-slate-500 hover:bg-slate-100"
+                              onClick={() => respondToOffer(o, "withdrawn")}
+                            >
+                              Withdraw
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {o.status === "accepted" && (
+                        <p className="mt-1 text-xs text-green-700">
+                          Deal! Arrange the hand-off in person — the app doesn&apos;t move cards.
+                        </p>
+                      )}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
+
           <TradeBoard />
 
           <div className="card-panel p-4">
@@ -413,6 +586,27 @@ export default function FriendsPage() {
                         : "in your favor"}
                   </p>
                 )}
+                {offerNotice && (
+                  <div className="mt-2 rounded-lg bg-green-50 p-2.5 text-sm text-green-800">
+                    {offerNotice}
+                  </div>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                  <input
+                    className="input min-w-0 flex-1 text-sm"
+                    placeholder="Optional note — e.g. can meet Saturday!"
+                    maxLength={1000}
+                    value={tradeMessage}
+                    onChange={(e) => setTradeMessage(e.target.value)}
+                  />
+                  <button
+                    className="btn-primary shrink-0 text-sm"
+                    disabled={sendingOffer || Object.keys(give).length + Object.keys(get).length === 0}
+                    onClick={sendTradeRequest}
+                  >
+                    {sendingOffer ? "Sending…" : "📨 Send trade request"}
+                  </button>
+                </div>
               </div>
 
               {/* Pickers */}
