@@ -207,6 +207,8 @@ export default function AdminPage() {
     const json = await res.json();
     if (!res.ok) {
       setReviewNotice({ ok: false, text: json.error || "Couldn't update the image." });
+    } else if (json.warning) {
+      setReviewNotice({ ok: true, text: json.warning });
     } else {
       setReviewNotice({
         ok: true,
