@@ -168,6 +168,8 @@ export interface Profile {
   ai_budget_usd?: number | null;
   /** Suspended members can't sign in or use the app. */
   suspended?: boolean;
+  /** When the member accepted the Terms of Service (null = must accept at next login). */
+  tos_accepted_at?: string | null;
   created_at: string;
 }
 
