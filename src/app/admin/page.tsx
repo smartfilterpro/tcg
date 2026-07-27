@@ -415,7 +415,10 @@ export default function AdminPage() {
         </p>
         <ul className="divide-y divide-slate-100">
           {users.map((u) => (
-            <li key={u.id} className="flex items-center justify-between py-2">
+            <li
+              key={u.id}
+              className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between"
+            >
               <div>
                 <div className="text-sm font-medium">{u.display_name || u.email}</div>
                 <div className="text-xs text-slate-400">
@@ -452,7 +455,7 @@ export default function AdminPage() {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
                 {u.suspended === true && (
                   <span className="chip bg-red-100 text-red-700">suspended</span>
                 )}
