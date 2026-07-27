@@ -98,6 +98,24 @@ export async function GET() {
   }
 }
 
+/** DELETE: clear ALL my finished trade requests (RLS limits the delete to
+ *  non-pending offers the caller participates in). */
+export async function DELETE() {
+  try {
+    const { user } = await requireUser();
+    const supabase = await createClient();
+    const { error } = await supabase
+      .from("trade_offers")
+      .delete()
+      .neq("status", "pending")
+      .or(`from_user.eq.${user.id},to_user.eq.${user.id}`);
+    if (error) throw error;
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
 /** POST: send a trade request.
  *  Body: { toUserId, give: OfferLine[], get: OfferLine[], message? } */
 export async function POST(req: Request) {
