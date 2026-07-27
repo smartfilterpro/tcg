@@ -156,6 +156,8 @@ export interface Profile {
   email: string;
   display_name: string | null;
   role: "admin" | "member";
+  /** Opt-in: collection visible to other members (for browsing & trades). */
+  share_collection?: boolean;
   created_at: string;
 }
 
@@ -181,6 +183,8 @@ export interface Deck {
   strategy: string | null;
   cards: DeckCardEntry[];
   suggestions?: DeckSuggestion[];
+  /** Visible read-only to other members when true. */
+  shared?: boolean;
   created_at: string;
 }
 
