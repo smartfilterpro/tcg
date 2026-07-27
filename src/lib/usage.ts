@@ -66,7 +66,8 @@ export async function logAiUsage(
     | "find_image"
     | "trade_chat"
     | "deck_review"
-    | "grade",
+    | "grade"
+    | "card_fx",
   model: string,
   usage: { input_tokens?: number | null; output_tokens?: number | null } | undefined
 ): Promise<void> {

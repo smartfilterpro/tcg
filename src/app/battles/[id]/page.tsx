@@ -126,7 +126,9 @@ export default function BattleBoardPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [sheet, setSheet] = useState<Sheet | null>(null);
-  const [viewPile, setViewPile] = useState<{ title: string; cards: BattleCard[] } | null>(null);
+  const [viewPile, setViewPile] = useState<{ title: string; cards: BattleCard[]; mine?: boolean } | null>(null);
+  const [zoomCard, setZoomCard] = useState<BattleCard | null>(null);
+  const [deckSearch, setDeckSearch] = useState<BattleCard[] | null>(null);
   const [busy, setBusy] = useState(false);
   const dataRef = useRef<BattleData | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
@@ -183,6 +185,18 @@ export default function BattleBoardPage() {
       showNotice(e instanceof Error ? e.message : "That move didn't work");
     }
     setBusy(false);
+  }
+
+  async function openDeckSearch() {
+    setSheet(null);
+    try {
+      const res = await fetch(`/api/battles/${id}/deck`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't open your deck");
+      setDeckSearch(json.cards ?? []);
+    } catch (e) {
+      showNotice(e instanceof Error ? e.message : "Couldn't open your deck");
+    }
   }
 
   async function removeBattle() {
@@ -394,7 +408,7 @@ export default function BattleBoardPage() {
             <button
               type="button"
               className="flex flex-col items-center gap-0.5"
-              onClick={() => setViewPile({ title: "Your discard", cards: me.discard })}
+              onClick={() => setViewPile({ title: "Your discard", cards: me.discard, mine: true })}
             >
               <span className="flex aspect-[63/88] w-11 items-center justify-center rounded-md border border-dashed border-slate-300 text-sm font-bold text-slate-500">
                 {me.discard.length}
@@ -515,6 +529,8 @@ export default function BattleBoardPage() {
               busy={busy}
               act={act}
               close={() => setSheet(null)}
+              zoom={setZoomCard}
+              openDeckSearch={openDeckSearch}
             />
           </div>
         </div>
@@ -539,13 +555,109 @@ export default function BattleBoardPage() {
             {viewPile.cards.length === 0 ? (
               <p className="text-sm text-slate-400">Empty.</p>
             ) : (
-              <div className="grid grid-cols-4 gap-2">
-                {viewPile.cards.map((c) => (
-                  <CardTile key={c.uid} card={c} className="w-full" />
-                ))}
-              </div>
+              <>
+                <p className="mb-2 text-xs text-slate-400">
+                  Tap a card to read it{viewPile.mine ? " — “↩ hand” recovers it (card effects)" : ""}.
+                </p>
+                <div className="grid grid-cols-4 gap-2">
+                  {viewPile.cards.map((c, i) => (
+                    <div key={c.uid}>
+                      <button type="button" className="w-full" onClick={() => setZoomCard(c)}>
+                        <CardTile card={c} className="w-full" />
+                      </button>
+                      {viewPile.mine && (
+                        <button
+                          className="mt-0.5 w-full text-center text-[10px] text-poke-blue hover:underline"
+                          disabled={busy}
+                          onClick={() => {
+                            act({ type: "discardToHand", discardIndex: i });
+                            setViewPile(null);
+                          }}
+                        >
+                          ↩ hand
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ===== Deck search (own deck, alphabetized — order stays secret) ===== */}
+      {deckSearch && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/40"
+          onClick={() => setDeckSearch(null)}
+        >
+          <div
+            className="mx-auto my-6 w-[92%] max-w-md rounded-2xl bg-white p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-1 flex items-center justify-between">
+              <h2 className="font-semibold">🔍 Search your deck ({deckSearch.length})</h2>
+              <button className="text-slate-400" onClick={() => setDeckSearch(null)}>
+                ✕
+              </button>
+            </div>
+            <p className="mb-2 text-xs text-slate-500">
+              Cards are shown A→Z (the real order stays secret). Tap a card to take it into
+              your hand — your deck shuffles afterwards, and your opponent only sees that you
+              took 1 card.
+            </p>
+            <div className="grid grid-cols-4 gap-2">
+              {deckSearch.map((c) => (
+                <button
+                  key={c.uid}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    if (confirm(`Take ${c.name} into your hand and shuffle?`)) {
+                      act({ type: "deckTake", uid: c.uid });
+                      setDeckSearch(null);
+                    }
+                  }}
+                >
+                  <CardTile card={c} className="w-full" />
+                  <span className="block truncate text-center text-[10px] text-slate-500">
+                    {c.name}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Read-the-card zoom ===== */}
+      {zoomCard && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-4"
+          onClick={() => setZoomCard(null)}
+        >
+          {zoomCard.big || zoomCard.image ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={zoomCard.big ?? zoomCard.image!}
+              alt={zoomCard.name}
+              className="max-h-[90vh] w-auto max-w-full rounded-xl shadow-2xl"
+            />
+          ) : (
+            <div className="max-w-sm rounded-xl bg-white p-4 text-sm">
+              <h2 className="mb-1 font-semibold">{zoomCard.name}</h2>
+              {zoomCard.rules?.length ? (
+                zoomCard.rules.map((r, i) => (
+                  <p key={i} className="text-slate-600">
+                    {r}
+                  </p>
+                ))
+              ) : (
+                <p className="text-slate-400">No card text on file.</p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -562,6 +674,8 @@ function SheetContent({
   busy,
   act,
   close,
+  zoom,
+  openDeckSearch,
 }: {
   sheet: Sheet;
   me: BattleView["me"];
@@ -572,6 +686,8 @@ function SheetContent({
   busy: boolean;
   act: (a: BattleAction) => void;
   close: () => void;
+  zoom: (c: BattleCard) => void;
+  openDeckSearch: () => void;
 }) {
   const row = "block w-full border-b border-slate-100 py-2.5 text-left text-sm";
 
@@ -606,6 +722,26 @@ function SheetContent({
         <button className={row} disabled={busy} onClick={() => act({ type: "shuffleDeck" })}>
           🔀 Shuffle deck
         </button>
+        {(!rules || phase === "play") && (
+          <>
+            <button className={row} disabled={busy} onClick={openDeckSearch}>
+              🔍 Search your deck — take a card, then shuffle
+            </button>
+            <div className="flex items-center gap-2 border-b border-slate-100 py-2.5 text-sm">
+              <span>⛏ Discard from the top:</span>
+              {[1, 2, 3].map((n) => (
+                <button
+                  key={n}
+                  className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700"
+                  disabled={busy}
+                  onClick={() => act({ type: "millDeck", n })}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         {(!rules || phase === "setup") && (
           <button className={row} disabled={busy} onClick={() => act({ type: "mulligan" })}>
             ♻️ Mulligan — no Basic Pokémon? Reveal, reshuffle, draw 7
@@ -665,7 +801,9 @@ function SheetContent({
     return (
       <div>
         <div className="mb-2 flex items-center gap-3">
-          <CardTile card={card} className="w-14" />
+          <button type="button" onClick={() => zoom(card)}>
+            <CardTile card={card} className="w-14" />
+          </button>
           <div>
             <h2 className="font-semibold">{card.name}</h2>
             {catLabel && (
@@ -674,8 +812,21 @@ function SheetContent({
                 {cat === "pokemon" && card.basic != null && (card.basic ? " · Basic" : " · Evolution")}
               </p>
             )}
+            <p className="text-[10px] text-slate-400">tap the picture to read the card</p>
           </div>
         </div>
+        {(card.abilities?.length || card.rules?.length) && (
+          <div className="mb-2 space-y-1 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
+            {card.abilities?.map((a) => (
+              <p key={a.name}>
+                <b>{a.name}:</b> {a.text}
+              </p>
+            ))}
+            {card.rules?.map((r, i) => (
+              <p key={i}>{r}</p>
+            ))}
+          </div>
+        )}
         {rules && phase === "setup" && cat === "energy" && (
           <p className="border-b border-slate-100 py-2.5 text-sm text-slate-500">
             Energy attaches to your Pokémon once the battle starts — keep it in hand for now.
@@ -791,7 +942,9 @@ function SheetContent({
   return (
     <div>
       <div className="mb-2 flex items-center gap-3">
-        <CardTile card={stack.face} className="w-14" />
+        <button type="button" onClick={() => zoom(stack.face)}>
+          <CardTile card={stack.face} className="w-14" />
+        </button>
         <div>
           <h2 className="font-semibold">
             {mine ? "" : `${oppName}'s `}
@@ -807,8 +960,18 @@ function SheetContent({
               {stack.face.retreat != null && ` · Retreat: ${stack.face.retreat}⚡`}
             </p>
           )}
+          <p className="text-[10px] text-slate-400">tap the picture to read the card</p>
         </div>
       </div>
+      {(stack.face.abilities?.length ?? 0) > 0 && (
+        <div className="mb-2 space-y-1 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
+          {stack.face.abilities!.map((a) => (
+            <p key={a.name}>
+              <b>Ability — {a.name}:</b> {a.text}
+            </p>
+          ))}
+        </div>
+      )}
 
       {mine && sheet.target === "active" && rules && phase === "play" && (stack.face.atk?.length ?? 0) > 0 && (
         <div className="mb-2">

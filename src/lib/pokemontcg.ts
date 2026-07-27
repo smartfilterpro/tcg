@@ -30,30 +30,46 @@ interface RawCard {
   weaknesses?: Array<{ type: string; value: string }>;
   resistances?: Array<{ type: string; value: string }>;
   convertedRetreatCost?: number;
+  rules?: string[];
+  abilities?: Array<{ name: string; text?: string; type?: string }>;
 }
 
-/** Combat stats for referee-mode battles, cached in cards.battle_data. */
+/** Card knowledge for referee-mode battles, cached in cards.battle_data.
+ *  Pokémon get combat stats; Trainers and Special Energy get their printed
+ *  rules text; `fx` is an AI-compiled effect script added lazily. */
 export interface CardBattleData {
   attacks: Array<{ name: string; cost: string[]; damage: string; text: string | null }>;
   weak: { type: string; value: string } | null;
   resist: { type: string; value: string } | null;
   retreat: number;
+  /** Printed rules text (Trainer / Special Energy / rule-box lines). */
+  rules?: string[];
+  abilities?: Array<{ name: string; text: string }>;
+  /** AI-compiled effect ops for Trainers (see battles/lib fx compiler). */
+  fx?: { ops: Array<{ op: string; n?: number; note?: string }> } | null;
 }
 
 function toBattleData(card: RawCard): CardBattleData | null {
-  if ((card.supertype ?? "").toLowerCase() !== "pokémon" && (card.supertype ?? "").toLowerCase() !== "pokemon") {
-    return null;
-  }
+  const isPokemon = /pok[eé]mon/i.test(card.supertype ?? "");
+  const rules = (card.rules ?? []).map((r) => r.trim()).filter(Boolean);
+  const abilities = (card.abilities ?? [])
+    .filter((a) => a.name)
+    .map((a) => ({ name: a.name, text: a.text?.trim() ?? "" }));
+  if (!isPokemon && rules.length === 0) return null;
   return {
-    attacks: (card.attacks ?? []).map((a) => ({
-      name: a.name,
-      cost: a.cost ?? [],
-      damage: a.damage ?? "",
-      text: a.text?.trim() || null,
-    })),
-    weak: card.weaknesses?.[0] ?? null,
-    resist: card.resistances?.[0] ?? null,
-    retreat: card.convertedRetreatCost ?? 0,
+    attacks: isPokemon
+      ? (card.attacks ?? []).map((a) => ({
+          name: a.name,
+          cost: a.cost ?? [],
+          damage: a.damage ?? "",
+          text: a.text?.trim() || null,
+        }))
+      : [],
+    weak: isPokemon ? card.weaknesses?.[0] ?? null : null,
+    resist: isPokemon ? card.resistances?.[0] ?? null : null,
+    retreat: isPokemon ? card.convertedRetreatCost ?? 0 : 0,
+    ...(rules.length > 0 ? { rules } : {}),
+    ...(abilities.length > 0 ? { abilities } : {}),
   };
 }
 
