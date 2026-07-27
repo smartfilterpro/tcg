@@ -122,7 +122,10 @@ export default function CollectionPage() {
   }, []);
 
   const facets = useMemo(() => {
-    const sets = new Map<string, string>();
+    // Keyed by set NAME, not id: the same set can exist under two ids when
+    // cards came from different databases (pokemontcg.io vs TCGdex), which
+    // showed as duplicate entries in the dropdown.
+    const sets = new Set<string>();
     const types = new Set<string>();
     const rarities = new Set<string>();
     const supertypes = new Set<string>();
@@ -130,14 +133,14 @@ export default function CollectionPage() {
     for (const item of items ?? []) {
       const c = item.card;
       if (!c) continue;
-      sets.set(c.set_id, c.set_name);
+      if (c.set_name) sets.add(c.set_name);
       for (const t of c.types ?? []) types.add(t);
       if (c.rarity) rarities.add(c.rarity);
       if (c.supertype) supertypes.add(c.supertype);
       variants.add(item.variant ?? "normal");
     }
     return {
-      sets: [...sets.entries()].sort((a, b) => a[1].localeCompare(b[1])),
+      sets: [...sets].sort((a, b) => a.localeCompare(b)),
       types: [...types].sort(),
       rarities: [...rarities].sort(),
       supertypes: [...supertypes].sort(),
@@ -150,7 +153,7 @@ export default function CollectionPage() {
     const q = search.trim().toLowerCase();
     if (q) list = list.filter((i) => i.card.name.toLowerCase().includes(q));
     if (typeFilter) list = list.filter((i) => (i.card.types ?? []).includes(typeFilter));
-    if (setFilter) list = list.filter((i) => i.card.set_id === setFilter);
+    if (setFilter) list = list.filter((i) => i.card.set_name === setFilter);
     if (rarityFilter) list = list.filter((i) => i.card.rarity === rarityFilter);
     if (supertypeFilter) list = list.filter((i) => i.card.supertype === supertypeFilter);
     if (variantFilter) list = list.filter((i) => (i.variant ?? "normal") === variantFilter);
@@ -390,8 +393,8 @@ export default function CollectionPage() {
           </select>
           <select className="input w-full min-w-0" value={setFilter} onChange={(e) => setSetFilter(e.target.value)}>
             <option value="">All sets</option>
-            {facets.sets.map(([id, name]) => (
-              <option key={id} value={id}>{name}</option>
+            {facets.sets.map((name) => (
+              <option key={name} value={name}>{name}</option>
             ))}
           </select>
           <select className="input w-full min-w-0" value={rarityFilter} onChange={(e) => setRarityFilter(e.target.value)}>
