@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 /** Token-authenticated collection export for Claude Cowork / external tools.
  *  GET /api/export?token=... — no session required (the token IS the auth). */
@@ -22,11 +23,14 @@ export async function GET(req: Request) {
 
   const [{ data: profile }, { data: items }, { data: playProfile }] = await Promise.all([
     admin.from("profiles").select("display_name, email").eq("id", tokenRow.user_id).single(),
-    admin
-      .from("collection_items")
-      .select("quantity, variant, notes, price_override, card:cards(*)")
-      .eq("user_id", tokenRow.user_id)
-      .limit(5000),
+    fetchAllRows(() =>
+      admin
+        .from("collection_items")
+        .select("quantity, variant, notes, price_override, card:cards(*)")
+        .eq("user_id", tokenRow.user_id)
+        .order("created_at")
+        .order("id")
+    ),
     admin
       .from("play_profiles")
       .select("style_notes")

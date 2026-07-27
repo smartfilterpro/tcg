@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import type { CollectionItem } from "@/lib/types";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -25,12 +26,14 @@ export async function GET(_req: Request, { params }: Params) {
     }
 
     // RLS (migration 008) allows reading shared members' items
-    const { data, error } = await supabase
-      .from("collection_items")
-      .select("*, card:cards(*)")
-      .eq("user_id", id)
-      .order("created_at", { ascending: false })
-      .limit(5000);
+    const { data, error } = await fetchAllRows(() =>
+      supabase
+        .from("collection_items")
+        .select("*, card:cards(*)")
+        .eq("user_id", id)
+        .order("created_at", { ascending: false })
+        .order("id")
+    );
     if (error) throw error;
 
     return NextResponse.json({

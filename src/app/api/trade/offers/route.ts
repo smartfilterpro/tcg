@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { numberKey } from "@/lib/pokemontcg";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 export interface OfferLine {
   label: string;
@@ -99,12 +100,14 @@ export async function GET() {
       Array<{ id: string; authorName: string; mine: boolean; body: string; created_at: string }>
     >();
     if (result.length > 0) {
-      const { data: msgs } = await supabase
-        .from("trade_offer_messages")
-        .select("*")
-        .in("offer_id", result.map((o) => o.id))
-        .order("created_at")
-        .limit(2000);
+      const { data: msgs } = await fetchAllRows(() =>
+        supabase
+          .from("trade_offer_messages")
+          .select("*")
+          .in("offer_id", result.map((o) => o.id))
+          .order("created_at")
+          .order("id")
+      );
       for (const m of msgs ?? []) {
         const list = messagesByOffer.get(m.offer_id) ?? [];
         list.push({

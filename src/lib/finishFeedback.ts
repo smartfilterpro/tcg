@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 /** The scanner's finish memory: corrections members made to past finish
  *  guesses, keyed per card. Not gradient-descent machine learning — but it
@@ -61,11 +62,14 @@ export async function loadFinishOverrides(
   const ids = [...new Set(cardIds.filter(Boolean))];
   if (ids.length === 0) return none;
   try {
-    const { data, error } = await supabase
-      .from("finish_feedback")
-      .select("card_id, predicted, corrected")
-      .in("card_id", ids)
-      .limit(2000);
+    const { data, error } = await fetchAllRows(() =>
+      supabase
+        .from("finish_feedback")
+        .select("card_id, predicted, corrected")
+        .in("card_id", ids)
+        .order("created_at")
+        .order("id")
+    );
     if (error || !data) return none;
 
     // counts[cardId|predicted][corrected] = votes

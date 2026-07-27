@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { estimateCostUsd } from "@/lib/usage";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 export interface UserUsage {
   calls: number;
@@ -20,10 +21,17 @@ export async function GET() {
     const [{ data: profiles }, { data: invites }, { data: usageRows }] = await Promise.all([
       admin.from("profiles").select("*").order("created_at"),
       admin.from("invites").select("*").order("created_at", { ascending: false }),
-      admin
-        .from("ai_usage")
-        .select("user_id, model, input_tokens, output_tokens, created_at")
-        .limit(50000),
+      // Paged: Supabase caps responses at 1000 rows — usage totals were
+      // silently undercounting once the log grew past that.
+      fetchAllRows(
+        () =>
+          admin
+            .from("ai_usage")
+            .select("user_id, model, input_tokens, output_tokens, created_at")
+            .order("created_at", { ascending: false })
+            .order("id"),
+        50000
+      ),
     ]);
 
     // Aggregate token usage per user (all-time + last 30 days + this month)

@@ -4,6 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage, checkAiBudget } from "@/lib/usage";
 import { createClient } from "@/lib/supabase/server";
 import { itemPrice, variantLabel, type CollectionItem } from "@/lib/types";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 export const maxDuration = 120;
 
@@ -109,9 +110,25 @@ export async function POST(req: Request) {
       );
     }
 
+    // Paged: Supabase caps responses at 1000 rows — big collections were
+    // getting silently cut off from the advisor's context.
     const [{ data: myItems }, { data: theirItems }] = await Promise.all([
-      supabase.from("collection_items").select("*, card:cards(*)").eq("user_id", user.id).limit(5000),
-      supabase.from("collection_items").select("*, card:cards(*)").eq("user_id", body.friendId).limit(5000),
+      fetchAllRows(() =>
+        supabase
+          .from("collection_items")
+          .select("*, card:cards(*)")
+          .eq("user_id", user.id)
+          .order("created_at")
+          .order("id")
+      ),
+      fetchAllRows(() =>
+        supabase
+          .from("collection_items")
+          .select("*, card:cards(*)")
+          .eq("user_id", body.friendId)
+          .order("created_at")
+          .order("id")
+      ),
     ]);
 
     const friendName = (friend.display_name || friend.email) as string;

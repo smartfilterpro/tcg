@@ -8,6 +8,7 @@ import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { checkAiBudget } from "@/lib/usage";
 import { analyzeDeck, analysisSummary, type DeckMathEntry } from "@/lib/deckMath";
 import { normalizeForSearch } from "@/lib/text";
+import { fetchAllRows } from "@/lib/fetchAll";
 import type { CardSummary, CardSummaryRow, DeckCardEntry } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -179,11 +180,16 @@ export async function POST(req: Request) {
     // Gather everything the job needs BEFORE returning (request-scoped
     // resources like cookies aren't reliable in the detached task).
     const [{ data: items, error }, { data: playProfile }] = await Promise.all([
-      supabase
-        .from("collection_items")
-        .select("quantity, card:cards(*)")
-        .eq("user_id", user.id)
-        .limit(3000),
+      // Paged: Supabase caps responses at 1000 rows, which silently hid the
+      // rest of a big collection from the builder.
+      fetchAllRows(() =>
+        supabase
+          .from("collection_items")
+          .select("quantity, card:cards(*)")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .order("id")
+      ),
       supabase.from("play_profiles").select("style_notes").eq("user_id", user.id).maybeSingle(),
     ]);
     if (error) throw error;
