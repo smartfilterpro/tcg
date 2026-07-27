@@ -1057,6 +1057,7 @@ function PriceRefreshPanel({
   } | null;
 }) {
   const [busy, setBusy] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const [result, setResult] = useState<typeof info>(info);
   const [error, setError] = useState<string | null>(null);
   const current = result ?? info;
@@ -1072,22 +1073,33 @@ function PriceRefreshPanel({
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((json as { error?: string }).error || `Couldn't start (${res.status})`);
       const startedAt = Date.now();
-      while (Date.now() - startedAt < 5 * 60_000) {
+      // Follow the server's own "running" signal — first-time PokeTrace
+      // matching is rate-limited to a request every 2s, so a run can
+      // legitimately take 8+ minutes. Hard stop at 15.
+      let sawNotRunning = 0;
+      while (Date.now() - startedAt < 15 * 60_000) {
         await new Promise((r) => setTimeout(r, 8000));
+        setElapsed(Math.round((Date.now() - startedAt) / 60_000));
         const poll = await fetch("/api/admin/refresh-prices").catch(() => null);
         if (!poll?.ok) continue;
         const pj = (await poll.json().catch(() => null)) as {
           summary?: NonNullable<typeof info>;
           running?: boolean;
         } | null;
+        if (pj?.running === true) continue;
         const s = pj?.summary;
-        if (s?.ranAt && new Date(s.ranAt).getTime() >= startedAt - 60_000 && pj?.running !== true) {
+        if (s?.ranAt && new Date(s.ranAt).getTime() >= startedAt - 60_000) {
           setResult(s);
           setBusy(false);
           return;
         }
+        // Not running and no fresh summary — allow a couple of grace polls
+        // (the summary write may lag the flag), then give up loudly.
+        if (++sawNotRunning >= 3) {
+          throw new Error("The run ended without recording a result — check the server logs.");
+        }
       }
-      throw new Error("Still running — check back in a couple of minutes (results appear here).");
+      throw new Error("Still running after 15 minutes — reload the page later; results appear here.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Refresh failed");
     }
@@ -1112,7 +1124,9 @@ function PriceRefreshPanel({
           </span>
         )}
         <button className="btn-secondary text-xs" disabled={busy} onClick={runNow}>
-          {busy ? "Refreshing… (can take a minute)" : "Refresh prices now"}
+          {busy
+            ? `Refreshing… ${elapsed > 0 ? `${elapsed}m — ` : ""}rate-limited sources make first runs slow`
+            : "Refresh prices now"}
         </button>
       </div>
       {error && <p className="text-xs text-red-600">{error}</p>}
