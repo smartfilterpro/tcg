@@ -345,6 +345,7 @@ export async function POST(req: Request) {
             quantity: number;
             reason: string;
             card?: CardSummary | null;
+            owners?: Array<{ userId: string; name: string; qty: number }>;
           }>;
         };
         try {
@@ -453,6 +454,53 @@ export async function POST(req: Request) {
           } catch {
             suggestion.card = null;
           }
+        }
+
+        // Trade before you buy: check which group members (sharing their
+        // collection) already own the wishlist cards.
+        try {
+          const { data: profiles } = await admin.from("profiles").select("*");
+          const sharers = (profiles ?? []).filter(
+            (p) => p.id !== user.id && p.share_collection === true
+          );
+          if (sharers.length > 0) {
+            const nameOf = new Map(
+              sharers.map((p) => [
+                p.id as string,
+                ((p.display_name as string | null)?.trim() ||
+                  (p.email as string).split("@")[0]) as string,
+              ])
+            );
+            const sharerIds = sharers.map((p) => p.id as string);
+            for (const suggestion of (deck.missing_suggestions ?? []).slice(0, 5)) {
+              const { data: cardRows } = await admin
+                .from("cards")
+                .select("id")
+                .ilike("name", suggestion.name.replace(/[%_]/g, ""))
+                .limit(25);
+              const cardIds = (cardRows ?? []).map((r) => r.id as string);
+              if (cardIds.length === 0) continue;
+              const { data: held } = await admin
+                .from("collection_items")
+                .select("user_id, quantity")
+                .in("card_id", cardIds)
+                .in("user_id", sharerIds);
+              const qtyByUser = new Map<string, number>();
+              for (const h of held ?? []) {
+                qtyByUser.set(
+                  h.user_id as string,
+                  (qtyByUser.get(h.user_id as string) ?? 0) + (h.quantity as number)
+                );
+              }
+              const owners = [...qtyByUser.entries()]
+                .map(([userId, qty]) => ({ userId, name: nameOf.get(userId) ?? "A member", qty }))
+                .sort((a, b) => b.qty - a.qty)
+                .slice(0, 3);
+              if (owners.length > 0) suggestion.owners = owners;
+            }
+          }
+        } catch {
+          // Owner lookup is a bonus — never fail the build over it.
         }
 
         jobs.set(jobId, { userId: user.id, status: "done", deck, created: Date.now() });
