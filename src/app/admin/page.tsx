@@ -157,6 +157,35 @@ export default function AdminPage() {
     if (res.ok) setTickets(json.tickets ?? []);
   }
 
+  /** Create a card record for a name the search couldn't find, so a picture
+   *  has somewhere to live (deck entries are just names). */
+  async function createCardEntry() {
+    const name = reviewQuery.trim();
+    if (!name) return;
+    setReviewBusy("create");
+    setReviewNotice(null);
+    try {
+      const res = await fetch("/api/admin/card-images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create", name }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't create the card entry");
+      setReviewNotice({
+        ok: true,
+        text: `Created “${name}” — now give it a picture with 📷 Upload or 🔎 Find online below.`,
+      });
+      await loadReview();
+    } catch (e) {
+      setReviewNotice({
+        ok: false,
+        text: e instanceof Error ? e.message : "Couldn't create the card entry",
+      });
+    }
+    setReviewBusy(null);
+  }
+
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
 
   useEffect(() => {
@@ -793,11 +822,25 @@ export default function AdminPage() {
           onChange={onUploadChosen}
         />
         {reviewRows.length === 0 ? (
-          <p className="text-sm text-slate-400">
-            {reviewQuery
-              ? "No cards match that search."
-              : "Nothing to review — every card has art. 🎉"}
-          </p>
+          reviewQuery ? (
+            <div className="space-y-2 text-sm text-slate-500">
+              <p>No card records match that search.</p>
+              <p className="text-xs">
+                Deck entries are just names — a picture needs a card record to live on. If a
+                deck shows &ldquo;{reviewQuery}&rdquo; with a blank tile, create the record,
+                then add its picture:
+              </p>
+              <button
+                className="btn-secondary text-sm"
+                disabled={reviewBusy === "create"}
+                onClick={createCardEntry}
+              >
+                {reviewBusy === "create" ? "Creating…" : `➕ Create card entry “${reviewQuery}”`}
+              </button>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">Nothing to review — every card has art. 🎉</p>
+          )
         ) : (
           <ul className="divide-y divide-slate-100">
             {reviewRows.map(({ card, candidates }) => (
