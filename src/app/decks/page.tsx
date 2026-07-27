@@ -307,6 +307,22 @@ export default function DecksPage() {
     setViewing(null);
   }
 
+  async function toggleShareDeck(deck: Deck) {
+    const next = !deck.shared;
+    const res = await fetch(`/api/decks/${deck.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shared: next }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setError(json.error || "Couldn't update sharing");
+      return;
+    }
+    setDecks((prev) => prev.map((d) => (d.id === deck.id ? { ...d, shared: next } : d)));
+    setViewing((v) => (v && v.id === deck.id ? { ...v, shared: next } : v));
+  }
+
   async function loadExportUrl() {
     const res = await fetch("/api/export/token");
     const json = await res.json();
@@ -420,7 +436,12 @@ export default function DecksPage() {
                 className="card-panel p-4 text-left hover:shadow-md"
                 onClick={() => setViewing(deck)}
               >
-                <div className="font-bold">{deck.name}</div>
+                <div className="font-bold">
+                  {deck.name}
+                  {deck.shared && (
+                    <span className="ml-2 chip bg-green-100 text-green-700">Shared</span>
+                  )}
+                </div>
                 <div className="text-xs text-slate-500">
                   {(deck.cards ?? []).reduce((s, c) => s + c.quantity, 0)} cards ·{" "}
                   {new Date(deck.created_at).toLocaleDateString()}
@@ -466,6 +487,21 @@ export default function DecksPage() {
             <div className="flex items-start justify-between gap-2">
               <h2 className="text-xl font-bold">{viewing.name}</h2>
               <div className="flex shrink-0 items-center gap-1">
+                <button
+                  className={`btn text-sm ${
+                    viewing.shared
+                      ? "text-green-700 hover:bg-green-50"
+                      : "text-slate-600 hover:bg-slate-100"
+                  }`}
+                  title={
+                    viewing.shared
+                      ? "Visible to other members — click to make private"
+                      : "Share this deck with other members (they'll see it on the Friends page)"
+                  }
+                  onClick={() => toggleShareDeck(viewing)}
+                >
+                  {viewing.shared ? "✓ Shared" : "Share"}
+                </button>
                 <button
                   className="btn text-sm text-red-600 hover:bg-red-50"
                   onClick={() => deleteDeck(viewing.id)}
