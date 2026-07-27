@@ -82,6 +82,13 @@ function toSummary(card: TcgdexCard): CardSummary {
   };
 }
 
+/** Refresh pricing for a card we stored from TCGdex ("tcgdex-" id prefix). */
+export async function getTcgdexPriceById(prefixedId: string): Promise<number | null> {
+  const id = prefixedId.replace(/^tcgdex-/, "");
+  const card = await get<TcgdexCard>(`${BASE}/cards/${encodeURIComponent(id)}`);
+  return card ? extractTcgdexPrice(card.pricing) : null;
+}
+
 /** Search TCGdex by name and/or collector number. */
 export async function searchTcgdex(opts: {
   name?: string;

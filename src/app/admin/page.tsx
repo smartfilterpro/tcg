@@ -41,6 +41,13 @@ interface Analytics {
     byFinish: Array<{ finish: string; samples: number; accuracy: number }>;
     confusions: Array<{ from: string; to: string; count: number }>;
   };
+  priceRefresh?: {
+    ranAt: string;
+    checked: number;
+    updated: number;
+    unpriced: number;
+    suspicious: Array<{ id: string; name: string; old: number; next: number }>;
+  } | null;
 }
 
 interface TicketMessage {
@@ -637,6 +644,9 @@ export default function AdminPage() {
             </div>
           )}
 
+          <h3 className="mb-1 mt-4 text-sm font-semibold">💰 Price freshness</h3>
+          <PriceRefreshPanel info={analytics.priceRefresh ?? null} />
+
           <h3 className="mb-1 mt-4 text-sm font-semibold">🎨 Finish detection</h3>
           {analytics.finish?.tracking === false ? (
             <p className="text-xs text-yellow-800">
@@ -965,6 +975,74 @@ export default function AdminPage() {
           </ul>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Last background price-refresh summary + a run-it-now button. */
+function PriceRefreshPanel({
+  info,
+}: {
+  info: {
+    ranAt: string;
+    checked: number;
+    updated: number;
+    unpriced: number;
+    suspicious: Array<{ id: string; name: string; old: number; next: number }>;
+  } | null;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<typeof info>(info);
+  const [error, setError] = useState<string | null>(null);
+  const current = result ?? info;
+
+  async function runNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/refresh-prices", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Refresh failed");
+      setResult(json.summary);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Refresh failed");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+        {current ? (
+          <span>
+            Last run {new Date(current.ranAt).toLocaleString()}: checked {current.checked},
+            updated {current.updated}
+            {current.unpriced > 0 && `, ${current.unpriced} had no price data`}. Runs by
+            itself about once a day, stalest cards first.
+          </span>
+        ) : (
+          <span>
+            No refresh recorded yet — it runs by itself about once a day (needs migration
+            022 to remember runs).
+          </span>
+        )}
+        <button className="btn-secondary text-xs" disabled={busy} onClick={runNow}>
+          {busy ? "Refreshing… (can take a minute)" : "Refresh prices now"}
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      {current && current.suspicious.length > 0 && (
+        <div className="rounded-lg bg-yellow-50 p-2 text-xs text-yellow-800">
+          <b>Held for review (price jumped &gt;5×, not applied):</b>{" "}
+          {current.suspicious
+            .map((s) => `${s.name}: $${s.old.toFixed(2)} → $${s.next.toFixed(2)}`)
+            .join(" · ")}
+          <span className="block text-yellow-700">
+            If a jump is real, fix that card&apos;s price from its detail view (price
+            override) or wait — it&apos;ll be rechecked on later runs.
+          </span>
+        </div>
+      )}
     </div>
   );
 }

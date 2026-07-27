@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { estimateCostUsd } from "@/lib/usage";
 import { itemPrice } from "@/lib/types";
+import { lastPriceRefresh } from "@/lib/priceRefresh";
 
 export interface ScanStats {
   scans: number;
@@ -160,7 +161,10 @@ export async function GET() {
       .sort((a, b) => b.count - a.count)
       .slice(0, 3);
 
+    const priceRefresh = await lastPriceRefresh();
+
     return NextResponse.json({
+      priceRefresh,
       scanTracking: !scanRes.error,
       finish: {
         tracking: !finishRes.error,
