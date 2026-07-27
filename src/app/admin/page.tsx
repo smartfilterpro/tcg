@@ -1013,11 +1013,11 @@ function PriceRefreshPanel({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-        {current ? (
+        {current?.ranAt ? (
           <span>
-            Last run {new Date(current.ranAt).toLocaleString()}: checked {current.checked},
-            updated {current.updated}
-            {current.unpriced > 0 && `, ${current.unpriced} had no price data`}. Runs by
+            Last run {new Date(current.ranAt).toLocaleString()}: checked {current.checked ?? 0},
+            updated {current.updated ?? 0}
+            {(current.unpriced ?? 0) > 0 && `, ${current.unpriced} had no price data`}. Runs by
             itself about once a day, stalest cards first.
           </span>
         ) : (
@@ -1031,11 +1031,11 @@ function PriceRefreshPanel({
         </button>
       </div>
       {error && <p className="text-xs text-red-600">{error}</p>}
-      {current && current.suspicious.length > 0 && (
+      {(current?.suspicious?.length ?? 0) > 0 && (
         <div className="rounded-lg bg-yellow-50 p-2 text-xs text-yellow-800">
           <b>Held for review (price jumped &gt;5×, not applied):</b>{" "}
-          {current.suspicious
-            .map((s) => `${s.name}: $${s.old.toFixed(2)} → $${s.next.toFixed(2)}`)
+          {current!.suspicious
+            .map((s) => `${s.name}: $${(s.old ?? 0).toFixed(2)} → $${(s.next ?? 0).toFixed(2)}`)
             .join(" · ")}
           <span className="block text-yellow-700">
             If a jump is real, fix that card&apos;s price from its detail view (price

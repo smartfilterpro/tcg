@@ -33,6 +33,8 @@ export interface BattleCard {
   basic?: boolean | null;
   /** Trainer subtype Supporter (limited to one per turn). */
   sup?: boolean;
+  /** Trainer subtype Stadium (stays in play in the shared Stadium spot). */
+  stad?: boolean;
   /** Max HP when known — enables auto-knockout. */
   hp?: number | null;
   /** Energy types (for weakness/resistance matching). */
@@ -99,6 +101,8 @@ export interface BattleState {
   firstUser?: string;
   /** Per-turn limits already used by the current turn player. */
   flags?: { energy?: boolean; supporter?: boolean; retreated?: boolean };
+  /** The Stadium in play (shared spot, one at a time). */
+  stadium?: { card: BattleCard; owner: string } | null;
   turnUser: string | null;
   turnCount: number;
   log: LogEntry[];
@@ -114,9 +118,17 @@ export type BattleAction = { override?: boolean } & (
   | { type: "handToBench"; handIndex: number; benchIndex?: number; mode: "new" | "evolve" | "attach" }
   | { type: "handToDiscard"; handIndex: number }
   | { type: "playCard"; handIndex: number }
-  | { type: "deckTake"; uid: string }
+  | { type: "deckTake"; uid: string; to?: "hand" | "top" }
   | { type: "millDeck"; n: number }
   | { type: "discardToHand"; discardIndex: number }
+  | { type: "handToDeck"; handIndex: number; where: "top" | "bottom" | "shuffle" }
+  | { type: "stackToDeck"; target: "active" | number }
+  | { type: "devolve"; target: "active" | number; to: "hand" | "discard" }
+  | { type: "playStadium"; handIndex: number }
+  | { type: "discardStadium" }
+  | { type: "promoteOpp"; benchIndex: number }
+  | { type: "reveal"; handIndex: number }
+  | { type: "useAbility"; target: "active" | number; abilityIndex: number }
   | { type: "promote"; benchIndex: number }
   | { type: "attack"; attackIndex: number }
   | { type: "setStatus"; side: "me" | "opp"; target: "active" | number; status: StatusCondition; on: boolean }
@@ -527,9 +539,104 @@ export function applyAction(
       const idx = me.deck.findIndex((c) => c.uid === action.uid);
       if (idx === -1) throw new BattleError("That card isn't in your deck.");
       const [card] = me.deck.splice(idx, 1);
-      me.hand.push(card);
       me.deck = shuffle(me.deck);
+      if (action.to === "top") {
+        me.deck.unshift(card);
+        return { text: `searched their deck, shuffled, and put a card on top${effectNote}` };
+      }
+      me.hand.push(card);
       return { text: `searched their deck, took 1 card, and shuffled${effectNote}` };
+    }
+    case "handToDeck": {
+      const card = takeHandCard(me, action.handIndex);
+      if (action.where === "top") me.deck.unshift(card);
+      else if (action.where === "bottom") me.deck.push(card);
+      else {
+        me.deck.push(card);
+        me.deck = shuffle(me.deck);
+      }
+      const whereText =
+        action.where === "top" ? "on top of" : action.where === "bottom" ? "on the bottom of" : "shuffled into";
+      return { text: `put a card from their hand ${whereText} their deck${effectNote}` };
+    }
+    case "stackToDeck": {
+      const stack = removeStack(me, action.target);
+      me.deck.push(...stackCards(stack));
+      me.deck = shuffle(me.deck);
+      return { text: `shuffled ${stack.face.name} (and everything attached) into their deck${effectNote}` };
+    }
+    case "devolve": {
+      const stack = getStack(me, action.target);
+      let prevIdx = -1;
+      for (let i = stack.attached.length - 1; i >= 0; i--) {
+        if (stack.attached[i].cat === "pokemon" || stack.attached[i].cat == null) {
+          prevIdx = i;
+          break;
+        }
+      }
+      if (prevIdx === -1) {
+        throw new BattleError(`${stack.face.name} has no earlier stage underneath to devolve into.`);
+      }
+      const removed = stack.face;
+      stack.face = stack.attached[prevIdx];
+      stack.attached.splice(prevIdx, 1);
+      if (action.to === "hand") me.hand.push(removed);
+      else me.discard.push(removed);
+      return {
+        text: `devolved ${removed.name} (${action.to === "hand" ? "to their hand" : "discarded"}) — ${stack.face.name} stays in play${effectNote}`,
+      };
+    }
+    case "playStadium": {
+      needPlayPhase();
+      needTurn("play a Stadium");
+      const card = me.hand[action.handIndex];
+      if (!card) throw new BattleError("That card isn't in your hand anymore.");
+      takeHandCard(me, action.handIndex);
+      let text = `played the Stadium ${card.name}`;
+      const old = state.stadium;
+      if (old) {
+        state.sides[old.owner]?.discard.push(old.card);
+        text += ` — ${old.card.name} is discarded`;
+      }
+      state.stadium = { card, owner: meId };
+      if (card.rules?.length) {
+        const t = card.rules.join(" ");
+        text += ` — “${t.length > 180 ? t.slice(0, 180) + "…" : t}”`;
+      }
+      return { text: `${text}${effectNote}` };
+    }
+    case "discardStadium": {
+      const stadium = state.stadium;
+      if (!stadium) throw new BattleError("There's no Stadium in play.");
+      state.sides[stadium.owner]?.discard.push(stadium.card);
+      state.stadium = null;
+      return { text: `discarded the Stadium ${stadium.card.name}${effectNote}` };
+    }
+    case "promoteOpp": {
+      // Gust effects (Boss's Orders): YOU move the opponent's Pokémon.
+      needPlayPhase();
+      needTurn("switch the opposing Active");
+      const bench = opp.bench[action.benchIndex];
+      if (!bench) throw new BattleError("Nothing in that Bench spot.");
+      opp.bench.splice(action.benchIndex, 1);
+      if (opp.active) {
+        opp.active.status = []; // leaving Active clears conditions
+        opp.bench.push(opp.active);
+      }
+      opp.active = bench;
+      return { text: `switched ${oppName}'s Active — ${bench.face.name} is now Active (card effect)` };
+    }
+    case "reveal": {
+      const card = me.hand[action.handIndex];
+      if (!card) throw new BattleError("That card isn't in your hand anymore.");
+      return { text: `revealed ${card.name} from their hand` };
+    }
+    case "useAbility": {
+      const stack = getStack(me, action.target);
+      const ability = stack.face.abilities?.[action.abilityIndex];
+      if (!ability) throw new BattleError("That ability isn't on this card.");
+      const t = ability.text.length > 180 ? ability.text.slice(0, 180) + "…" : ability.text;
+      return { text: `used ${stack.face.name}'s ability “${ability.name}”${t ? ` — ${t}` : ""}` };
     }
     case "millDeck": {
       const n = Math.max(1, Math.min(5, Math.round(action.n)));
@@ -805,6 +912,8 @@ export interface BattleView {
   phase: "setup" | "play";
   myTurn: boolean;
   turnCount: number;
+  /** The shared Stadium in play, if any. */
+  stadium: { card: BattleCard; mine: boolean } | null;
   log: LogEntry[];
 }
 
@@ -830,6 +939,9 @@ export function redactState(state: BattleState, viewerId: string, oppId: string)
     phase: state.rules === true ? (state.phase ?? "setup") : "play",
     myTurn: state.turnUser === viewerId,
     turnCount: state.turnCount,
+    stadium: state.stadium
+      ? { card: state.stadium.card, mine: state.stadium.owner === viewerId }
+      : null,
     log: state.log.slice(-100),
   };
 }

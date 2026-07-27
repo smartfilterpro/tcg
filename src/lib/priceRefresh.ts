@@ -133,7 +133,17 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
       .eq("key", STATE_KEY)
       .maybeSingle();
     if (error || !data) return null;
-    return data.value as PriceRefreshSummary;
+    const value = data.value as Partial<PriceRefreshSummary> | null;
+    // The loop's claim upsert creates the row with an EMPTY value before the
+    // first run finishes — that's not a summary yet.
+    if (!value || typeof value.ranAt !== "string") return null;
+    return {
+      ranAt: value.ranAt,
+      checked: value.checked ?? 0,
+      updated: value.updated ?? 0,
+      unpriced: value.unpriced ?? 0,
+      suspicious: Array.isArray(value.suspicious) ? value.suspicious : [],
+    };
   } catch {
     return null;
   }
