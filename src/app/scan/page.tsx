@@ -284,6 +284,11 @@ export default function ScanPage() {
               Start over
             </button>
           </div>
+          <p className="mb-3 -mt-1 text-[11px] text-slate-400">
+            💡 Double-check the finish: <b>Holo</b> = only the artwork shines ·{" "}
+            <b>Reverse Holo</b> = everything <i>but</i> the artwork shines ·{" "}
+            gold logo stamped on the art = stamped promo.
+          </p>
 
           <div className="space-y-3">
             {rows.map((row) => (
