@@ -7,6 +7,7 @@ import { searchCards, getBattleDataById, type CardBattleData } from "@/lib/pokem
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { checkAiBudget } from "@/lib/usage";
 import { analyzeDeck, analysisSummary, type DeckMathEntry } from "@/lib/deckMath";
+import { normalizeForSearch } from "@/lib/text";
 import type { CardSummary, CardSummaryRow, DeckCardEntry } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -144,6 +145,10 @@ DECK QUALITY CRAFT — apply these principles:
   deck possible and say so honestly in the strategy.
 
 UPGRADE SUGGESTIONS (missing_suggestions):
+The collection JSON is the COMPLETE truth of what the player owns — check it
+before every suggestion. Never suggest a card whose name appears in the
+collection, except to add extra copies beyond what they own (and then say
+how many they already have). The app verifies this and removes violations.
 Recommend up to 5 real, currently-purchasable cards the player does NOT own
 that would most strengthen THIS exact deck — consistency staples (draw
 supporters, search items), a stronger attacker for the chosen line, or the
@@ -471,6 +476,28 @@ export async function POST(req: Request) {
             ? `\n⚠️ Remaining flags: ${analysis.issues.join(" ")}`
             : ""
         }`;
+
+        // The model CLAIMS these cards are unowned — verify against the
+        // collection, which is ground truth. Owned enough → drop the
+        // suggestion; owned some → suggest only the missing copies.
+        const ownedQtyByName = new Map<string, number>();
+        for (const c of collection) {
+          const k = normalizeForSearch(c.name);
+          ownedQtyByName.set(k, (ownedQtyByName.get(k) ?? 0) + c.qty);
+        }
+        deck.missing_suggestions = (deck.missing_suggestions ?? [])
+          .map((s) => {
+            const owned = ownedQtyByName.get(normalizeForSearch(s.name)) ?? 0;
+            if (owned <= 0) return s;
+            if (owned >= s.quantity) return null; // already own enough — not a purchase
+            const extra = s.quantity - owned;
+            return {
+              ...s,
+              quantity: extra,
+              reason: `You already own ${owned} — this is for ${extra} more. ${s.reason}`,
+            };
+          })
+          .filter((s): s is NonNullable<typeof s> => s !== null);
 
         // Enrich upgrade suggestions with real card data (image + market
         // price) so the wishlist shows what to buy and what it costs.
