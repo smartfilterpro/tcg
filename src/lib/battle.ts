@@ -114,7 +114,7 @@ export interface BattleState {
 
 export type BattleAction = { override?: boolean } & (
   | { type: "draw" }
-  | { type: "shuffleDeck" }
+  | { type: "shuffleDeck"; keepTop?: number }
   | { type: "mulligan" }
   | { type: "setPrizes" }
   | { type: "ready" }
@@ -122,7 +122,7 @@ export type BattleAction = { override?: boolean } & (
   | { type: "handToBench"; handIndex: number; benchIndex?: number; mode: "new" | "evolve" | "attach" }
   | { type: "handToDiscard"; handIndex: number }
   | { type: "playCard"; handIndex: number }
-  | { type: "deckTake"; uid: string; to?: "hand" | "top" }
+  | { type: "deckTake"; uid: string; to?: "hand" | "top"; noShuffle?: boolean }
   | { type: "millDeck"; n: number }
   | { type: "discardToHand"; discardIndex: number }
   | { type: "handToDeck"; handIndex: number; where: "top" | "bottom" | "shuffle" }
@@ -377,6 +377,15 @@ export function applyAction(
       return { text: `drew a card${effectNote}` };
     }
     case "shuffleDeck": {
+      // keepTop: card effects that stack the top then say "shuffle the rest".
+      const keep = Math.max(0, Math.min(10, Math.round(action.keepTop ?? 0)));
+      if (keep > 0) {
+        const top = me.deck.slice(0, keep);
+        me.deck = [...top, ...shuffle(me.deck.slice(keep))];
+        return {
+          text: `shuffled their deck, keeping the top ${keep} card${keep === 1 ? "" : "s"} in place${effectNote}`,
+        };
+      }
       me.deck = shuffle(me.deck);
       return { text: "shuffled their deck" };
     }
@@ -546,17 +555,28 @@ export function applyAction(
     }
     case "deckTake": {
       // The player already saw their (alphabetized) deck via the search
-      // view; take the chosen card, then shuffle — like a real deck search.
+      // view; take the chosen card. A search normally ends in a shuffle,
+      // but some card effects say NOT to shuffle — noShuffle keeps the
+      // rest of the deck in its exact order.
       const idx = me.deck.findIndex((c) => c.uid === action.uid);
       if (idx === -1) throw new BattleError("That card isn't in your deck.");
       const [card] = me.deck.splice(idx, 1);
-      me.deck = shuffle(me.deck);
+      const shuffled = action.noShuffle !== true;
+      if (shuffled) me.deck = shuffle(me.deck);
       if (action.to === "top") {
         me.deck.unshift(card);
-        return { text: `searched their deck, shuffled, and put a card on top${effectNote}` };
+        return {
+          text: shuffled
+            ? `searched their deck, shuffled, and put a card on top${effectNote}`
+            : `moved a card from their deck to the top — WITHOUT shuffling${effectNote}`,
+        };
       }
       me.hand.push(card);
-      return { text: `searched their deck, took 1 card, and shuffled${effectNote}` };
+      return {
+        text: shuffled
+          ? `searched their deck, took 1 card, and shuffled${effectNote}`
+          : `took a card from their deck WITHOUT shuffling${effectNote}`,
+      };
     }
     case "handToDeck": {
       const card = takeHandCard(me, action.handIndex);

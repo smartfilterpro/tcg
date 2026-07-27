@@ -129,6 +129,7 @@ export default function BattleBoardPage() {
   const [viewPile, setViewPile] = useState<{ title: string; cards: BattleCard[]; mine?: boolean } | null>(null);
   const [zoomCard, setZoomCard] = useState<BattleCard | null>(null);
   const [deckSearch, setDeckSearch] = useState<BattleCard[] | null>(null);
+  const [searchShuffle, setSearchShuffle] = useState(true);
   const [busy, setBusy] = useState(false);
   const dataRef = useRef<BattleData | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
@@ -647,9 +648,20 @@ export default function BattleBoardPage() {
             </div>
             <p className="mb-2 text-xs text-slate-500">
               Cards are shown A→Z (the real order stays secret). Tap a card to read it, then
-              take it to your hand or put it on top — your deck shuffles first either way,
-              and your opponent only sees that you took 1 card.
+              take it to your hand or put it on top. Your opponent only sees that you took 1
+              card.
             </p>
+            <label className="mb-2 flex items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={searchShuffle}
+                onChange={(e) => setSearchShuffle(e.target.checked)}
+              />
+              <span>
+                Shuffle the rest of the deck afterwards (normal for searches — untick only
+                when a card effect says not to shuffle)
+              </span>
+            </label>
             <div className="grid grid-cols-4 gap-2">
               {deckSearch.map((c) => (
                 <div key={c.uid}>
@@ -664,7 +676,7 @@ export default function BattleBoardPage() {
                       className="text-poke-blue hover:underline"
                       disabled={busy}
                       onClick={() => {
-                        act({ type: "deckTake", uid: c.uid, to: "hand" });
+                        act({ type: "deckTake", uid: c.uid, to: "hand", noShuffle: !searchShuffle });
                         setDeckSearch(null);
                       }}
                     >
@@ -674,7 +686,7 @@ export default function BattleBoardPage() {
                       className="text-slate-500 hover:underline"
                       disabled={busy}
                       onClick={() => {
-                        act({ type: "deckTake", uid: c.uid, to: "top" });
+                        act({ type: "deckTake", uid: c.uid, to: "top", noShuffle: !searchShuffle });
                         setDeckSearch(null);
                       }}
                     >
@@ -779,6 +791,19 @@ function SheetContent({
         <button className={row} disabled={busy} onClick={() => act({ type: "shuffleDeck" })}>
           🔀 Shuffle deck
         </button>
+        <div className="flex items-center gap-2 border-b border-slate-100 py-2.5 text-sm">
+          <span>🔀 Shuffle all but the top:</span>
+          {[1, 2, 3].map((n) => (
+            <button
+              key={n}
+              className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700"
+              disabled={busy}
+              onClick={() => act({ type: "shuffleDeck", keepTop: n })}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
         {(!rules || phase === "play") && (
           <>
             <button className={row} disabled={busy} onClick={openDeckSearch}>
