@@ -434,6 +434,8 @@ export default function FriendsPage() {
         </button>
       </div>
 
+      {!friend && <PalsSection />}
+
       {!friend && (
         <>
           {offers.length > 0 && (
@@ -646,6 +648,9 @@ export default function FriendsPage() {
                       <div className="text-xs text-slate-400">
                         by {d.ownerName} ·{" "}
                         {(d.cards ?? []).reduce((s, c) => s + c.quantity, 0)} cards
+                        {d.share_scope === "friends" && (
+                          <span className="ml-1 chip bg-poke-blue/10 text-poke-blue">🤝 pals</span>
+                        )}
                       </div>
                     </div>
                     <button
@@ -1644,6 +1649,265 @@ function SharedDeckList({ cards }: { cards: DeckCardEntry[] }) {
               </div>
             </div>
           )
+      )}
+    </div>
+  );
+}
+
+/** 🤝 Pokémon Pals — mutual friendships a tier above group sharing.
+ *  Being pals unlocks direct messages and pals-only deck sharing. */
+function PalsSection() {
+  interface PalMsg {
+    id: string;
+    mine: boolean;
+    authorName: string;
+    body: string;
+    created_at: string;
+  }
+  interface Pal {
+    id: string;
+    userId: string;
+    name: string;
+    since: string;
+    messages: PalMsg[];
+  }
+  interface PalReq {
+    id: string;
+    userId: string;
+    name: string;
+  }
+  interface PalsData {
+    migrated: boolean;
+    pals: Pal[];
+    incoming: PalReq[];
+    outgoing: PalReq[];
+    candidates: Array<{ userId: string; name: string }>;
+  }
+
+  const [data, setData] = useState<PalsData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [addPick, setAddPick] = useState("");
+  const [openThread, setOpenThread] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+
+  async function load() {
+    try {
+      const res = await fetch("/api/friends/requests");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to load pals");
+      setData(json);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to load pals");
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function call(input: RequestInfo, init: RequestInit) {
+    if (busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(input, init);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Request failed");
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Request failed");
+    }
+    setBusy(false);
+  }
+
+  const jsonInit = (method: string, body: unknown): RequestInit => ({
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!data) return null;
+
+  if (!data.migrated) {
+    return (
+      <div className="card-panel p-4">
+        <h2 className="font-semibold">🤝 Pokémon Pals</h2>
+        <p className="mt-1 rounded-lg bg-yellow-50 p-3 text-sm text-yellow-800">
+          Pals need a one-time database update — ask the admin to run{" "}
+          <code>supabase/migrations/020_pals.sql</code>.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card-panel space-y-3 p-4">
+      <div>
+        <h2 className="font-semibold">
+          🤝 Pokémon Pals ({data.pals.length})
+          {data.incoming.length > 0 && (
+            <span className="ml-2 chip bg-red-50 text-red-700">
+              {data.incoming.length} request{data.incoming.length === 1 ? "" : "s"}
+            </span>
+          )}
+        </h2>
+        <p className="text-xs text-slate-500">
+          Pals are mutual — they unlock direct messages and &ldquo;pals only&rdquo; deck
+          sharing (set per deck on the Decks page).
+        </p>
+      </div>
+
+      {err && <div className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{err}</div>}
+
+      {data.incoming.map((r) => (
+        <div key={r.id} className="flex items-center justify-between gap-2 rounded-lg bg-poke-blue/5 p-2.5">
+          <span className="text-sm">
+            <b>{r.name}</b> wants to be pals
+          </span>
+          <span className="flex shrink-0 gap-2">
+            <button
+              className="btn-primary text-xs"
+              disabled={busy}
+              onClick={() => call("/api/friends/requests", jsonInit("PATCH", { id: r.id, action: "accept" }))}
+            >
+              Accept
+            </button>
+            <button
+              className="btn-secondary text-xs"
+              disabled={busy}
+              onClick={() => call("/api/friends/requests", jsonInit("PATCH", { id: r.id, action: "decline" }))}
+            >
+              Decline
+            </button>
+          </span>
+        </div>
+      ))}
+
+      {data.pals.length === 0 && data.incoming.length === 0 && (
+        <p className="text-sm text-slate-400">No pals yet — send a request below.</p>
+      )}
+
+      <ul className="divide-y divide-slate-100">
+        {data.pals.map((p) => (
+          <li key={p.id} className="py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium">{p.name}</span>
+              <span className="flex shrink-0 items-center gap-2">
+                <button
+                  className="btn-secondary text-xs"
+                  onClick={() => {
+                    setOpenThread(openThread === p.id ? null : p.id);
+                    setDraft("");
+                  }}
+                >
+                  💬 {p.messages.length > 0 ? p.messages.length : "Message"}
+                </button>
+                <button
+                  aria-label={`Remove ${p.name} as a pal`}
+                  className="text-slate-400 hover:text-red-600"
+                  disabled={busy}
+                  onClick={() => {
+                    if (confirm(`Remove ${p.name} as a pal?`)) {
+                      call("/api/friends/requests", jsonInit("DELETE", { id: p.id }));
+                    }
+                  }}
+                >
+                  ✕
+                </button>
+              </span>
+            </div>
+            {openThread === p.id && (
+              <div className="mt-2 space-y-2 rounded-lg bg-slate-50 p-2">
+                {p.messages.length === 0 ? (
+                  <p className="text-xs text-slate-400">No messages yet — say hi!</p>
+                ) : (
+                  p.messages.map((m) => (
+                    <div
+                      key={m.id}
+                      className={`max-w-[85%] rounded-lg p-2 text-sm ${
+                        m.mine ? "ml-auto bg-poke-blue/10" : "bg-white"
+                      }`}
+                    >
+                      <div className="text-[10px] text-slate-400">
+                        {m.authorName} · {new Date(m.created_at).toLocaleString()}
+                      </div>
+                      <p className="whitespace-pre-wrap">{m.body}</p>
+                    </div>
+                  ))
+                )}
+                <form
+                  className="flex gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!draft.trim()) return;
+                    call(`/api/friends/pals/${p.id}/messages`, jsonInit("POST", { body: draft }));
+                    setDraft("");
+                  }}
+                >
+                  <input
+                    className="input text-sm"
+                    placeholder={`Message ${p.name}…`}
+                    maxLength={4000}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                  />
+                  <button className="btn-primary shrink-0 text-sm" disabled={busy || !draft.trim()}>
+                    Send
+                  </button>
+                </form>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {data.outgoing.length > 0 && (
+        <div className="text-xs text-slate-500">
+          Waiting on:{" "}
+          {data.outgoing.map((r, i) => (
+            <span key={r.id}>
+              {i > 0 && " · "}
+              {r.name}{" "}
+              <button
+                className="text-slate-400 hover:underline"
+                disabled={busy}
+                onClick={() => call("/api/friends/requests", jsonInit("DELETE", { id: r.id }))}
+              >
+                (cancel)
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {data.candidates.length > 0 && (
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!addPick) return;
+            call("/api/friends/requests", jsonInit("POST", { toUserId: addPick }));
+            setAddPick("");
+          }}
+        >
+          <select
+            className="input text-sm"
+            value={addPick}
+            onChange={(e) => setAddPick(e.target.value)}
+          >
+            <option value="">Send a pal request to…</option>
+            {data.candidates.map((c) => (
+              <option key={c.userId} value={c.userId}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <button className="btn-secondary shrink-0 text-sm" disabled={busy || !addPick}>
+            Send
+          </button>
+        </form>
       )}
     </div>
   );

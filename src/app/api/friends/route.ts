@@ -50,10 +50,12 @@ export async function GET() {
 
     let sharedDecks: SharedDeck[] = [];
     if (migrated) {
+      // No .eq("shared") filter: row-level security decides what's visible —
+      // everyone-scope decks, pals-only decks (if we're pals), and decks
+      // shared directly with this user (migration 020).
       const { data: decks } = await supabase
         .from("decks")
         .select("*")
-        .eq("shared", true)
         .neq("user_id", user.id)
         .order("created_at", { ascending: false })
         .limit(50);

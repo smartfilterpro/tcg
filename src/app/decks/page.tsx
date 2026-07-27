@@ -648,20 +648,27 @@ export default function DecksPage() {
     setViewing(null);
   }
 
-  async function toggleShareDeck(deck: Deck) {
-    const next = !deck.shared;
+  async function setDeckSharing(deck: Deck, mode: "off" | "everyone" | "friends") {
+    const body =
+      mode === "off"
+        ? { shared: false }
+        : { shared: true, shareScope: mode };
     const res = await fetch(`/api/decks/${deck.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ shared: next }),
+      body: JSON.stringify(body),
     });
     const json = await res.json();
     if (!res.ok) {
       setError(json.error || "Couldn't update sharing");
       return;
     }
-    setDecks((prev) => prev.map((d) => (d.id === deck.id ? { ...d, shared: next } : d)));
-    setViewing((v) => (v && v.id === deck.id ? { ...v, shared: next } : v));
+    const patch: Partial<Deck> = {
+      shared: mode !== "off",
+      share_scope: mode === "friends" ? "friends" : "everyone",
+    };
+    setDecks((prev) => prev.map((d) => (d.id === deck.id ? { ...d, ...patch } : d)));
+    setViewing((v) => (v && v.id === deck.id ? { ...v, ...patch } : v));
   }
 
   const groupCards = (cards: DeckCardEntry[]) => ({
@@ -774,7 +781,9 @@ export default function DecksPage() {
                 <div className="font-bold">
                   {deck.name}
                   {deck.shared && (
-                    <span className="ml-2 chip bg-green-100 text-green-700">Shared</span>
+                    <span className="ml-2 chip bg-green-100 text-green-700">
+                      {deck.share_scope === "friends" ? "🤝 Pals only" : "Shared"}
+                    </span>
                   )}
                 </div>
                 <div className="text-xs text-slate-500">
@@ -799,21 +808,18 @@ export default function DecksPage() {
             <div className="flex items-start justify-between gap-2">
               <h2 className="text-xl font-bold">{viewing.name}</h2>
               <div className="flex shrink-0 items-center gap-1">
-                <button
-                  className={`btn text-sm ${
-                    viewing.shared
-                      ? "text-green-700 hover:bg-green-50"
-                      : "text-slate-600 hover:bg-slate-100"
-                  }`}
-                  title={
-                    viewing.shared
-                      ? "Visible to other members — click to make private"
-                      : "Share this deck with other members (they'll see it on the Friends page)"
+                <select
+                  className="input w-auto py-1.5 text-sm"
+                  title="Who can see this deck on the Friends page"
+                  value={viewing.shared ? (viewing.share_scope === "friends" ? "friends" : "everyone") : "off"}
+                  onChange={(e) =>
+                    setDeckSharing(viewing, e.target.value as "off" | "everyone" | "friends")
                   }
-                  onClick={() => toggleShareDeck(viewing)}
                 >
-                  {viewing.shared ? "✓ Shared" : "Share"}
-                </button>
+                  <option value="off">🔒 Not shared</option>
+                  <option value="everyone">🌍 Everyone</option>
+                  <option value="friends">🤝 Pals only</option>
+                </select>
                 <button
                   className="btn text-sm text-red-600 hover:bg-red-50"
                   onClick={() => deleteDeck(viewing.id)}
@@ -829,6 +835,7 @@ export default function DecksPage() {
                 </button>
               </div>
             </div>
+            <DeckDirectShares deckId={viewing.id} />
             {viewing.strategy && (
               <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{viewing.strategy}</p>
             )}
@@ -891,4 +898,89 @@ export default function DecksPage() {
       </div>
     );
   }
+}
+
+/** Owner-side controls for sharing a deck with one specific pal, on top of
+ *  the Not-shared / Everyone / Pals-only scope. */
+function DeckDirectShares({ deckId }: { deckId: string }) {
+  const [shares, setShares] = useState<Array<{ userId: string; name: string }>>([]);
+  const [pals, setPals] = useState<Array<{ userId: string; name: string }>>([]);
+  const [available, setAvailable] = useState(true);
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/decks/${deckId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!j) return;
+        setShares(j.shares ?? []);
+        if (j.migrated === false) setAvailable(false);
+      })
+      .catch(() => {});
+    fetch("/api/friends/requests")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!j) return;
+        if (j.migrated === false) setAvailable(false);
+        setPals((j.pals ?? []).map((p: { userId: string; name: string }) => ({ userId: p.userId, name: p.name })));
+      })
+      .catch(() => {});
+  }, [deckId]);
+
+  async function update(body: Record<string, string>) {
+    setBusy(true);
+    await fetch(`/api/decks/${deckId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+    const res = await fetch(`/api/decks/${deckId}`).catch(() => null);
+    if (res?.ok) {
+      const j = await res.json();
+      setShares(j.shares ?? []);
+    }
+    setBusy(false);
+  }
+
+  if (!available || (pals.length === 0 && shares.length === 0)) return null;
+  const options = pals.filter((p) => !shares.some((s) => s.userId === p.userId));
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+      <span>Also shared with:</span>
+      {shares.length === 0 && <span className="text-slate-400">nobody specific</span>}
+      {shares.map((s) => (
+        <span key={s.userId} className="chip flex items-center gap-1 bg-poke-blue/10 text-poke-blue">
+          {s.name}
+          <button
+            aria-label={`Stop sharing with ${s.name}`}
+            disabled={busy}
+            onClick={() => update({ removeShareUserId: s.userId })}
+          >
+            ✕
+          </button>
+        </span>
+      ))}
+      {options.length > 0 && (
+        <select
+          className="input w-auto py-1 text-xs"
+          value={pick}
+          disabled={busy}
+          onChange={(e) => {
+            const v = e.target.value;
+            setPick("");
+            if (v) update({ addShareUserId: v });
+          }}
+        >
+          <option value="">+ share with a pal…</option>
+          {options.map((p) => (
+            <option key={p.userId} value={p.userId}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
 }
