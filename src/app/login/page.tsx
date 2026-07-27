@@ -1,13 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 export default function LoginPage() {
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [tosAgreed, setTosAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Existing account that hasn't accepted the Terms yet: agree or sign out.
+  const [needsTos, setNeedsTos] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -17,8 +21,27 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, mode }),
+        body: JSON.stringify({ email, password, mode, tosAgreed }),
       });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Something went wrong");
+      if (json.needsTos) {
+        setNeedsTos(true);
+        setBusy(false);
+        return;
+      }
+      window.location.href = "/";
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+      setBusy(false);
+    }
+  }
+
+  async function acceptTos() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/auth/accept-tos", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Something went wrong");
       window.location.href = "/";
@@ -26,6 +49,46 @@ export default function LoginPage() {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setBusy(false);
     }
+  }
+
+  async function declineTos() {
+    setBusy(true);
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    setNeedsTos(false);
+    setPassword("");
+    setBusy(false);
+  }
+
+  if (needsTos) {
+    return (
+      <div className="mx-auto mt-16 max-w-sm">
+        <div className="card-panel p-8">
+          <div className="mb-4 text-center">
+            <div className="mx-auto mb-3 h-12 w-12 rounded-full border-4 border-poke-dark bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
+            <h1 className="text-xl font-bold">One quick thing</h1>
+          </div>
+          <p className="text-sm leading-relaxed text-slate-600">
+            PokéDeck now has{" "}
+            <Link href="/terms" target="_blank" className="font-medium text-poke-blue hover:underline">
+              Terms of Service
+            </Link>{" "}
+            covering data accuracy, trades between members, messages, and age requirements.
+            You need to agree to them to keep using the app.
+          </p>
+          <button className="btn-primary mt-4 w-full" disabled={busy} onClick={acceptTos}>
+            I agree to the Terms of Service
+          </button>
+          <button
+            className="btn-secondary mt-2 w-full"
+            disabled={busy}
+            onClick={declineTos}
+          >
+            Not now — sign me out
+          </button>
+          {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -59,6 +122,25 @@ export default function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
+          {mode === "signup" && (
+            <label className="flex items-start gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                required
+                checked={tosAgreed}
+                onChange={(e) => setTosAgreed(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                I am at least 13 years old and agree to the{" "}
+                <Link href="/terms" target="_blank" className="font-medium text-poke-blue hover:underline">
+                  Terms of Service
+                </Link>
+                , including that card data, prices, and AI output are estimates and that
+                trades happen between members at their own risk.
+              </span>
+            </label>
+          )}
           <button className="btn-primary w-full" disabled={busy}>
             {busy
               ? mode === "signup"
@@ -86,6 +168,11 @@ export default function LoginPage() {
           {mode === "signup"
             ? "Invite-only — your email must be on the invite list."
             : "Forgot your password? Ask the admin to reset it."}
+        </p>
+        <p className="mt-2 text-center text-xs text-slate-400">
+          <Link href="/terms" className="hover:underline">
+            Terms of Service
+          </Link>
         </p>
       </div>
     </div>

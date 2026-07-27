@@ -7,10 +7,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *  Signup is allowed if (a) no users exist yet (bootstrap the admin) or
  *  (b) the email is on the invite list. No emails are ever sent. */
 export async function POST(req: Request) {
-  const { email, password, mode } = (await req.json()) as {
+  const { email, password, mode, tosAgreed } = (await req.json()) as {
     email?: string;
     password?: string;
     mode?: "signin" | "signup";
+    tosAgreed?: boolean;
   };
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
@@ -23,6 +24,13 @@ export async function POST(req: Request) {
   }
   const normalized = email.trim().toLowerCase();
   const supabase = await createClient();
+
+  if (mode === "signup" && tosAgreed !== true) {
+    return NextResponse.json(
+      { error: "You must agree to the Terms of Service to create an account." },
+      { status: 400 }
+    );
+  }
 
   if (mode === "signup") {
     const admin = createAdminClient();
@@ -82,6 +90,22 @@ export async function POST(req: Request) {
       { error: "Your account is suspended — contact the admin." },
       { status: 403 }
     );
+  }
+
+  // Terms of Service acceptance (column exists after migration 016).
+  // Skip enforcement gracefully on pre-migration databases.
+  const tosTracked = prof != null && "tos_accepted_at" in prof;
+  if (tosTracked && prof.tos_accepted_at == null) {
+    if (tosAgreed === true) {
+      await supabase
+        .from("profiles")
+        .update({ tos_accepted_at: new Date().toISOString() })
+        .eq("id", prof.id);
+    } else {
+      // Session stays open so the accept endpoint can be called; the client
+      // must show the Terms and either accept or sign out.
+      return NextResponse.json({ ok: true, needsTos: true });
+    }
   }
 
   return NextResponse.json({ ok: true });
