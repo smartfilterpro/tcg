@@ -76,6 +76,9 @@ export default function FriendsPage() {
   const [error, setError] = useState<string | null>(null);
   const [migrated, setMigrated] = useState(true);
   const [sharing, setSharing] = useState(false);
+  const [myName, setMyName] = useState("");
+  const [nameDraft, setNameDraft] = useState("");
+  const [nameSaved, setNameSaved] = useState(false);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [sharedDecks, setSharedDecks] = useState<SharedDeck[]>([]);
   const [viewingDeck, setViewingDeck] = useState<SharedDeck | null>(null);
@@ -103,6 +106,8 @@ export default function FriendsPage() {
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setMigrated(json.migrated);
       setSharing(json.sharing);
+      setMyName(json.myName ?? "");
+      setNameDraft(json.myName ?? "");
       setFriends(json.friends ?? []);
       setSharedDecks(json.sharedDecks ?? []);
     } catch (e) {
@@ -228,6 +233,50 @@ export default function FriendsPage() {
           <code>supabase/migrations/008_sharing.sql</code> in the Supabase SQL editor.
         </div>
       )}
+
+      <div className="card-panel p-4">
+        <h2 className="font-semibold">Your username</h2>
+        <p className="mb-2 text-xs text-slate-500">
+          This is what other members see instead of your email — on shared collections,
+          decks, trades, and the trade board.
+        </p>
+        <form
+          className="flex gap-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setError(null);
+            setNameSaved(false);
+            const res = await fetch("/api/account", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ displayName: nameDraft }),
+            });
+            const json = await res.json();
+            if (!res.ok) setError(json.error);
+            else {
+              setMyName(json.displayName);
+              setNameSaved(true);
+            }
+          }}
+        >
+          <input
+            className="input"
+            maxLength={30}
+            value={nameDraft}
+            onChange={(e) => {
+              setNameDraft(e.target.value);
+              setNameSaved(false);
+            }}
+            placeholder="e.g. AshK"
+          />
+          <button
+            className="btn-secondary shrink-0"
+            disabled={!nameDraft.trim() || nameDraft.trim() === myName}
+          >
+            {nameSaved ? "✓ Saved" : "Save"}
+          </button>
+        </form>
+      </div>
 
       <div className="card-panel flex items-center justify-between gap-3 p-4">
         <div>
