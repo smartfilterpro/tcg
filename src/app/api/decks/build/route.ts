@@ -146,9 +146,10 @@ DECK QUALITY CRAFT — apply these principles:
 
 UPGRADE SUGGESTIONS (missing_suggestions):
 The collection JSON is the COMPLETE truth of what the player owns — check it
-before every suggestion. Never suggest a card whose name appears in the
-collection, except to add extra copies beyond what they own (and then say
-how many they already have). The app verifies this and removes violations.
+before every suggestion, and also check YOUR OWN deck list: never suggest a
+card the deck already runs at 4 copies, and when the deck runs some copies,
+phrase the suggestion as going from N to M. Never suggest basic energy. The
+app verifies all of this and removes or trims violations.
 Recommend up to 5 real, currently-purchasable cards the player does NOT own
 that would most strengthen THIS exact deck — consistency staples (draw
 supporters, search items), a stronger attacker for the chosen line, or the
@@ -477,24 +478,43 @@ export async function POST(req: Request) {
             : ""
         }`;
 
-        // The model CLAIMS these cards are unowned — verify against the
-        // collection, which is ground truth. Owned enough → drop the
-        // suggestion; owned some → suggest only the missing copies.
+        // Verify the wishlist against BOTH ground truths the model can get
+        // wrong: what the player owns, and what the built deck already runs.
+        // A suggestion survives only as the honest number of copies to buy.
         const ownedQtyByName = new Map<string, number>();
         for (const c of collection) {
           const k = normalizeForSearch(c.name);
           ownedQtyByName.set(k, (ownedQtyByName.get(k) ?? 0) + c.qty);
         }
+        const deckQtyByName = new Map<string, number>();
+        for (const c of deck.cards ?? []) {
+          const k = normalizeForSearch(c.name);
+          deckQtyByName.set(k, (deckQtyByName.get(k) ?? 0) + c.quantity);
+        }
+        const BASIC_ENERGY_RE =
+          /^(basic\s+)?(grass|fire|water|lightning|psychic|fighting|darkness|metal|fairy)\s+energy$/i;
         deck.missing_suggestions = (deck.missing_suggestions ?? [])
           .map((s) => {
-            const owned = ownedQtyByName.get(normalizeForSearch(s.name)) ?? 0;
-            if (owned <= 0) return s;
-            if (owned >= s.quantity) return null; // already own enough — not a purchase
-            const extra = s.quantity - owned;
+            if (BASIC_ENERGY_RE.test(s.name.trim())) return null; // unlimited by app rule
+            const k = normalizeForSearch(s.name);
+            const owned = ownedQtyByName.get(k) ?? 0;
+            const inDeck = deckQtyByName.get(k) ?? 0;
+            // The 4-copy rule counts what the deck already runs.
+            const want = Math.min(s.quantity, Math.max(0, 4 - inDeck));
+            if (want <= 0) return null; // deck is already maxed on this card
+            // Owned copies not consumed by this deck can fulfill the need.
+            const spareOwned = Math.max(0, owned - inDeck);
+            if (spareOwned >= want) return null; // binder covers it — nothing to buy
+            const toBuy = want - spareOwned;
+            const notes: string[] = [];
+            if (inDeck > 0) notes.push(`the deck already runs ${inDeck}`);
+            if (spareOwned > 0) notes.push(`you own ${spareOwned} spare`);
             return {
               ...s,
-              quantity: extra,
-              reason: `You already own ${owned} — this is for ${extra} more. ${s.reason}`,
+              quantity: toBuy,
+              reason: notes.length
+                ? `(${notes.join(" and ")} — this buys ${toBuy} more.) ${s.reason}`
+                : s.reason,
             };
           })
           .filter((s): s is NonNullable<typeof s> => s !== null);
