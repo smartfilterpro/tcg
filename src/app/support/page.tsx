@@ -119,7 +119,12 @@ export default function SupportPage() {
         <div>
           <h1 className="text-2xl font-bold">Help &amp; Support</h1>
           <p className="text-sm text-slate-500">
-            Something broken or confusing? Open a ticket and the admin will take a look.
+            Something broken or confusing? Open a ticket and the admin will take a look. You
+            can also review the{" "}
+            <a href="/terms" className="text-poke-blue hover:underline">
+              Terms of Service
+            </a>{" "}
+            any time.
           </p>
         </div>
         {!composing && (

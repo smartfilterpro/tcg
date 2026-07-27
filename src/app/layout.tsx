@@ -115,6 +115,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           </header>
         )}
         <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>
+        <footer className="mx-auto max-w-5xl px-4 pb-8 pt-2 text-center text-xs text-slate-400">
+          PokéDeck ·{" "}
+          <Link href="/terms" className="hover:underline">
+            Terms of Service
+          </Link>
+        </footer>
       </body>
     </html>
   );
