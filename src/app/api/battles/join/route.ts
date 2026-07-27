@@ -63,6 +63,10 @@ export async function POST(req: Request) {
       `${myName} joined the battle with ${borrowed ? "the shared deck " : ""}“${deck.name}”!`
     );
     pushLogRaw(state, `Opening coin flip: ${hostFirst ? hostName : myName} goes first.`);
+    pushLogRaw(
+      state,
+      "Setup: play a Basic Pokémon as your Active (no Basic? mulligan from your deck pile), bench any other Basics, then set your Prize cards. The player going first can't attack on their first turn."
+    );
 
     // Version guard: if someone else grabbed the seat between our read and
     // this write, zero rows match and we bail out instead of clobbering.

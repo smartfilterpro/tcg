@@ -51,6 +51,7 @@ export type BattleAction =
   | { type: "draw" }
   | { type: "shuffleDeck" }
   | { type: "mulligan" }
+  | { type: "setPrizes" }
   | { type: "handToActive"; handIndex: number; mode: "new" | "evolve" | "attach" }
   | { type: "handToBench"; handIndex: number; benchIndex?: number; mode: "new" | "evolve" | "attach" }
   | { type: "handToDiscard"; handIndex: number }
@@ -78,12 +79,14 @@ export function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-/** Deal a fresh side: shuffle, 7-card hand, 6 face-down prizes. */
+/** Deal a fresh side: shuffle and draw the 7-card hand. Prizes are NOT
+ *  dealt here — official rules set prizes only after mulligans resolve and
+ *  Basics are placed. Dealing them earlier can strand a player's only Basic
+ *  Pokémon in the prize pile where no mulligan can ever recover it. */
 export function buildSide(cards: BattleCard[]): SideState {
   const deck = shuffle(cards);
   const hand = deck.splice(0, 7);
-  const prizes = deck.splice(0, 6);
-  return { deck, hand, prizes, discard: [], active: null, bench: [] };
+  return { deck, hand, prizes: [], discard: [], active: null, bench: [] };
 }
 
 function getStack(side: SideState, target: "active" | number): BattleStack {
@@ -149,11 +152,19 @@ export function applyAction(
       return "shuffled their deck";
     }
     case "mulligan": {
+      // Official rules: a mulligan hand is revealed to the opponent, who may
+      // then draw 1 extra card. The log is our "reveal".
+      const revealed = me.hand.map((c) => c.name).join(", ") || "an empty hand";
       me.deck.push(...me.hand);
       me.hand = [];
       me.deck = shuffle(me.deck);
       me.hand = me.deck.splice(0, 7);
-      return "shuffled their hand into their deck and drew 7 new cards";
+      return `mulliganed — revealed ${revealed} — shuffled it back and drew 7. Opponent may draw 1 extra card.`;
+    }
+    case "setPrizes": {
+      if (me.prizes.length > 0) throw new BattleError("Your Prize cards are already set.");
+      me.prizes = me.deck.splice(0, 6);
+      return `set out their ${me.prizes.length} Prize cards`;
     }
     case "handToActive": {
       if (action.mode === "new") {

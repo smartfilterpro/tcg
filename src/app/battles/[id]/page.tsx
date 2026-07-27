@@ -287,6 +287,22 @@ export default function BattleBoardPage() {
           <div className="text-sm font-semibold">{data.myName ?? "You"}</div>
           {!finished && view.myTurn && <span className="chip bg-green-50 text-green-700">your turn</span>}
         </div>
+        {!finished && me.prizeCount === 0 && (
+          <div className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
+            <b>Setup:</b> play a Basic Pokémon as your Active and bench any others. No Basic in
+            hand? Tap your deck pile → Mulligan (your hand is revealed in the log, and your
+            opponent may draw 1 extra card each time). Once your board is ready,{" "}
+            <button
+              type="button"
+              className="font-semibold underline"
+              disabled={busy}
+              onClick={() => act({ type: "setPrizes" })}
+            >
+              set your 6 Prize cards
+            </button>
+            .
+          </div>
+        )}
         <div className="flex items-start justify-between gap-2">
           <div className="flex flex-col gap-1">
             <span className="text-[10px] uppercase tracking-wide text-slate-400">active</span>
@@ -499,8 +515,13 @@ function SheetContent({
           🔀 Shuffle deck
         </button>
         <button className={row} disabled={busy} onClick={() => act({ type: "mulligan" })}>
-          ♻️ Mulligan — shuffle hand into deck, draw 7
+          ♻️ Mulligan — no Basic Pokémon? Reveal, reshuffle, draw 7
         </button>
+        {me.prizeCount === 0 && (
+          <button className={row} disabled={busy} onClick={() => act({ type: "setPrizes" })}>
+            🏆 Set your 6 Prize cards (once mulligans are done)
+          </button>
+        )}
         <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
           Cancel
         </button>
