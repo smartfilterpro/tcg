@@ -75,6 +75,7 @@ export default function AdminPage() {
   const [reviewBusy, setReviewBusy] = useState<string | null>(null); // card id being acted on
   const [reviewQuery, setReviewQuery] = useState(""); // active search, "" = needs-review list
   const [reviewSearchDraft, setReviewSearchDraft] = useState("");
+  const [reviewNotice, setReviewNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadCardIdRef = useRef<string | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -195,8 +196,8 @@ export default function AdminPage() {
     load();
   }
 
-  async function setCardImage(cardId: string, url: string) {
-    setError(null);
+  async function setCardImage(cardId: string, url: string, cardName?: string) {
+    setReviewNotice(null);
     setReviewBusy(cardId);
     const res = await fetch("/api/admin/card-images", {
       method: "POST",
@@ -204,13 +205,20 @@ export default function AdminPage() {
       body: JSON.stringify({ action: "set", cardId, url }),
     });
     const json = await res.json();
-    if (!res.ok) setError(json.error);
+    if (!res.ok) {
+      setReviewNotice({ ok: false, text: json.error || "Couldn't update the image." });
+    } else {
+      setReviewNotice({
+        ok: true,
+        text: `Image updated${cardName ? ` for ${cardName}` : ""} and locked. If your collection still shows the old art, that copy may be linked to a duplicate record of the same card — search its name here and fix that entry too.`,
+      });
+    }
     setReviewBusy(null);
     loadReview();
   }
 
   async function unlockCard(cardId: string) {
-    setError(null);
+    setReviewNotice(null);
     setReviewBusy(cardId);
     const res = await fetch("/api/admin/card-images", {
       method: "POST",
@@ -218,14 +226,13 @@ export default function AdminPage() {
       body: JSON.stringify({ action: "unlock", cardId }),
     });
     const json = await res.json();
-    if (!res.ok) setError(json.error);
+    if (!res.ok) setReviewNotice({ ok: false, text: json.error || "Couldn't unlock." });
     setReviewBusy(null);
     loadReview();
   }
 
   async function findImageOnline(cardId: string, cardName: string) {
-    setError(null);
-    setMessage(null);
+    setReviewNotice(null);
     setReviewBusy(cardId);
     try {
       const res = await fetch(`/api/cards/${encodeURIComponent(cardId)}/find-image`, {
@@ -234,10 +241,10 @@ export default function AdminPage() {
         body: JSON.stringify({ asAdmin: true }),
       });
       const json = await res.json();
-      if (!res.ok) setError(json.error || "Image search failed");
-      else setMessage(`Found and set an image for ${cardName}.`);
+      if (!res.ok) setReviewNotice({ ok: false, text: json.error || "Image search failed" });
+      else setReviewNotice({ ok: true, text: `Found and set an image for ${cardName}.` });
     } catch {
-      setError("Image search failed — try again.");
+      setReviewNotice({ ok: false, text: "Image search failed — try again." });
     }
     setReviewBusy(null);
     loadReview();
@@ -262,15 +269,24 @@ export default function AdminPage() {
     e.target.value = "";
     const cardId = uploadCardIdRef.current;
     if (!file || !cardId) return;
-    setError(null);
+    setReviewNotice(null);
     setReviewBusy(cardId);
     const url = await uploadCardPhoto(file);
     if (!url) {
-      setError("Photo upload failed — try again.");
+      setReviewNotice({ ok: false, text: "Photo upload failed — try again." });
       setReviewBusy(null);
       return;
     }
     await setCardImage(cardId, url);
+  }
+
+  /** Where a card record came from — duplicates of the same physical card can
+   *  exist from different sources, and the collection shows whichever record
+   *  the item is linked to. */
+  function cardSource(id: string): string {
+    if (id.startsWith("custom-")) return "manual entry";
+    if (id.startsWith("tcgdex-")) return "TCGdex";
+    return "card API";
   }
 
   if (loading) return <p className="text-slate-500">Loading…</p>;
@@ -493,6 +509,15 @@ export default function AdminPage() {
             the database, whatever its current image.
           </p>
         )}
+        {reviewNotice && (
+          <div
+            className={`mb-2 rounded-lg p-2.5 text-sm ${
+              reviewNotice.ok ? "bg-green-50 text-green-800" : "bg-red-50 text-red-700"
+            }`}
+          >
+            {reviewNotice.text}
+          </div>
+        )}
         <input
           ref={uploadInputRef}
           type="file"
@@ -537,7 +562,8 @@ export default function AdminPage() {
                     </div>
                     <div className="text-xs text-slate-400">
                       {card.set_name || "Unknown set"}
-                      {card.number ? ` · #${card.number}` : ""}
+                      {card.number ? ` · #${card.number}` : ""} ·{" "}
+                      <span title={card.id}>{cardSource(card.id)}</span>
                     </div>
                     {candidates.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-3">
@@ -560,7 +586,7 @@ export default function AdminPage() {
                               <button
                                 className="btn flex-1 bg-green-600 px-1 py-0.5 text-[11px] text-white hover:bg-green-700"
                                 disabled={reviewBusy === card.id}
-                                onClick={() => setCardImage(card.id, cand.url)}
+                                onClick={() => setCardImage(card.id, cand.url, card.name)}
                               >
                                 Use
                               </button>

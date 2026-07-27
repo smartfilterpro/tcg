@@ -206,11 +206,15 @@ export async function POST(req: Request) {
     }
 
     if (body.action === "unlock") {
-      const { error } = await admin
+      const { data, error } = await admin
         .from("cards")
         .update({ image_locked: false })
-        .eq("id", body.cardId);
+        .eq("id", body.cardId)
+        .select("id");
       if (error) throw error;
+      if (!data || data.length === 0) {
+        return NextResponse.json({ error: "Card not found." }, { status: 404 });
+      }
       return NextResponse.json({ ok: true });
     }
 
@@ -224,12 +228,21 @@ export async function POST(req: Request) {
       ) {
         return NextResponse.json({ error: "Invalid image URL" }, { status: 400 });
       }
-      const { error } = await admin
+      // .select() so a zero-row match (bad card id) is a visible error
+      // instead of a silent no-op that leaves the old photo in place.
+      const { data, error } = await admin
         .from("cards")
         .update({ image_small: url, image_large: url, image_locked: true })
-        .eq("id", body.cardId);
+        .eq("id", body.cardId)
+        .select("id, image_small");
       if (error) throw error;
-      return NextResponse.json({ ok: true });
+      if (!data || data.length === 0) {
+        return NextResponse.json(
+          { error: "Card not found — the image was not changed." },
+          { status: 404 }
+        );
+      }
+      return NextResponse.json({ ok: true, imageUrl: url });
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
