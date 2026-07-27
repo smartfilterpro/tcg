@@ -1,0 +1,174 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { requireUser, AuthError } from "@/lib/auth";
+
+/** Lightweight card reference attached to a post, for showing pictures. */
+export interface PostCardRef {
+  id: string;
+  name: string;
+  image: string | null;
+  set_name: string | null;
+  number: string | null;
+}
+
+export interface TradePostComment {
+  id: string;
+  post_id: string;
+  user_id: string;
+  authorName: string;
+  body: string;
+  created_at: string;
+}
+
+export interface TradePost {
+  id: string;
+  user_id: string;
+  authorName: string;
+  looking_for: string;
+  offering: string;
+  looking_for_cards: PostCardRef[];
+  offering_cards: PostCardRef[];
+  status: "open" | "closed";
+  created_at: string;
+  comments: TradePostComment[];
+}
+
+function sanitizeCards(input: unknown, cap = 6): PostCardRef[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((c) => c && typeof c.id === "string" && typeof c.name === "string")
+    .slice(0, cap)
+    .map((c) => ({
+      id: String(c.id).slice(0, 100),
+      name: String(c.name).slice(0, 200),
+      image: typeof c.image === "string" ? c.image.slice(0, 500) : null,
+      set_name: typeof c.set_name === "string" ? c.set_name.slice(0, 200) : null,
+      number: typeof c.number === "string" ? c.number.slice(0, 40) : null,
+    }));
+}
+
+/** GET: the trade board — all posts, newest first, with comments. */
+export async function GET() {
+  try {
+    const { user } = await requireUser();
+    const supabase = await createClient();
+
+    const { data: posts, error } = await supabase
+      .from("trade_posts")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (error) {
+      // Table missing = migration 009 not run yet
+      if (/trade_posts/i.test(error.message ?? "")) {
+        return NextResponse.json({ migrated: false, posts: [], myId: user.id });
+      }
+      throw error;
+    }
+
+    const postIds = (posts ?? []).map((p) => p.id);
+    let comments: Array<Record<string, unknown>> = [];
+    if (postIds.length > 0) {
+      const { data } = await supabase
+        .from("trade_post_comments")
+        .select("*")
+        .in("post_id", postIds)
+        .order("created_at")
+        .limit(1000);
+      comments = data ?? [];
+    }
+
+    const { data: profiles } = await supabase.from("profiles").select("*");
+    const nameById = new Map(
+      (profiles ?? []).map((p) => [p.id as string, (p.display_name || p.email) as string])
+    );
+
+    const byPost = new Map<string, TradePostComment[]>();
+    for (const c of comments) {
+      const list = byPost.get(c.post_id as string) ?? [];
+      list.push({
+        id: c.id as string,
+        post_id: c.post_id as string,
+        user_id: c.user_id as string,
+        authorName: nameById.get(c.user_id as string) ?? "A member",
+        body: c.body as string,
+        created_at: c.created_at as string,
+      });
+      byPost.set(c.post_id as string, list);
+    }
+
+    const result: TradePost[] = (posts ?? []).map((p) => ({
+      id: p.id,
+      user_id: p.user_id,
+      authorName: nameById.get(p.user_id) ?? "A member",
+      looking_for: p.looking_for,
+      offering: p.offering,
+      looking_for_cards: sanitizeCards(p.looking_for_cards),
+      offering_cards: sanitizeCards(p.offering_cards),
+      status: p.status,
+      created_at: p.created_at,
+      comments: byPost.get(p.id) ?? [],
+    }));
+
+    return NextResponse.json({ migrated: true, posts: result, myId: user.id });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+/** POST: create a trade post.
+ *  Body: { lookingFor, offering, lookingForCards?, offeringCards? } */
+export async function POST(req: Request) {
+  try {
+    const { user } = await requireUser();
+    const body = (await req.json()) as {
+      lookingFor?: string;
+      offering?: string;
+      lookingForCards?: unknown;
+      offeringCards?: unknown;
+    };
+    const lookingFor = body.lookingFor?.trim() ?? "";
+    const offering = body.offering?.trim() ?? "";
+    if (!lookingFor || !offering || lookingFor.length > 1000 || offering.length > 1000) {
+      return NextResponse.json(
+        { error: "Say what you're looking for and what you're offering (max 1000 chars each)." },
+        { status: 400 }
+      );
+    }
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("trade_posts")
+      .insert({
+        user_id: user.id,
+        looking_for: lookingFor,
+        offering,
+        looking_for_cards: sanitizeCards(body.lookingForCards),
+        offering_cards: sanitizeCards(body.offeringCards),
+      })
+      .select()
+      .single();
+    if (error) {
+      if (/trade_posts/i.test(error.message ?? "")) {
+        return NextResponse.json(
+          { error: "The trade board isn't set up yet — run supabase/migrations/009_trade_board.sql first." },
+          { status: 400 }
+        );
+      }
+      throw error;
+    }
+    return NextResponse.json({ post: data });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+function errorResponse(err: unknown) {
+  if (err instanceof AuthError) {
+    return NextResponse.json({ error: err.message }, { status: err.status });
+  }
+  console.error("market error", err);
+  return NextResponse.json(
+    { error: err instanceof Error ? err.message : "Request failed" },
+    { status: 500 }
+  );
+}
