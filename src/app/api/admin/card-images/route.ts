@@ -261,6 +261,10 @@ export async function POST(req: Request) {
           { status: 404 }
         );
       }
+      // The decision is made — clear this card's pending candidates so it
+      // drops off the review list. New member submissions will re-surface
+      // it. Best-effort (table exists after migration 007).
+      await admin.from("card_image_candidates").delete().eq("card_id", body.cardId);
       return NextResponse.json({ ok: true, imageUrl: url, warning });
     }
 

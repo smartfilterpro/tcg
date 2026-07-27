@@ -137,14 +137,18 @@ export async function POST(req: Request, { params }: Params) {
         }
         if (updateErr) throw updateErr;
 
-        // Keep as a candidate for admin review (best-effort)
-        await supabase
-          .from("card_image_candidates")
-          .upsert(
-            { card_id: id, url: publicUrl, uploaded_by: user.id },
-            { onConflict: "card_id,url", ignoreDuplicates: true }
-          )
-          .then(() => {});
+        // Keep as a candidate for admin review (best-effort) — but not when
+        // the ADMIN ran the search: that's a final decision, and a candidate
+        // row would pin the card in the review list forever.
+        if (!asAdmin) {
+          await supabase
+            .from("card_image_candidates")
+            .upsert(
+              { card_id: id, url: publicUrl, uploaded_by: user.id },
+              { onConflict: "card_id,url", ignoreDuplicates: true }
+            )
+            .then(() => {});
+        }
 
         return NextResponse.json({ imageUrl: publicUrl });
       } catch {
