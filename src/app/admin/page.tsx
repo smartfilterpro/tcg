@@ -33,6 +33,14 @@ interface Analytics {
   };
   scansAllTime: ScanStats;
   scans30d: ScanStats;
+  finish?: {
+    tracking: boolean;
+    samples: number;
+    corrected: number;
+    accuracy: number | null;
+    byFinish: Array<{ finish: string; samples: number; accuracy: number }>;
+    confusions: Array<{ from: string; to: string; count: number }>;
+  };
 }
 
 interface TicketMessage {
@@ -584,7 +592,54 @@ export default function AdminPage() {
                 }
                 sub="saved without correction"
               />
+              <StatTile
+                label="Finish accuracy"
+                value={
+                  analytics.finish?.accuracy != null
+                    ? `${analytics.finish.accuracy.toFixed(0)}%`
+                    : "—"
+                }
+                sub={
+                  analytics.finish?.tracking === false
+                    ? "run migration 018"
+                    : `learned from ${analytics.finish?.samples ?? 0} scans`
+                }
+              />
             </div>
+          )}
+
+          <h3 className="mb-1 mt-4 text-sm font-semibold">🎨 Finish detection</h3>
+          {analytics.finish?.tracking === false ? (
+            <p className="text-xs text-yellow-800">
+              Finish learning needs a one-time database update — run{" "}
+              <code>supabase/migrations/018_finish_feedback.sql</code>. From then on, every
+              scan tracks whether the holo / reverse holo / normal call was right.
+            </p>
+          ) : (analytics.finish?.samples ?? 0) === 0 ? (
+            <p className="text-xs text-slate-400">
+              No data yet — stats appear as members save (or correct) scanned cards.
+            </p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {analytics.finish!.byFinish.map((f) => (
+                  <StatTile
+                    key={f.finish}
+                    label={`Called “${f.finish}”`}
+                    value={`${f.accuracy.toFixed(0)}%`}
+                    sub={`right in ${f.samples} scan${f.samples === 1 ? "" : "s"}`}
+                  />
+                ))}
+              </div>
+              {analytics.finish!.confusions.length > 0 && (
+                <p className="mt-2 text-xs text-slate-500">
+                  Most common mix-ups:{" "}
+                  {analytics.finish!.confusions
+                    .map((c) => `called ${c.from}, was actually ${c.to} (×${c.count})`)
+                    .join(" · ")}
+                </p>
+              )}
+            </>
           )}
         </div>
       )}

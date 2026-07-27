@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { summaryToRow, defaultVariantFor, type CardSummary } from "@/lib/types";
+import { recordFinishFeedback } from "@/lib/finishFeedback";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -70,11 +71,23 @@ export async function PATCH(req: Request, { params }: Params) {
 
     const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (quantity !== undefined) patch.quantity = quantity;
+    let finishCorrection: { cardId: string; predicted: string } | null = null;
     if (variant !== undefined) {
       if (typeof variant !== "string" || variant.length === 0 || variant.length > 40) {
         return NextResponse.json({ error: "Invalid variant" }, { status: 400 });
       }
       patch.variant = variant;
+      // A later finish edit is a correction signal for the scanner's memory —
+      // capture what it's being changed FROM before we overwrite it.
+      const { data: current } = await supabase
+        .from("collection_items")
+        .select("card_id, variant")
+        .eq("id", id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (current && current.variant && current.variant !== variant) {
+        finishCorrection = { cardId: current.card_id as string, predicted: current.variant as string };
+      }
     }
     if (notes !== undefined) {
       if (notes !== null && (typeof notes !== "string" || notes.length > 500)) {
@@ -107,6 +120,11 @@ export async function PATCH(req: Request, { params }: Params) {
         );
       }
       throw error;
+    }
+    if (finishCorrection && typeof variant === "string") {
+      await recordFinishFeedback(supabase, user.id, [
+        { cardId: finishCorrection.cardId, predicted: finishCorrection.predicted, corrected: variant },
+      ]);
     }
     return NextResponse.json({ ok: true });
   } catch (err) {

@@ -8,9 +8,9 @@ import {
   displayName,
   expandDeck,
   isMissingBattlesTable,
+  loadBattleDeck,
   makeBattleCode,
 } from "./lib";
-import type { Deck } from "@/lib/types";
 
 /** GET: my battles (host or guest), newest activity first. */
 export async function GET() {
@@ -72,33 +72,39 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const { user, profile } = await requireUser();
-    const { deckId } = (await req.json()) as { deckId?: string };
+    const { deckId, allowShared } = (await req.json()) as {
+      deckId?: string;
+      allowShared?: boolean;
+    };
     if (!deckId || typeof deckId !== "string") {
       return NextResponse.json({ error: "Pick a deck to battle with." }, { status: 400 });
     }
 
     const supabase = await createClient();
-    const { data: deck, error: deckErr } = await supabase
-      .from("decks")
-      .select("*")
-      .eq("id", deckId)
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (deckErr) throw deckErr;
-    if (!deck) return NextResponse.json({ error: "Deck not found." }, { status: 404 });
+    // Hosting with a borrowed deck implies the battle allows shared decks.
+    const loaded = await loadBattleDeck(supabase, user.id, deckId, true);
+    if ("error" in loaded) {
+      return NextResponse.json({ error: loaded.error }, { status: 404 });
+    }
+    const { deck, borrowed } = loaded;
+    const allowSharedDecks = allowShared === true || borrowed;
 
     const admin = createAdminClient();
-    const cards = await expandDeck(admin, deck as Deck, "h");
+    const cards = await expandDeck(admin, deck, "h");
     const myName = displayName(profile, user.email);
 
     const state: BattleState = {
       sides: { [user.id]: buildSide(cards) },
       names: { [user.id]: myName },
+      allowSharedDecks,
       turnUser: null,
       turnCount: 1,
       log: [],
     };
-    pushLogRaw(state, `${myName} set up the table with “${(deck as Deck).name}” — waiting for an opponent.`);
+    pushLogRaw(
+      state,
+      `${myName} set up the table with ${borrowed ? "the shared deck " : ""}“${deck.name}” — waiting for an opponent.`
+    );
 
     // Retry on the (unlikely) code collision.
     for (let attempt = 0; attempt < 4; attempt++) {

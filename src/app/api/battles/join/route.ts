@@ -3,8 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/auth";
 import { buildSide, pushLogRaw, type BattleState } from "@/lib/battle";
-import { battleErrorResponse, displayName, expandDeck } from "../lib";
-import type { Deck } from "@/lib/types";
+import { battleErrorResponse, displayName, expandDeck, loadBattleDeck } from "../lib";
 
 /** POST: join a friend's waiting battle. Body: { code, deckId } */
 export async function POST(req: Request) {
@@ -39,25 +38,30 @@ export async function POST(req: Request) {
     }
 
     const supabase = await createClient();
-    const { data: deck, error: deckErr } = await supabase
-      .from("decks")
-      .select("*")
-      .eq("id", body.deckId)
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (deckErr) throw deckErr;
-    if (!deck) return NextResponse.json({ error: "Deck not found." }, { status: 404 });
-
-    const cards = await expandDeck(admin, deck as Deck, "g");
-    const myName = displayName(profile, user.email);
     const state = battle.state as BattleState;
+    const loaded = await loadBattleDeck(
+      supabase,
+      user.id,
+      body.deckId,
+      state.allowSharedDecks === true
+    );
+    if ("error" in loaded) {
+      return NextResponse.json({ error: loaded.error }, { status: 400 });
+    }
+    const { deck, borrowed } = loaded;
+
+    const cards = await expandDeck(admin, deck, "g");
+    const myName = displayName(profile, user.email);
     state.sides[user.id] = buildSide(cards);
     state.names[user.id] = myName;
 
     const hostName = state.names[battle.host_user as string] ?? "Trainer";
     const hostFirst = Math.random() < 0.5;
     state.turnUser = hostFirst ? (battle.host_user as string) : user.id;
-    pushLogRaw(state, `${myName} joined the battle with “${(deck as Deck).name}”!`);
+    pushLogRaw(
+      state,
+      `${myName} joined the battle with ${borrowed ? "the shared deck " : ""}“${deck.name}”!`
+    );
     pushLogRaw(state, `Opening coin flip: ${hostFirst ? hostName : myName} goes first.`);
 
     // Version guard: if someone else grabbed the seat between our read and

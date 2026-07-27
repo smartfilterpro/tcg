@@ -72,6 +72,38 @@ export async function expandDeck(
   return cards;
 }
 
+/** Load a deck the player may battle with: their own deck always, or a
+ *  deck another member shared — but only when the battle allows borrowing. */
+export async function loadBattleDeck(
+  supabase: SupabaseClient,
+  userId: string,
+  deckId: string,
+  allowShared: boolean
+): Promise<{ deck: Deck; borrowed: boolean } | { error: string }> {
+  const { data: own, error: ownErr } = await supabase
+    .from("decks")
+    .select("*")
+    .eq("id", deckId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (ownErr) throw ownErr;
+  if (own) return { deck: own as Deck, borrowed: false };
+
+  // Not theirs — maybe a shared deck (readable via the migration-008 policy).
+  const { data: shared, error: sharedErr } = await supabase
+    .from("decks")
+    .select("*")
+    .eq("id", deckId)
+    .eq("shared", true)
+    .maybeSingle();
+  if (sharedErr) throw sharedErr;
+  if (!shared) return { error: "Deck not found." };
+  if (!allowShared) {
+    return { error: "This battle doesn't allow shared decks — pick one of your own." };
+  }
+  return { deck: shared as Deck, borrowed: true };
+}
+
 // No ambiguous characters (0/O, 1/I/L) — codes get read out loud.
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
