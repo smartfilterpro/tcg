@@ -10,9 +10,15 @@ export function normalizeForSearch(s: string): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
-/** Does any of the given fields contain the query, punctuation/accent-blind? */
+/** Token-based, punctuation/accent-blind matching: every word of the query
+ *  must appear somewhere in the combined fields — in any order, and words
+ *  can hit different fields ("pikachu 151" matches name + set name). */
 export function matchesSearch(query: string, ...fields: Array<string | null | undefined>): boolean {
-  const q = normalizeForSearch(query);
-  if (!q) return true;
-  return fields.some((f) => f != null && normalizeForSearch(f).includes(q));
+  const tokens = query.split(/\s+/).map(normalizeForSearch).filter(Boolean);
+  if (tokens.length === 0) return true;
+  const haystack = fields
+    .filter((f): f is string => f != null)
+    .map(normalizeForSearch)
+    .join(" ");
+  return tokens.every((t) => haystack.includes(t));
 }
