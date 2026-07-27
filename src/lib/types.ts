@@ -189,6 +189,9 @@ export interface DeckSuggestion {
   quantity: number;
   reason: string;
   card?: CardSummary | null;
+  /** Group members (sharing their collection) who own copies — trade
+   *  before you buy. */
+  owners?: Array<{ userId: string; name: string; qty: number }>;
 }
 
 export interface Deck {

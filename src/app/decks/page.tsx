@@ -439,6 +439,15 @@ function UpgradeList({ suggestions }: { suggestions: UpgradeSuggestion[] }) {
                 )}
               </div>
               <div className="mt-0.5 text-amber-800">{u.reason}</div>
+              {(u.owners?.length ?? 0) > 0 && (
+                <div className="mt-1 rounded bg-white/60 px-1.5 py-1 font-medium text-green-800">
+                  🤝 Trade before you buy:{" "}
+                  {u.owners!.map((o) => `${o.name} has ${o.qty}`).join(" · ")} —{" "}
+                  <a href="/friends" className="underline">
+                    propose a trade
+                  </a>
+                </div>
+              )}
             </div>
           </li>
         ))}
