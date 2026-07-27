@@ -59,7 +59,14 @@ export async function checkAiBudget(
 export async function logAiUsage(
   supabase: SupabaseClient,
   userId: string,
-  endpoint: "scan" | "deck_build" | "coach" | "find_image" | "trade_chat" | "deck_review",
+  endpoint:
+    | "scan"
+    | "deck_build"
+    | "coach"
+    | "find_image"
+    | "trade_chat"
+    | "deck_review"
+    | "grade",
   model: string,
   usage: { input_tokens?: number | null; output_tokens?: number | null } | undefined
 ): Promise<void> {
