@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 /** USD per million tokens, by model prefix (longest match wins). */
 const PRICING: Array<{ prefix: string; input: number; output: number }> = [
@@ -31,12 +32,14 @@ export async function checkAiBudget(
     const monthStart = new Date();
     monthStart.setUTCDate(1);
     monthStart.setUTCHours(0, 0, 0, 0);
-    const { data, error } = await supabase
-      .from("ai_usage")
-      .select("model, input_tokens, output_tokens")
-      .eq("user_id", user.id)
-      .gte("created_at", monthStart.toISOString())
-      .limit(20000);
+    const { data, error } = await fetchAllRows(() =>
+      supabase
+        .from("ai_usage")
+        .select("model, input_tokens, output_tokens")
+        .eq("user_id", user.id)
+        .gte("created_at", monthStart.toISOString())
+        .order("created_at")
+    );
     if (error) return { ok: true };
     const spent = (data ?? []).reduce(
       (s, r) => s + estimateCostUsd(r.model ?? "", r.input_tokens ?? 0, r.output_tokens ?? 0),

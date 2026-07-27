@@ -4,6 +4,7 @@ import { requireAdmin, AuthError } from "@/lib/auth";
 import { estimateCostUsd } from "@/lib/usage";
 import { itemPrice } from "@/lib/types";
 import { lastPriceRefresh } from "@/lib/priceRefresh";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 export interface ScanStats {
   scans: number;
@@ -77,10 +78,14 @@ export async function GET() {
       finishRes,
     ] = await Promise.all([
       admin.from("profiles").select("id", { count: "exact", head: true }),
-      admin
-        .from("collection_items")
-        .select("quantity, price_override, variant, card:cards(market_price, prices)")
-        .limit(20000),
+      // Paged (fetchAllRows): Supabase caps every response at 1000 rows, so
+      // these totals silently undercounted once tables grew past that.
+      fetchAllRows(() =>
+        admin
+          .from("collection_items")
+          .select("quantity, price_override, variant, card:cards(market_price, prices)")
+          .order("created_at")
+      ),
       admin.from("decks").select("id", { count: "exact", head: true }),
       admin.from("decks").select("id").eq("shared", true),
       admin.from("trade_posts").select("id", { count: "exact", head: true }).eq("status", "open"),
@@ -88,13 +93,22 @@ export async function GET() {
         .from("support_tickets")
         .select("id", { count: "exact", head: true })
         .neq("status", "resolved"),
-      admin
-        .from("ai_usage")
-        .select("model, input_tokens, output_tokens")
-        .gte("created_at", monthStart.toISOString())
-        .limit(50000),
-      admin.from("scan_events").select("*").order("created_at", { ascending: false }).limit(5000),
-      admin.from("finish_feedback").select("predicted, corrected").limit(20000),
+      fetchAllRows(
+        () =>
+          admin
+            .from("ai_usage")
+            .select("model, input_tokens, output_tokens")
+            .gte("created_at", monthStart.toISOString())
+            .order("created_at"),
+        50000
+      ),
+      fetchAllRows(
+        () => admin.from("scan_events").select("*").order("created_at", { ascending: false }),
+        5000
+      ),
+      fetchAllRows(() =>
+        admin.from("finish_feedback").select("predicted, corrected").order("created_at")
+      ),
     ]);
 
     const items = (itemRows ?? []) as unknown as Array<{

@@ -4,6 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage, checkAiBudget } from "@/lib/usage";
 import { createClient } from "@/lib/supabase/server";
 import type { DeckCardEntry } from "@/lib/types";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 export const maxDuration = 120;
 
@@ -52,11 +53,13 @@ export async function POST(req: Request) {
 
     // The player's collection, aggregated by card name, so suggestions stay
     // within cards they actually own.
-    const { data: items } = await supabase
-      .from("collection_items")
-      .select("quantity, card:cards(name, supertype, number, set_name)")
-      .eq("user_id", user.id)
-      .limit(3000);
+    const { data: items } = await fetchAllRows(() =>
+      supabase
+        .from("collection_items")
+        .select("quantity, card:cards(name, supertype, number, set_name)")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+    );
     const counts = new Map<string, number>();
     for (const it of (items ?? []) as unknown as Array<{
       quantity: number;

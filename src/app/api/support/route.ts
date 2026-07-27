@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 export interface TicketMessage {
   id: string;
@@ -47,12 +48,13 @@ export async function GET() {
     const ids = (tickets ?? []).map((t) => t.id);
     let messages: Array<Record<string, unknown>> = [];
     if (ids.length > 0) {
-      const { data } = await supabase
-        .from("support_ticket_messages")
-        .select("*")
-        .in("ticket_id", ids)
-        .order("created_at")
-        .limit(2000);
+      const { data } = await fetchAllRows(() =>
+        supabase
+          .from("support_ticket_messages")
+          .select("*")
+          .in("ticket_id", ids)
+          .order("created_at")
+      );
       messages = data ?? [];
     }
 

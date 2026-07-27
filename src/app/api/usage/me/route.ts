@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { estimateCostUsd } from "@/lib/usage";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 /** GET: the current user's Trainer AI usage for this month, as a share of
  *  their allowance — deliberately no dollar amounts (that's admin-only).
@@ -18,12 +19,14 @@ export async function GET() {
     daysBack.setUTCHours(0, 0, 0, 0);
     const since = monthStart < daysBack ? monthStart : daysBack;
 
-    const { data } = await supabase
-      .from("ai_usage")
-      .select("model, input_tokens, output_tokens, created_at")
-      .eq("user_id", user.id)
-      .gte("created_at", since.toISOString())
-      .limit(20000);
+    const { data } = await fetchAllRows(() =>
+      supabase
+        .from("ai_usage")
+        .select("model, input_tokens, output_tokens, created_at")
+        .eq("user_id", user.id)
+        .gte("created_at", since.toISOString())
+        .order("created_at")
+    );
 
     const rows = data ?? [];
     let spentMonth = 0;

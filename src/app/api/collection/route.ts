@@ -2,20 +2,24 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { summaryToRow, type CardSummary, type CollectionItem } from "@/lib/types";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 /** GET: the current user's full collection (cards joined). Filtering happens client-side. */
 export async function GET() {
   try {
     const { user } = await requireUser();
     const supabase = await createClient();
-    const { data, error } = await supabase
-      .from("collection_items")
-      .select("*, card:cards(*)")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(5000);
+    // Paged: Supabase caps single responses at 1000 rows, which silently
+    // hid cards from big collections (missing search results).
+    const { data, error } = await fetchAllRows(() =>
+      supabase
+        .from("collection_items")
+        .select("*, card:cards(*)")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+    );
     if (error) throw error;
-    return NextResponse.json({ items: (data ?? []) as unknown as CollectionItem[] });
+    return NextResponse.json({ items: data as unknown as CollectionItem[] });
   } catch (err) {
     return errorResponse(err);
   }

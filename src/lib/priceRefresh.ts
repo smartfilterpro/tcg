@@ -4,6 +4,7 @@ import { getTcgdexPriceById } from "@/lib/tcgdex";
 import { poketraceEnabled, searchPoketraceCard, getPoketracePrices } from "@/lib/poketrace";
 import { getBattleDataById } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 /** Background price refresher.
  *
@@ -52,11 +53,12 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
   };
 
   try {
-  // Only cards someone actually owns are worth refreshing.
-  const { data: owned, error: ownedErr } = await admin
-    .from("collection_items")
-    .select("card_id")
-    .limit(20000);
+  // Only cards someone actually owns are worth refreshing. Paged — Supabase
+  // caps responses at 1000 rows, which was hiding most owned cards from the
+  // refresh rotation.
+  const { data: owned, error: ownedErr } = await fetchAllRows(() =>
+    admin.from("collection_items").select("card_id").order("created_at")
+  );
   if (ownedErr) throw ownedErr;
   const ownedIds = [...new Set((owned ?? []).map((r) => r.card_id as string))].filter(
     // Custom entries have no API price source — unless PokeTrace can try a
@@ -65,12 +67,20 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
   );
   if (ownedIds.length === 0) return summary;
 
-  // select("*") — poketrace_id/graded_prices only exist after migration 023
-  const { data: cards, error: cardsErr } = await admin
-    .from("cards")
-    .select("*")
-    .in("id", ownedIds);
-  if (cardsErr) throw cardsErr;
+  // select("*") — poketrace_id/graded_prices only exist after migration 023.
+  // Chunked: a single .in() with thousands of ids overruns the URL limit and
+  // the response would be capped at 1000 rows anyway.
+  const cardChunks = [];
+  const CHUNK = 200;
+  for (let i = 0; i < ownedIds.length; i += CHUNK) {
+    const { data: chunk, error: cardsErr } = await admin
+      .from("cards")
+      .select("*")
+      .in("id", ownedIds.slice(i, i + CHUNK));
+    if (cardsErr) throw cardsErr;
+    cardChunks.push(chunk ?? []);
+  }
+  const cards = cardChunks.flat();
 
   // Stalest first; never-priced cards lead.
   const queue = (cards ?? [])
