@@ -323,6 +323,21 @@ export async function expandDeck(
         break;
       }
     }
+    // No record with an image — take one without (combat data and category
+    // still matter even when there's no art to show).
+    if (!meta) {
+      for (const variant of variants) {
+        const { data } = await admin
+          .from("cards")
+          .select("*")
+          .ilike("name", variant.replace(/[%_]/g, ""))
+          .limit(1);
+        if (data?.[0]) {
+          meta = rowToMeta(data[0]);
+          break;
+        }
+      }
+    }
     metaByName.set(name, meta);
   }
 
@@ -330,7 +345,13 @@ export async function expandDeck(
   // rules text for Trainers & Special Energy) — one fetch per card, ever,
   // routed by source: primary DB ids → pokemontcg.io, tcgdex- ids → TCGdex,
   // custom- ids (photo scans) → AI reads the card's own picture once.
-  const needsBd = [...metaById.values()].filter((m) => !m.bd && m.cat !== null && m.id);
+  // Include name-resolved cards too (deck entries without a card_id) —
+  // they were skipped before, which left their Pokémon without attacks.
+  const allMetas = [
+    ...metaById.values(),
+    ...[...metaByName.values()].filter((m): m is NonNullable<typeof m> => m != null),
+  ];
+  const needsBd = allMetas.filter((m) => !m.bd && m.cat !== null && m.id);
   const primary = needsBd.filter(
     (m) => !m.id!.startsWith("custom-") && !m.id!.startsWith("tcgdex-")
   );
@@ -372,7 +393,7 @@ export async function expandDeck(
 
   // Let battle data fill gaps the cards row couldn't answer: stage →
   // Basic/evolution, HP, and Supporter/Stadium flags.
-  for (const m of metaById.values()) {
+  for (const m of allMetas) {
     if (!m.bd) continue;
     if (m.basic == null && m.bd.stage) m.basic = /basic/i.test(m.bd.stage);
     if (m.hp == null && m.bd.hp) m.hp = m.bd.hp;

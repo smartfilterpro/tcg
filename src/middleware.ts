@@ -44,6 +44,10 @@ export async function middleware(request: NextRequest) {
     }
     const url = request.nextUrl.clone();
     url.pathname = "/login";
+    // Remember where they were headed (e.g. a battle invite link) so login
+    // can send them back instead of dumping everyone at the collection.
+    const dest = pathname + request.nextUrl.search;
+    url.search = dest !== "/" ? `?next=${encodeURIComponent(dest)}` : "";
     return NextResponse.redirect(url);
   }
 
