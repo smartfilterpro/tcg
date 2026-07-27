@@ -54,6 +54,7 @@ interface Analytics {
       requests: number;
       error?: string;
     } | null;
+    textWarmed?: number;
   } | null;
 }
 
@@ -1003,6 +1004,7 @@ function PriceRefreshPanel({
       requests: number;
       error?: string;
     } | null;
+    textWarmed?: number;
   } | null;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1031,8 +1033,9 @@ function PriceRefreshPanel({
           <span>
             Last run {new Date(current.ranAt).toLocaleString()}: checked {current.checked ?? 0},
             updated {current.updated ?? 0}
-            {(current.unpriced ?? 0) > 0 && `, ${current.unpriced} had no price data`}. Runs by
-            itself about once a day, stalest cards first.
+            {(current.unpriced ?? 0) > 0 && `, ${current.unpriced} had no price data`}
+            {(current.textWarmed ?? 0) > 0 && `, ${current.textWarmed} cards' text cached`}. Runs
+            by itself about once a day, stalest cards first.
           </span>
         ) : (
           <span>
