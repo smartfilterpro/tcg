@@ -363,6 +363,12 @@ export default function BattleBoardPage() {
             Choose a new Active — tap a Bench Pokémon, then “Move to Active”.
           </div>
         )}
+        {!finished && view.rules && view.phase === "play" && view.myTurn && view.turnCount === 1 && (
+          <div className="rounded-lg bg-poke-blue/5 p-2 text-xs text-slate-600">
+            <b>Turn 1:</b> you can play Basics, attach 1 energy, evolve nothing, and play
+            Items — but no attacking and no Supporters on the game&apos;s very first turn.
+          </div>
+        )}
         <div className="flex items-start justify-between gap-2">
           <div className="flex flex-col gap-1">
             <span className="text-[10px] uppercase tracking-wide text-slate-400">active</span>

@@ -462,6 +462,11 @@ export function applyAction(
           );
         }
         if (card.sup) {
+          if (state.turnCount === 1 && meId === state.firstUser) {
+            throw new BattleError(
+              "The player going first can't play a Supporter on their first turn."
+            );
+          }
           if (flags.supporter) {
             throw new BattleError("Only one Supporter per turn — yours is used.");
           }
