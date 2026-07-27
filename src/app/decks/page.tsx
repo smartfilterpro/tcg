@@ -487,6 +487,9 @@ export default function DecksPage() {
   const [viewing, setViewing] = useState<Deck | null>(null);
   // card_id → image url, for showing real card pictures in deck lists
   const [cardImages, setCardImages] = useState<Record<string, string | null>>({});
+  // name → image url, fallback for entries that never matched a card id
+  // (e.g. "Basic Fighting Energy" while the card record says "Fighting Energy")
+  const [nameImages, setNameImages] = useState<Record<string, string | null>>({});
 
   async function ensureImages(cards: DeckCardEntry[]) {
     const wanted = [
@@ -496,11 +499,20 @@ export default function DecksPage() {
           .filter((id): id is string => !!id && !(id in cardImages))
       ),
     ];
-    if (wanted.length === 0) return;
+    const wantedNames = [
+      ...new Set(cards.filter((c) => !c.card_id && !(c.name in nameImages)).map((c) => c.name)),
+    ];
+    if (wanted.length === 0 && wantedNames.length === 0) return;
     try {
-      const res = await fetch(`/api/cards/images?ids=${encodeURIComponent(wanted.join(","))}`);
+      const params = new URLSearchParams();
+      if (wanted.length > 0) params.set("ids", wanted.join(","));
+      if (wantedNames.length > 0) params.set("names", wantedNames.join(","));
+      const res = await fetch(`/api/cards/images?${params.toString()}`);
       const json = await res.json();
-      if (res.ok) setCardImages((prev) => ({ ...prev, ...json.images }));
+      if (res.ok) {
+        setCardImages((prev) => ({ ...prev, ...json.images }));
+        setNameImages((prev) => ({ ...prev, ...(json.imagesByName ?? {}) }));
+      }
     } catch {}
   }
 
@@ -848,11 +860,11 @@ export default function DecksPage() {
                   {groups[cat].map((c, i) => (
                     <div key={i} title={c.reason ?? c.name}>
                       <div className="relative">
-                        {c.card_id && cardImages[c.card_id] ? (
+                        {(c.card_id && cardImages[c.card_id]) || nameImages[c.name] ? (
                           <div className="aspect-[63/88] w-full overflow-hidden rounded">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={cardImages[c.card_id]!}
+                              src={(c.card_id ? cardImages[c.card_id] : null) ?? nameImages[c.name]!}
                               alt={c.name}
                               className="h-full w-full object-cover"
                               loading="lazy"
