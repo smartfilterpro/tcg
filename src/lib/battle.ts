@@ -246,9 +246,17 @@ export function applyAction(
   const effectNote = override ? " (card effect)" : "";
   const turnsTaken = (state.turnsTaken ??= {});
   const myTurnsDone = turnsTaken[meId] ?? 0;
-  /** True only on the game's opening turn (nobody has completed a turn). */
+  /** True only on the game's opening turn: nobody has completed a turn AND
+   *  the global counter agrees. The turnCount check keeps battles created
+   *  before per-player tracking existed from re-arming first-turn blocks
+   *  mid-game (their counters start at zero whatever the board looks like). */
   const gameFirstTurn =
-    meId === state.firstUser && myTurnsDone === 0 && (turnsTaken[oppId] ?? 0) === 0;
+    meId === state.firstUser &&
+    myTurnsDone === 0 &&
+    (turnsTaken[oppId] ?? 0) === 0 &&
+    state.turnCount <= 1;
+  const myFirstTurn =
+    myTurnsDone === 0 && state.turnCount <= (meId === state.firstUser ? 1 : 2);
 
   function needTurn(what: string) {
     if (rules && phase === "play" && !myTurn && !override) {
@@ -285,7 +293,7 @@ export function applyAction(
     if ((stack.playedTurn ?? 0) === state.turnCount) {
       throw new BattleError(`${stack.face.name} came into play this turn — it can't evolve yet.`);
     }
-    if (myTurnsDone === 0) {
+    if (myFirstTurn) {
       throw new BattleError("No evolving on your first turn.");
     }
   }
@@ -294,7 +302,7 @@ export function applyAction(
     if (card.cat === "energy") {
       if (flags.energy) {
         throw new BattleError(
-          "You've already attached an energy this turn — if a card effect allows more, use the card-effect option."
+          "You've already attached an energy this turn — End turn (or attack) passes play and resets the limit. A card effect allowing extra energy? Use the ✨ option."
         );
       }
       flags.energy = true;
@@ -999,6 +1007,8 @@ export interface BattleView {
   phase: "setup" | "play";
   myTurn: boolean;
   turnCount: number;
+  /** Whether the current turn's one-energy attachment is already used. */
+  energyUsed: boolean;
   /** The shared Stadium in play, if any. */
   stadium: { card: BattleCard; mine: boolean } | null;
   log: LogEntry[];
@@ -1027,6 +1037,7 @@ export function redactState(state: BattleState, viewerId: string, oppId: string)
     phase: state.rules === true ? (state.phase ?? "setup") : "play",
     myTurn: state.turnUser === viewerId,
     turnCount: state.turnCount,
+    energyUsed: state.flags?.energy === true,
     stadium: state.stadium
       ? { card: state.stadium.card, mine: state.stadium.owner === viewerId }
       : null,
