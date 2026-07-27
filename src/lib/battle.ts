@@ -101,6 +101,10 @@ export interface BattleState {
   firstUser?: string;
   /** Per-turn limits already used by the current turn player. */
   flags?: { energy?: boolean; supporter?: boolean; retreated?: boolean };
+  /** Completed turns per player — first-turn rules key on THIS, not the
+   *  global counter, so informal play (nobody tapping End turn) can't leave
+   *  the game acting like it's turn 1 forever. */
+  turnsTaken?: Record<string, number>;
   /** The Stadium in play (shared spot, one at a time). */
   stadium?: { card: BattleCard; owner: string } | null;
   turnUser: string | null;
@@ -139,6 +143,7 @@ export type BattleAction = { override?: boolean } & (
   | { type: "takePrize" }
   | { type: "flipCoin" }
   | { type: "endTurn" }
+  | { type: "claimTurn" }
   | { type: "concede" }
 );
 
@@ -234,10 +239,17 @@ export function applyAction(
   const oppName = state.names[oppId] ?? "your opponent";
   const flags = (state.flags ??= {});
   const effectNote = override ? " (card effect)" : "";
+  const turnsTaken = (state.turnsTaken ??= {});
+  const myTurnsDone = turnsTaken[meId] ?? 0;
+  /** True only on the game's opening turn (nobody has completed a turn). */
+  const gameFirstTurn =
+    meId === state.firstUser && myTurnsDone === 0 && (turnsTaken[oppId] ?? 0) === 0;
 
   function needTurn(what: string) {
     if (rules && phase === "play" && !myTurn && !override) {
-      throw new BattleError(`It's ${oppName}'s turn — wait for yours to ${what}.`);
+      throw new BattleError(
+        `It's ${oppName}'s turn — wait for yours to ${what}. (Table out of sync? Use “Take turn”.)`
+      );
     }
   }
   function needPlayPhase() {
@@ -268,8 +280,7 @@ export function applyAction(
     if ((stack.playedTurn ?? 0) === state.turnCount) {
       throw new BattleError(`${stack.face.name} came into play this turn — it can't evolve yet.`);
     }
-    const myFirstTurn = state.turnCount <= (meId === state.firstUser ? 1 : 2);
-    if (myFirstTurn) {
+    if (myTurnsDone === 0) {
       throw new BattleError("No evolving on your first turn.");
     }
   }
@@ -484,7 +495,7 @@ export function applyAction(
           );
         }
         if (card.sup) {
-          if (state.turnCount === 1 && meId === state.firstUser) {
+          if (gameFirstTurn) {
             throw new BattleError(
               "The player going first can't play a Supporter on their first turn."
             );
@@ -714,7 +725,7 @@ export function applyAction(
       const attack = me.active.face.atk?.[action.attackIndex];
       if (!attack) throw new BattleError("That attack isn't on this card.");
       if (rules && !override) {
-        if (state.turnCount === 1) {
+        if (gameFirstTurn) {
           throw new BattleError("No attacking on the very first turn of the game.");
         }
         if (hasStatus(me.active, "asleep")) {
@@ -765,6 +776,7 @@ export function applyAction(
       // Attacking ends the turn.
       state.turnUser = oppId;
       state.turnCount += 1;
+      turnsTaken[meId] = myTurnsDone + 1;
       state.flags = {};
       const checkup = runCheckup();
       if (checkup.winnerId) return { text: `${text}. ${checkup.text}`, winnerId: checkup.winnerId };
@@ -856,6 +868,7 @@ export function applyAction(
       needTurn("end the turn");
       state.turnUser = oppId;
       state.turnCount += 1;
+      turnsTaken[meId] = myTurnsDone + 1;
       state.flags = {};
       if (rules) {
         const checkup = runCheckup();
@@ -874,6 +887,16 @@ export function applyAction(
         return { text: `ended their turn. ${checkup.text}${oppName} drew a card` };
       }
       return { text: "ended their turn" };
+    }
+    case "claimTurn": {
+      // Unjam: if the table got out of sync with reality (someone forgot to
+      // End turn and play continued informally), either player can claim
+      // the turn. Loudly logged so it can't be sneaky.
+      needPlayPhase();
+      if (myTurn) throw new BattleError("It's already your turn.");
+      state.turnUser = meId;
+      state.flags = {};
+      return { text: "took the turn (out-of-turn fix — agreed at the table)" };
     }
     case "concede":
       // Handled by the API route (it also flips the battle row's status).

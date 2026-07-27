@@ -18,6 +18,15 @@ interface TcgdexCard extends TcgdexBrief {
   rarity?: string;
   hp?: number | string;
   types?: string[];
+  stage?: string; // "Basic" | "Stage1" | "Stage2" | ...
+  trainerType?: string; // "Supporter" | "Item" | "Stadium" | "Tool" | ...
+  energyType?: string; // "Basic" | "Special"
+  effect?: string; // Trainer / Special Energy rules text
+  retreat?: number;
+  attacks?: Array<{ cost?: string[]; name: string; effect?: string; damage?: number | string }>;
+  abilities?: Array<{ type?: string; name: string; effect?: string }>;
+  weaknesses?: Array<{ type: string; value?: string }>;
+  resistances?: Array<{ type: string; value?: string }>;
   set?: {
     id?: string;
     name?: string;
@@ -59,13 +68,19 @@ function extractTcgdexPrice(pricing: Record<string, unknown> | undefined): numbe
 
 function toSummary(card: TcgdexCard): CardSummary {
   const price = extractTcgdexPrice(card.pricing);
+  // Build subtypes from TCGdex's structured fields so Basic/evolution and
+  // Supporter/Item/Stadium detection works the same as primary-DB cards.
+  const subtypes: string[] = [];
+  if (card.stage) subtypes.push(card.stage.replace(/^Stage(\d)$/, "Stage $1"));
+  if (card.trainerType) subtypes.push(card.trainerType);
+  if (card.energyType === "Special") subtypes.push("Special");
   return {
     // Prefix the id so it can't collide with pokemontcg.io ids in the cards table
     id: `tcgdex-${card.id}`,
     name: card.name,
     supertype:
       card.category === "Pokemon" ? "Pokémon" : (card.category ?? null),
-    subtypes: [],
+    subtypes,
     types: card.types ?? [],
     hp: card.hp != null ? String(card.hp) : null,
     number: String(card.localId ?? ""),
@@ -87,6 +102,48 @@ export async function getTcgdexPriceById(prefixedId: string): Promise<number | n
   const id = prefixedId.replace(/^tcgdex-/, "");
   const card = await get<TcgdexCard>(`${BASE}/cards/${encodeURIComponent(id)}`);
   return card ? extractTcgdexPrice(card.pricing) : null;
+}
+
+/** Combat/battle data for a TCGdex-sourced card ("tcgdex-" id prefix) —
+ *  same shape the primary database produces, so referee-mode attack
+ *  buttons, HP, stages, and card text work for new-set cards too. */
+export async function getTcgdexBattleDataById(
+  prefixedId: string
+): Promise<import("./pokemontcg").CardBattleData | null> {
+  const id = prefixedId.replace(/^tcgdex-/, "");
+  const card = await get<TcgdexCard>(`${BASE}/cards/${encodeURIComponent(id)}`);
+  if (!card || !card.name) return null;
+  const isPokemon = card.category === "Pokemon";
+  const rules = [card.effect?.trim()].filter((r): r is string => !!r);
+  const hpNum = typeof card.hp === "number" ? card.hp : parseInt(String(card.hp ?? ""), 10);
+  return {
+    attacks: isPokemon
+      ? (card.attacks ?? []).map((a) => ({
+          name: a.name,
+          cost: a.cost ?? [],
+          damage: a.damage != null ? String(a.damage) : "",
+          text: a.effect?.trim() || null,
+        }))
+      : [],
+    weak: card.weaknesses?.[0]
+      ? { type: card.weaknesses[0].type, value: card.weaknesses[0].value ?? "×2" }
+      : null,
+    resist: card.resistances?.[0]
+      ? { type: card.resistances[0].type, value: card.resistances[0].value ?? "-30" }
+      : null,
+    retreat: card.retreat ?? 0,
+    ...(rules.length > 0 ? { rules } : {}),
+    ...((card.abilities ?? []).length > 0
+      ? {
+          abilities: card.abilities!
+            .filter((a) => a.name)
+            .map((a) => ({ name: a.name, text: a.effect?.trim() ?? "" })),
+        }
+      : {}),
+    stage: card.stage ? card.stage.replace(/^Stage(\d)$/, "Stage $1") : null,
+    hp: Number.isFinite(hpNum) && hpNum > 0 ? hpNum : null,
+    trainerType: card.trainerType ?? null,
+  };
 }
 
 /** Search TCGdex by name and/or collector number. */
