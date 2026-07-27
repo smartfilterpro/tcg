@@ -29,6 +29,7 @@ export async function GET(req: Request) {
         .select("quantity, variant, notes, price_override, card:cards(*)")
         .eq("user_id", tokenRow.user_id)
         .order("created_at")
+        .order("id")
     ),
     admin
       .from("play_profiles")

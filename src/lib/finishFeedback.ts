@@ -68,6 +68,7 @@ export async function loadFinishOverrides(
         .select("card_id, predicted, corrected")
         .in("card_id", ids)
         .order("created_at")
+        .order("id")
     );
     if (error || !data) return none;
 

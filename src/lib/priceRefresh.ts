@@ -57,7 +57,7 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
   // caps responses at 1000 rows, which was hiding most owned cards from the
   // refresh rotation.
   const { data: owned, error: ownedErr } = await fetchAllRows(() =>
-    admin.from("collection_items").select("card_id").order("created_at")
+    admin.from("collection_items").select("card_id").order("created_at").order("id")
   );
   if (ownedErr) throw ownedErr;
   const ownedIds = [...new Set((owned ?? []).map((r) => r.card_id as string))].filter(

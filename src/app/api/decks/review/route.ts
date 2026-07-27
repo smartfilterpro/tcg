@@ -59,6 +59,7 @@ export async function POST(req: Request) {
         .select("quantity, card:cards(name, supertype, number, set_name)")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
+        .order("id")
     );
     const counts = new Map<string, number>();
     for (const it of (items ?? []) as unknown as Array<{

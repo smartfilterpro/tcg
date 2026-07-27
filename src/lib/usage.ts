@@ -39,6 +39,7 @@ export async function checkAiBudget(
         .eq("user_id", user.id)
         .gte("created_at", monthStart.toISOString())
         .order("created_at")
+        .order("id")
     );
     if (error) return { ok: true };
     const spent = (data ?? []).reduce(

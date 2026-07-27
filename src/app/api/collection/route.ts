@@ -17,6 +17,7 @@ export async function GET() {
         .select("*, card:cards(*)")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
+        .order("id")
     );
     if (error) throw error;
     return NextResponse.json({ items: data as unknown as CollectionItem[] });

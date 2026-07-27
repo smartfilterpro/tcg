@@ -32,6 +32,7 @@ export async function GET(_req: Request, { params }: Params) {
         .select("*, card:cards(*)")
         .eq("user_id", id)
         .order("created_at", { ascending: false })
+        .order("id")
     );
     if (error) throw error;
 

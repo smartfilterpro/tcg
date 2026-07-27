@@ -114,10 +114,20 @@ export async function POST(req: Request) {
     // getting silently cut off from the advisor's context.
     const [{ data: myItems }, { data: theirItems }] = await Promise.all([
       fetchAllRows(() =>
-        supabase.from("collection_items").select("*, card:cards(*)").eq("user_id", user.id).order("created_at")
+        supabase
+          .from("collection_items")
+          .select("*, card:cards(*)")
+          .eq("user_id", user.id)
+          .order("created_at")
+          .order("id")
       ),
       fetchAllRows(() =>
-        supabase.from("collection_items").select("*, card:cards(*)").eq("user_id", body.friendId).order("created_at")
+        supabase
+          .from("collection_items")
+          .select("*, card:cards(*)")
+          .eq("user_id", body.friendId)
+          .order("created_at")
+          .order("id")
       ),
     ]);
 

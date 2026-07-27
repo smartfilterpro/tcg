@@ -188,6 +188,7 @@ export async function POST(req: Request) {
           .select("quantity, card:cards(*)")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false })
+          .order("id")
       ),
       supabase.from("play_profiles").select("style_notes").eq("user_id", user.id).maybeSingle(),
     ]);

@@ -3,7 +3,10 @@
  *  collections past 1,000 cards lose rows from search, deck building,
  *  exports, and price refreshing. This pages with .range() until done.
  *
- *  `build` must return a FRESH query each call (builders are single-use). */
+ *  `build` must return a FRESH query each call (builders are single-use),
+ *  and that query MUST have a total order — an ordering with ties isn't
+ *  stable between requests, so tied rows can repeat on one page and vanish
+ *  from another. Add `.order("id")` after the sort you actually want. */
 export async function fetchAllRows<T>(
   build: () => {
     range: (

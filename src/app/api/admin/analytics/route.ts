@@ -85,6 +85,7 @@ export async function GET() {
           .from("collection_items")
           .select("quantity, price_override, variant, card:cards(market_price, prices)")
           .order("created_at")
+          .order("id")
       ),
       admin.from("decks").select("id", { count: "exact", head: true }),
       admin.from("decks").select("id").eq("shared", true),
@@ -99,15 +100,25 @@ export async function GET() {
             .from("ai_usage")
             .select("model, input_tokens, output_tokens")
             .gte("created_at", monthStart.toISOString())
-            .order("created_at"),
+            .order("created_at")
+            .order("id"),
         50000
       ),
       fetchAllRows(
-        () => admin.from("scan_events").select("*").order("created_at", { ascending: false }),
+        () =>
+          admin
+            .from("scan_events")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .order("id"),
         5000
       ),
       fetchAllRows(() =>
-        admin.from("finish_feedback").select("predicted, corrected").order("created_at")
+        admin
+          .from("finish_feedback")
+          .select("predicted, corrected")
+          .order("created_at")
+          .order("id")
       ),
     ]);
 

@@ -106,6 +106,7 @@ export async function GET() {
           .select("*")
           .in("offer_id", result.map((o) => o.id))
           .order("created_at")
+          .order("id")
       );
       for (const m of msgs ?? []) {
         const list = messagesByOffer.get(m.offer_id) ?? [];

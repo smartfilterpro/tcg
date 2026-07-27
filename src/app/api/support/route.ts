@@ -54,6 +54,7 @@ export async function GET() {
           .select("*")
           .in("ticket_id", ids)
           .order("created_at")
+          .order("id")
       );
       messages = data ?? [];
     }

@@ -26,6 +26,7 @@ export async function GET() {
         .eq("user_id", user.id)
         .gte("created_at", since.toISOString())
         .order("created_at")
+        .order("id")
     );
 
     const rows = data ?? [];

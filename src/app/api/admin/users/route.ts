@@ -28,7 +28,8 @@ export async function GET() {
           admin
             .from("ai_usage")
             .select("user_id, model, input_tokens, output_tokens, created_at")
-            .order("created_at", { ascending: false }),
+            .order("created_at", { ascending: false })
+            .order("id"),
         50000
       ),
     ]);
