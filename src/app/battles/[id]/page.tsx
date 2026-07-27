@@ -2,7 +2,29 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import type { BattleAction, BattleCard, BattleStack, BattleView } from "@/lib/battle";
+import type {
+  BattleAction,
+  BattleCard,
+  BattleStack,
+  BattleView,
+  StatusCondition,
+} from "@/lib/battle";
+
+const STATUS_LIST: Array<{ key: StatusCondition; emoji: string; label: string }> = [
+  { key: "poisoned", emoji: "☠️", label: "Poison" },
+  { key: "burned", emoji: "🔥", label: "Burn" },
+  { key: "asleep", emoji: "💤", label: "Asleep" },
+  { key: "paralyzed", emoji: "⚡", label: "Paralyzed" },
+  { key: "confused", emoji: "😵", label: "Confused" },
+];
+
+const STATUS_EMOJI: Record<string, string> = {
+  poisoned: "☠️",
+  burned: "🔥",
+  asleep: "💤",
+  paralyzed: "⚡",
+  confused: "😵",
+};
 
 interface BattleData {
   status: "waiting" | "active" | "finished";
@@ -60,6 +82,11 @@ function StackTile({
       {stack.attached.length > 0 && (
         <span className="absolute -bottom-1 -right-1 rounded-full bg-slate-700 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow">
           +{stack.attached.length}
+        </span>
+      )}
+      {(stack.status?.length ?? 0) > 0 && (
+        <span className="absolute -left-1 top-0 text-[11px] drop-shadow">
+          {(stack.status ?? []).map((s) => STATUS_EMOJI[s] ?? "").join("")}
         </span>
       )}
     </button>
@@ -619,13 +646,36 @@ function SheetContent({
   if (sheet.kind === "hand") {
     const card = me.hand[sheet.index];
     if (!card) return null;
+    // Only offer moves that make sense for what this card IS. Unknown
+    // categories (custom cards) keep every option.
+    const cat = card.cat ?? null;
+    const isPoke = cat === "pokemon" || cat === null;
+    const canBoard = isPoke && card.basic !== false; // Basics (or unknown) hit the board
+    const canEvolve = isPoke && card.basic !== true; // evolutions (or unknown) go on top
+    const canAttach = cat === "energy" || cat === "trainer" || cat === null; // energy + tools
+    const inPlay = !rules || phase === "play";
+    const catLabel =
+      cat === "energy" ? "Energy" : cat === "trainer" ? "Trainer" : cat === "pokemon" ? "Pokémon" : null;
     return (
       <div>
         <div className="mb-2 flex items-center gap-3">
           <CardTile card={card} className="w-14" />
-          <h2 className="font-semibold">{card.name}</h2>
+          <div>
+            <h2 className="font-semibold">{card.name}</h2>
+            {catLabel && (
+              <p className="text-xs text-slate-500">
+                {catLabel}
+                {cat === "pokemon" && card.basic != null && (card.basic ? " · Basic" : " · Evolution")}
+              </p>
+            )}
+          </div>
         </div>
-        {rules && phase === "play" && card.cat === "trainer" && (
+        {rules && phase === "setup" && cat === "energy" && (
+          <p className="border-b border-slate-100 py-2.5 text-sm text-slate-500">
+            Energy attaches to your Pokémon once the battle starts — keep it in hand for now.
+          </p>
+        )}
+        {rules && phase === "play" && cat === "trainer" && (
           <button
             className={row}
             disabled={busy}
@@ -634,7 +684,7 @@ function SheetContent({
             ▶️ Play {card.name} (then to your discard)
           </button>
         )}
-        {!me.active && (
+        {!me.active && canBoard && (
           <button
             className={row}
             disabled={busy}
@@ -643,25 +693,25 @@ function SheetContent({
             ⭐ Play as your Active Pokémon
           </button>
         )}
-        {me.active && (!rules || phase === "play") && (
-          <>
-            <button
-              className={row}
-              disabled={busy}
-              onClick={() => act({ type: "handToActive", handIndex: sheet.index, mode: "attach" })}
-            >
-              ⚡ Attach to {me.active.face.name} (energy / tool)
-            </button>
-            <button
-              className={row}
-              disabled={busy}
-              onClick={() => act({ type: "handToActive", handIndex: sheet.index, mode: "evolve" })}
-            >
-              ⬆️ Evolve {me.active.face.name}
-            </button>
-          </>
+        {me.active && inPlay && canAttach && (
+          <button
+            className={row}
+            disabled={busy}
+            onClick={() => act({ type: "handToActive", handIndex: sheet.index, mode: "attach" })}
+          >
+            ⚡ Attach to {me.active.face.name}
+          </button>
         )}
-        {me.bench.length < 5 && (
+        {me.active && inPlay && canEvolve && (
+          <button
+            className={row}
+            disabled={busy}
+            onClick={() => act({ type: "handToActive", handIndex: sheet.index, mode: "evolve" })}
+          >
+            ⬆️ Evolve {me.active.face.name}
+          </button>
+        )}
+        {me.bench.length < 5 && canBoard && (
           <button
             className={row}
             disabled={busy}
@@ -670,33 +720,38 @@ function SheetContent({
             🪑 Play to your Bench
           </button>
         )}
-        {(!rules || phase === "play") &&
+        {inPlay &&
+          (canAttach || canEvolve) &&
           me.bench.map((s, i) => (
             <div key={s.face.uid} className="flex items-center gap-2 border-b border-slate-100">
               <span className="min-w-0 flex-1 truncate py-2.5 text-sm text-slate-500">
                 Bench: {s.face.name}
               </span>
-              <button
-                className="text-sm text-poke-blue"
-                disabled={busy}
-                onClick={() =>
-                  act({ type: "handToBench", handIndex: sheet.index, benchIndex: i, mode: "attach" })
-                }
-              >
-                attach
-              </button>
-              <button
-                className="text-sm text-poke-blue"
-                disabled={busy}
-                onClick={() =>
-                  act({ type: "handToBench", handIndex: sheet.index, benchIndex: i, mode: "evolve" })
-                }
-              >
-                evolve
-              </button>
+              {canAttach && (
+                <button
+                  className="text-sm text-poke-blue"
+                  disabled={busy}
+                  onClick={() =>
+                    act({ type: "handToBench", handIndex: sheet.index, benchIndex: i, mode: "attach" })
+                  }
+                >
+                  attach
+                </button>
+              )}
+              {canEvolve && (
+                <button
+                  className="text-sm text-poke-blue"
+                  disabled={busy}
+                  onClick={() =>
+                    act({ type: "handToBench", handIndex: sheet.index, benchIndex: i, mode: "evolve" })
+                  }
+                >
+                  evolve
+                </button>
+              )}
             </div>
           ))}
-        {rules && phase === "play" && card.cat === "energy" && me.active && (
+        {rules && phase === "play" && cat === "energy" && me.active && (
           <button
             className={`${row} text-slate-500`}
             disabled={busy}
@@ -739,8 +794,37 @@ function SheetContent({
           <p className="text-xs text-slate-500">
             {stack.damage} damage{stack.face.hp ? ` / ${stack.face.hp} HP` : ""}
           </p>
+          {(stack.face.weak || stack.face.resist || stack.face.retreat != null) && (
+            <p className="text-[11px] text-slate-400">
+              {stack.face.weak && `Weak: ${stack.face.weak} ×2`}
+              {stack.face.resist && ` · Resist: ${stack.face.resist} −30`}
+              {stack.face.retreat != null && ` · Retreat: ${stack.face.retreat}⚡`}
+            </p>
+          )}
         </div>
       </div>
+
+      {mine && sheet.target === "active" && rules && phase === "play" && (stack.face.atk?.length ?? 0) > 0 && (
+        <div className="mb-2">
+          <span className="text-xs font-semibold text-slate-500">Attacks (ends your turn):</span>
+          {stack.face.atk!.map((a, i) => (
+            <button
+              key={i}
+              className="block w-full border-b border-slate-100 py-2.5 text-left"
+              disabled={busy}
+              onClick={() => act({ type: "attack", attackIndex: i })}
+            >
+              <span className="flex items-baseline justify-between gap-2 text-sm">
+                <span className="font-semibold">⚔️ {a.name}</span>
+                <span className="shrink-0 text-slate-500">
+                  {a.cost.filter((c) => c.toLowerCase() !== "free").length}⚡ · {a.damage || "—"}
+                </span>
+              </span>
+              {a.text && <span className="block text-xs text-slate-400">{a.text}</span>}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-xs text-slate-500">Damage:</span>
@@ -757,6 +841,35 @@ function SheetContent({
           </button>
         ))}
       </div>
+
+      {sheet.target === "active" && rules && phase === "play" && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-slate-500">Status:</span>
+          {STATUS_LIST.map(({ key, emoji, label }) => {
+            const on = (stack.status ?? []).includes(key);
+            return (
+              <button
+                key={key}
+                className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                  on ? "bg-purple-100 text-purple-800" : "bg-slate-100 text-slate-500"
+                }`}
+                disabled={busy}
+                onClick={() =>
+                  act({
+                    type: "setStatus",
+                    side: mine ? "me" : "opp",
+                    target: "active",
+                    status: key,
+                    on: !on,
+                  })
+                }
+              >
+                {emoji} {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {stack.attached.length > 0 && (
         <div className="mb-1">
@@ -799,7 +912,14 @@ function SheetContent({
               disabled={busy}
               onClick={() => act({ type: "promote", benchIndex: sheet.target as number })}
             >
-              ⭐ Move to Active {me.active ? `(swap with ${me.active.face.name})` : ""}
+              ⭐ Move to Active{" "}
+              {me.active
+                ? `(retreat ${me.active.face.name}${
+                    rules && phase === "play" && (me.active.face.retreat ?? 0) > 0
+                      ? ` — discards ${me.active.face.retreat} energy`
+                      : ""
+                  })`
+                : ""}
             </button>
           )}
           <button

@@ -26,6 +26,46 @@ interface RawCard {
   images?: { small?: string; large?: string };
   tcgplayer?: { prices?: RawPrices };
   cardmarket?: { prices?: { averageSellPrice?: number; trendPrice?: number } };
+  attacks?: Array<{ name: string; cost?: string[]; damage?: string; text?: string }>;
+  weaknesses?: Array<{ type: string; value: string }>;
+  resistances?: Array<{ type: string; value: string }>;
+  convertedRetreatCost?: number;
+}
+
+/** Combat stats for referee-mode battles, cached in cards.battle_data. */
+export interface CardBattleData {
+  attacks: Array<{ name: string; cost: string[]; damage: string; text: string | null }>;
+  weak: { type: string; value: string } | null;
+  resist: { type: string; value: string } | null;
+  retreat: number;
+}
+
+function toBattleData(card: RawCard): CardBattleData | null {
+  if ((card.supertype ?? "").toLowerCase() !== "pokémon" && (card.supertype ?? "").toLowerCase() !== "pokemon") {
+    return null;
+  }
+  return {
+    attacks: (card.attacks ?? []).map((a) => ({
+      name: a.name,
+      cost: a.cost ?? [],
+      damage: a.damage ?? "",
+      text: a.text?.trim() || null,
+    })),
+    weak: card.weaknesses?.[0] ?? null,
+    resist: card.resistances?.[0] ?? null,
+    retreat: card.convertedRetreatCost ?? 0,
+  };
+}
+
+/** Fetch a Pokémon's combat stats by card id (null for trainers/energy,
+ *  unknown ids, or API failures — battles fall back to manual damage). */
+export async function getBattleDataById(id: string): Promise<CardBattleData | null> {
+  try {
+    const cards = await apiGet(`/cards/${encodeURIComponent(id)}`, {});
+    return cards[0] ? toBattleData(cards[0]) : null;
+  } catch {
+    return null;
+  }
 }
 
 function headers(): Record<string, string> {

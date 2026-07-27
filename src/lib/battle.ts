@@ -16,6 +16,13 @@
  * structural rules on purpose.
  */
 
+export interface BattleAttack {
+  name: string;
+  cost: string[];
+  damage: string;
+  text: string | null;
+}
+
 export interface BattleCard {
   uid: string;
   name: string;
@@ -28,7 +35,19 @@ export interface BattleCard {
   sup?: boolean;
   /** Max HP when known — enables auto-knockout. */
   hp?: number | null;
+  /** Energy types (for weakness/resistance matching). */
+  types?: string[];
+  /** Printed attacks, when the card database knows them. */
+  atk?: BattleAttack[];
+  /** Weakness type (×2) / resistance type (−30). */
+  weak?: string;
+  resist?: string;
+  /** Retreat cost (energy to discard). */
+  retreat?: number;
 }
+
+export const STATUS_CONDITIONS = ["poisoned", "burned", "asleep", "paralyzed", "confused"] as const;
+export type StatusCondition = (typeof STATUS_CONDITIONS)[number];
 
 /** A Pokémon in play: the face card plus everything attached under/behind it
  *  (energy, tools, pre-evolutions). */
@@ -38,6 +57,8 @@ export interface BattleStack {
   damage: number;
   /** turnCount when this stack hit the board or last evolved (0 = setup). */
   playedTurn?: number;
+  /** Active status conditions (poisoned, asleep, …). */
+  status?: StatusCondition[];
 }
 
 export interface SideState {
@@ -70,7 +91,7 @@ export interface BattleState {
   /** Who takes the first turn (needed for first-turn evolution rules). */
   firstUser?: string;
   /** Per-turn limits already used by the current turn player. */
-  flags?: { energy?: boolean; supporter?: boolean };
+  flags?: { energy?: boolean; supporter?: boolean; retreated?: boolean };
   turnUser: string | null;
   turnCount: number;
   log: LogEntry[];
@@ -87,6 +108,8 @@ export type BattleAction = { override?: boolean } & (
   | { type: "handToDiscard"; handIndex: number }
   | { type: "playCard"; handIndex: number }
   | { type: "promote"; benchIndex: number }
+  | { type: "attack"; attackIndex: number }
+  | { type: "setStatus"; side: "me" | "opp"; target: "active" | number; status: StatusCondition; on: boolean }
   | { type: "damage"; side: "me" | "opp"; target: "active" | number; delta: number }
   | { type: "knockout"; target: "active" | number }
   | { type: "stackToHand"; target: "active" | number }
@@ -153,6 +176,21 @@ function takeHandCard(side: SideState, handIndex: number): BattleCard {
   if (!card) throw new BattleError("That card isn't in your hand anymore.");
   side.hand.splice(handIndex, 1);
   return card;
+}
+
+function energyCount(stack: BattleStack): number {
+  return stack.attached.filter((c) => c.cat === "energy").length;
+}
+
+function hasStatus(stack: BattleStack, s: StatusCondition): boolean {
+  return (stack.status ?? []).includes(s);
+}
+
+/** Parse "80", "150+", "20×", "" → base number + variable marker. */
+function parseDamage(damage: string): { base: number; variable: boolean } {
+  const m = damage.trim().match(/^(\d+)?\s*([+×x*]?)$/);
+  if (!m) return { base: 0, variable: true };
+  return { base: m[1] ? parseInt(m[1], 10) : 0, variable: !!m[2] || !m[1] };
 }
 
 /** Apply one player action. Mutates `state`. Throws BattleError on an
@@ -255,6 +293,47 @@ export function applyAction(
     }
     return { text };
   }
+  /** Pokémon Checkup (between turns, referee mode): poison and burn damage
+   *  tick on both Actives, paralysis wears off for the player whose turn
+   *  just ended, sleep gets its wake-up reminder. Call AFTER the turn has
+   *  passed (me = the player who just ended their turn). */
+  function runCheckup(): { text: string; winnerId?: string } {
+    if (!rules) return { text: "" };
+    const parts: string[] = [];
+    for (const [ownerId, side] of [
+      [meId, me],
+      [oppId, opp],
+    ] as const) {
+      const active = side.active;
+      if (!active || !active.status?.length) continue;
+      const name = active.face.name;
+      let koed = false;
+      for (const [condition, tick] of [
+        ["poisoned", 10],
+        ["burned", 20],
+      ] as const) {
+        if (koed || !hasStatus(active, condition)) continue;
+        active.damage = Math.min(990, active.damage + tick);
+        parts.push(
+          `Checkup: ${name} takes ${tick} ${condition === "poisoned" ? "poison" : "burn"} damage (now ${active.damage}${active.face.hp ? ` / ${active.face.hp} HP` : ""})${condition === "burned" ? " — flip a coin: heads cures the burn" : ""}.`
+        );
+        if (active.face.hp && active.damage >= active.face.hp) {
+          const ko = knockOut(ownerId, "active", "Checkup:");
+          parts.push(ko.text);
+          if (ko.winnerId) return { text: parts.join(" ") + " ", winnerId: ko.winnerId };
+          koed = true;
+        }
+      }
+      if (!koed && hasStatus(active, "asleep")) {
+        parts.push(`Checkup: ${name} is asleep — flip a coin: heads wakes it up (clear the marker).`);
+      }
+    }
+    if (me.active && hasStatus(me.active, "paralyzed")) {
+      me.active.status = (me.active.status ?? []).filter((s) => s !== "paralyzed");
+      parts.push(`Checkup: ${me.active.face.name} is no longer paralyzed.`);
+    }
+    return { text: parts.length ? parts.join(" ") + " " : "" };
+  }
 
   switch (action.type) {
     case "draw": {
@@ -330,6 +409,7 @@ export function applyAction(
         const prev = stack.face.name;
         stack.face = card;
         stack.playedTurn = state.turnCount;
+        stack.status = []; // evolving cures status conditions
         return { text: `evolved ${prev} into ${card.name}${effectNote}` };
       }
       needTurn("attach");
@@ -361,6 +441,7 @@ export function applyAction(
         const prev = stack.face.name;
         stack.face = card;
         stack.playedTurn = state.turnCount;
+        stack.status = []; // evolving cures status conditions
         return { text: `evolved ${prev} into ${card.name}${effectNote}` };
       }
       needTurn("attach");
@@ -400,12 +481,132 @@ export function applyAction(
       const bench = me.bench[action.benchIndex];
       if (!bench) throw new BattleError("Nothing in that Bench spot.");
       // Promoting after a knockout is always allowed, even off-turn; a
-      // voluntary retreat/switch is a your-turn move.
-      if (me.active) needTurn("retreat");
+      // voluntary retreat/switch is a your-turn move with a retreat cost.
+      let costNote = "";
+      if (me.active) {
+        needTurn("retreat");
+        const retiring = me.active;
+        if (rules && !override && phase === "play") {
+          if (flags.retreated) {
+            throw new BattleError(
+              "You already retreated this turn — if a card effect switches again, use the card-effect option."
+            );
+          }
+          if (hasStatus(retiring, "asleep") || hasStatus(retiring, "paralyzed")) {
+            throw new BattleError(
+              `${retiring.face.name} is ${(retiring.status ?? []).join(" and ")} — it can't retreat. (Card effect switches use ✨.)`
+            );
+          }
+          const cost = retiring.face.retreat ?? 0;
+          if (cost > 0) {
+            if (energyCount(retiring) < cost) {
+              throw new BattleError(
+                `${retiring.face.name} needs ${cost} energy to retreat and only has ${energyCount(retiring)} attached.`
+              );
+            }
+            const discarded: string[] = [];
+            for (let i = retiring.attached.length - 1; i >= 0 && discarded.length < cost; i--) {
+              if (retiring.attached[i].cat === "energy") {
+                discarded.push(retiring.attached[i].name);
+                me.discard.push(retiring.attached[i]);
+                retiring.attached.splice(i, 1);
+              }
+            }
+            costNote = ` (discarded ${discarded.join(", ")} to retreat)`;
+          }
+          flags.retreated = true;
+        }
+        // Leaving the Active spot removes status conditions.
+        retiring.status = [];
+      }
       me.bench.splice(action.benchIndex, 1);
       if (me.active) me.bench.push(me.active);
       me.active = bench;
-      return { text: `moved ${bench.face.name} to Active` };
+      return { text: `moved ${bench.face.name} to Active${costNote}${me.active === bench && costNote ? "" : effectNote}` };
+    }
+    case "attack": {
+      needPlayPhase();
+      needTurn("attack");
+      if (!me.active) throw new BattleError("You need an Active Pokémon to attack.");
+      if (!opp.active) throw new BattleError(`${oppName} has no Active Pokémon to attack — wait for them to promote one.`);
+      const attack = me.active.face.atk?.[action.attackIndex];
+      if (!attack) throw new BattleError("That attack isn't on this card.");
+      if (rules && !override) {
+        if (state.turnCount === 1) {
+          throw new BattleError("No attacking on the very first turn of the game.");
+        }
+        if (hasStatus(me.active, "asleep")) {
+          throw new BattleError(`${me.active.face.name} is asleep — flip for wake-up between turns first. (✨ overrides.)`);
+        }
+        if (hasStatus(me.active, "paralyzed")) {
+          throw new BattleError(`${me.active.face.name} is paralyzed and can't attack this turn. (✨ overrides.)`);
+        }
+        const cost = attack.cost.filter((c) => c.toLowerCase() !== "free").length;
+        if (energyCount(me.active) < cost) {
+          throw new BattleError(
+            `${attack.name} needs ${cost} energy — ${me.active.face.name} has ${energyCount(me.active)} attached. (Special energy providing extra? Use ✨.)`
+          );
+        }
+      }
+      const { base, variable } = parseDamage(attack.damage);
+      const target = opp.active;
+      let dmg = base;
+      const mods: string[] = [];
+      const myTypes = me.active.face.types ?? [];
+      if (dmg > 0 && target.face.weak && myTypes.includes(target.face.weak)) {
+        dmg *= 2;
+        mods.push("weakness ×2");
+      }
+      if (dmg > 0 && target.face.resist && myTypes.includes(target.face.resist)) {
+        dmg = Math.max(0, dmg - 30);
+        mods.push("resistance −30");
+      }
+      let text = `attacked with ${attack.name}`;
+      if (hasStatus(me.active, "confused")) {
+        text += " (confused — remember the coin flip: tails = 30 damage to itself instead)";
+      }
+      if (dmg > 0) {
+        target.damage = Math.min(990, target.damage + dmg);
+        text += ` — ${dmg} damage to ${target.face.name}${mods.length ? ` (${mods.join(", ")})` : ""} (now ${target.damage}${target.face.hp ? ` / ${target.face.hp} HP` : ""})`;
+      }
+      if (variable) {
+        text += ` — ${attack.damage.includes("+") || attack.damage.includes("×") || attack.damage.includes("x") ? "this attack has a +/× damage effect" : "damage varies"}: read the card and adjust with the damage buttons`;
+      }
+      if (attack.text) {
+        text += `. Effect: ${attack.text.length > 220 ? attack.text.slice(0, 220) + "…" : attack.text}`;
+      }
+      if (rules && target.face.hp && target.damage >= target.face.hp) {
+        const ko = knockOut(oppId, "active", `${text} —`);
+        if (ko.winnerId) return { text: ko.text, winnerId: ko.winnerId };
+        text = ko.text;
+      }
+      // Attacking ends the turn.
+      state.turnUser = oppId;
+      state.turnCount += 1;
+      state.flags = {};
+      const checkup = runCheckup();
+      if (checkup.winnerId) return { text: `${text}. ${checkup.text}`, winnerId: checkup.winnerId };
+      const drawn = opp.deck.shift();
+      if (!drawn) {
+        return { text: `${text}. ${checkup.text}Turn passes — and ${oppName} has no cards left to draw. Deck-out!`, winnerId: meId };
+      }
+      opp.hand.push(drawn);
+      return { text: `${text}. ${checkup.text}Turn passes — ${oppName} drew a card.` };
+    }
+    case "setStatus": {
+      needPlayPhase();
+      const side = action.side === "me" ? me : opp;
+      const stack = getStack(side, action.target);
+      const status = (stack.status ??= []);
+      const has = status.includes(action.status);
+      if (action.on && !has) status.push(action.status);
+      if (!action.on && has) status.splice(status.indexOf(action.status), 1);
+      const whose = action.side === "me" ? "their" : "the opposing";
+      return {
+        text: action.on
+          ? `marked ${whose} ${stack.face.name} as ${action.status}`
+          : `cleared ${action.status} from ${whose} ${stack.face.name}`,
+      };
     }
     case "damage": {
       needPlayPhase();
@@ -475,16 +676,20 @@ export function applyAction(
       state.turnCount += 1;
       state.flags = {};
       if (rules) {
+        const checkup = runCheckup();
+        if (checkup.winnerId) {
+          return { text: `ended their turn. ${checkup.text}`, winnerId: checkup.winnerId };
+        }
         // Every turn begins with a mandatory draw; failing it loses the game.
         const drawn = opp.deck.shift();
         if (!drawn) {
           return {
-            text: `ended their turn — and ${oppName} has no cards left to draw. Deck-out!`,
+            text: `ended their turn. ${checkup.text}${oppName} has no cards left to draw. Deck-out!`,
             winnerId: meId,
           };
         }
         opp.hand.push(drawn);
-        return { text: `ended their turn — ${oppName} drew a card` };
+        return { text: `ended their turn. ${checkup.text}${oppName} drew a card` };
       }
       return { text: "ended their turn" };
     }
