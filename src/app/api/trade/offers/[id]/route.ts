@@ -4,6 +4,27 @@ import { requireUser, AuthError } from "@/lib/auth";
 
 type Params = { params: Promise<{ id: string }> };
 
+/** DELETE: clear a finished trade request (both sides lose it — RLS only
+ *  allows this on non-pending offers involving the caller). */
+export async function DELETE(_req: Request, { params }: Params) {
+  try {
+    await requireUser();
+    const { id } = await params;
+    const supabase = await createClient();
+    const { error } = await supabase.from("trade_offers").delete().eq("id", id);
+    if (error) throw error;
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Request failed" },
+      { status: 500 }
+    );
+  }
+}
+
 /** PATCH: respond to a trade request. Body: { status }
  *  Recipient may accept/decline a pending offer; sender may withdraw it. */
 export async function PATCH(req: Request, { params }: Params) {

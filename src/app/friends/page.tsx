@@ -200,6 +200,17 @@ export default function FriendsPage() {
     loadOffers();
   }
 
+  async function clearOffer(offer: TradeOffer) {
+    await fetch(`/api/trade/offers/${offer.id}`, { method: "DELETE" });
+    loadOffers();
+  }
+
+  async function clearResolvedOffers() {
+    if (!confirm("Clear all finished trade requests? This removes them for both sides.")) return;
+    await fetch("/api/trade/offers", { method: "DELETE" });
+    loadOffers();
+  }
+
   async function toggleSharing() {
     setError(null);
     const next = !sharing;
@@ -387,10 +398,20 @@ export default function FriendsPage() {
         <>
           {offers.length > 0 && (
             <div className="card-panel p-4">
-              <h2 className="mb-2 font-semibold">
-                📨 Trade requests (
-                {offers.filter((o) => o.status === "pending").length} pending)
-              </h2>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h2 className="font-semibold">
+                  📨 Trade requests (
+                  {offers.filter((o) => o.status === "pending").length} pending)
+                </h2>
+                {offers.some((o) => o.status !== "pending") && (
+                  <button
+                    className="shrink-0 text-xs text-slate-400 hover:underline"
+                    onClick={clearResolvedOffers}
+                  >
+                    Clear resolved
+                  </button>
+                )}
+              </div>
               <ul className="divide-y divide-slate-100">
                 {offers
                   .filter((o, i) => o.status === "pending" || i < 8)
@@ -405,17 +426,29 @@ export default function FriendsPage() {
                             {new Date(o.created_at).toLocaleDateString()}
                           </span>
                         </div>
-                        <span
-                          className={`chip shrink-0 ${
-                            o.status === "pending"
-                              ? "bg-yellow-50 text-yellow-800"
-                              : o.status === "accepted"
-                                ? "bg-green-100 text-green-700"
-                                : "bg-slate-100 text-slate-500"
-                          }`}
-                        >
-                          {o.status}
-                        </span>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <span
+                            className={`chip ${
+                              o.status === "pending"
+                                ? "bg-yellow-50 text-yellow-800"
+                                : o.status === "accepted"
+                                  ? "bg-green-100 text-green-700"
+                                  : "bg-slate-100 text-slate-500"
+                            }`}
+                          >
+                            {o.status}
+                          </span>
+                          {o.status !== "pending" && (
+                            <button
+                              aria-label="Clear this trade request"
+                              title="Clear this trade request (removes it for both sides)"
+                              className="flex h-6 w-6 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
+                              onClick={() => clearOffer(o)}
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="mt-1 grid gap-2 text-xs sm:grid-cols-2">
                         <OfferSide
