@@ -211,7 +211,15 @@ export async function POST(req: Request) {
         .update({ image_locked: false })
         .eq("id", body.cardId)
         .select("id");
-      if (error) throw error;
+      if (error) {
+        if (/image_locked/i.test(error.message ?? "")) {
+          return NextResponse.json(
+            { error: "Locking isn't set up yet — run supabase/migrations/007_image_curation.sql first." },
+            { status: 400 }
+          );
+        }
+        throw error;
+      }
       if (!data || data.length === 0) {
         return NextResponse.json({ error: "Card not found." }, { status: 404 });
       }
@@ -230,11 +238,22 @@ export async function POST(req: Request) {
       }
       // .select() so a zero-row match (bad card id) is a visible error
       // instead of a silent no-op that leaves the old photo in place.
-      const { data, error } = await admin
+      let warning: string | undefined;
+      let { data, error } = await admin
         .from("cards")
         .update({ image_small: url, image_large: url, image_locked: true })
         .eq("id", body.cardId)
         .select("id, image_small");
+      // Pre-migration-007 database: set the image anyway, just without the lock.
+      if (error && /image_locked/i.test(error.message ?? "")) {
+        ({ data, error } = await admin
+          .from("cards")
+          .update({ image_small: url, image_large: url })
+          .eq("id", body.cardId)
+          .select("id, image_small"));
+        warning =
+          "Image updated, but it is NOT locked — run supabase/migrations/007_image_curation.sql to enable admin locking.";
+      }
       if (error) throw error;
       if (!data || data.length === 0) {
         return NextResponse.json(
@@ -242,7 +261,7 @@ export async function POST(req: Request) {
           { status: 404 }
         );
       }
-      return NextResponse.json({ ok: true, imageUrl: url });
+      return NextResponse.json({ ok: true, imageUrl: url, warning });
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
@@ -276,8 +295,13 @@ function errorResponse(err: unknown) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   console.error("admin card-images error", err);
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  // Supabase errors are plain objects, not Error instances — surface their
+  // message too instead of a useless generic "Request failed".
+  const message =
+    err instanceof Error
+      ? err.message
+      : typeof (err as { message?: unknown })?.message === "string"
+        ? ((err as { message: string }).message)
+        : "Request failed";
+  return NextResponse.json({ error: message }, { status: 500 });
 }
