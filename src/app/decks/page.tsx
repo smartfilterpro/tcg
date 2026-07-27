@@ -535,9 +535,12 @@ export default function DecksPage() {
         if (!ok) throw new Error(j.error || "load failed");
         setDecks(j.decks ?? []);
       })
-      .catch(() => {
+      .catch((e) => {
+        const detail = e instanceof Error ? e.message : "load failed";
         setError(
-          "Couldn't load your decks just now — they are NOT gone. Refresh in a moment (this usually happens during an app update)."
+          /recursion/i.test(detail)
+            ? "Your decks are NOT gone — the database needs a one-time fix. Ask the admin to run supabase/migrations/022_fix_deck_recursion.sql."
+            : `Couldn't load your decks just now — they are NOT gone. (${detail}) Refresh in a moment.`
         );
       });
     fetch("/api/profile")
