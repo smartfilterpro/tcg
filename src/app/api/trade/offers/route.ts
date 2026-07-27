@@ -92,7 +92,37 @@ export async function GET() {
       supabase,
       result.flatMap((o) => [...o.give, ...o.get])
     );
-    return NextResponse.json({ migrated: true, offers: result, myId: user.id });
+
+    // Per-offer message threads (best-effort — table exists after migration 015)
+    const messagesByOffer = new Map<
+      string,
+      Array<{ id: string; authorName: string; mine: boolean; body: string; created_at: string }>
+    >();
+    if (result.length > 0) {
+      const { data: msgs } = await supabase
+        .from("trade_offer_messages")
+        .select("*")
+        .in("offer_id", result.map((o) => o.id))
+        .order("created_at")
+        .limit(2000);
+      for (const m of msgs ?? []) {
+        const list = messagesByOffer.get(m.offer_id) ?? [];
+        list.push({
+          id: m.id,
+          authorName: nameById.get(m.user_id) ?? "A member",
+          mine: m.user_id === user.id,
+          body: m.body,
+          created_at: m.created_at,
+        });
+        messagesByOffer.set(m.offer_id, list);
+      }
+    }
+    const withMessages = result.map((o) => ({
+      ...o,
+      messages: messagesByOffer.get(o.id) ?? [],
+    }));
+
+    return NextResponse.json({ migrated: true, offers: withMessages, myId: user.id });
   } catch (err) {
     return errorResponse(err);
   }

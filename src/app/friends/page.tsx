@@ -64,6 +64,14 @@ interface OfferLine {
   image?: string | null;
 }
 
+interface OfferMessage {
+  id: string;
+  authorName: string;
+  mine: boolean;
+  body: string;
+  created_at: string;
+}
+
 interface TradeOffer {
   id: string;
   direction: "incoming" | "outgoing";
@@ -73,6 +81,7 @@ interface TradeOffer {
   message: string | null;
   status: "pending" | "accepted" | "declined" | "withdrawn";
   created_at: string;
+  messages: OfferMessage[];
 }
 
 /** key = collection item id */
@@ -198,6 +207,25 @@ export default function FriendsPage() {
     const json = await res.json();
     if (!res.ok) setError(json.error);
     loadOffers();
+  }
+
+  const [offerChatOpen, setOfferChatOpen] = useState<string | null>(null);
+  const [offerChatText, setOfferChatText] = useState("");
+  const [offerChatBusy, setOfferChatBusy] = useState(false);
+
+  async function sendOfferMessage(offer: TradeOffer) {
+    if (!offerChatText.trim() || offerChatBusy) return;
+    setOfferChatBusy(true);
+    const res = await fetch(`/api/trade/offers/${offer.id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: offerChatText }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else setOfferChatText("");
+    await loadOffers();
+    setOfferChatBusy(false);
   }
 
   async function clearOffer(offer: TradeOffer) {
@@ -494,6 +522,66 @@ export default function FriendsPage() {
                         <p className="mt-1 text-xs text-green-700">
                           Deal! Arrange the hand-off in person — the app doesn&apos;t move cards.
                         </p>
+                      )}
+                      {(o.status === "pending" || o.status === "accepted" || o.messages.length > 0) && (
+                        <div className="mt-2">
+                          <button
+                            className="text-xs font-medium text-poke-blue hover:underline"
+                            onClick={() => {
+                              setOfferChatOpen(offerChatOpen === o.id ? null : o.id);
+                              setOfferChatText("");
+                            }}
+                          >
+                            💬 {o.messages.length} message{o.messages.length === 1 ? "" : "s"}
+                            {offerChatOpen === o.id ? " ▲" : " ▼"}
+                          </button>
+                          {offerChatOpen === o.id && (
+                            <div className="mt-2 space-y-1.5 border-t border-slate-100 pt-2">
+                              {o.messages.map((m) => (
+                                <div
+                                  key={m.id}
+                                  className={`max-w-[85%] rounded-lg p-2 text-xs ${
+                                    m.mine
+                                      ? "ml-auto bg-poke-blue/10 text-slate-800"
+                                      : "bg-slate-50 text-slate-800"
+                                  }`}
+                                >
+                                  <span className="font-semibold">
+                                    {m.mine ? "You" : m.authorName}:
+                                  </span>{" "}
+                                  <span className="whitespace-pre-wrap">{m.body}</span>
+                                </div>
+                              ))}
+                              {(o.status === "pending" || o.status === "accepted") && (
+                                <form
+                                  className="flex gap-2 pt-1"
+                                  onSubmit={(e) => {
+                                    e.preventDefault();
+                                    sendOfferMessage(o);
+                                  }}
+                                >
+                                  <input
+                                    className="input min-w-0 flex-1 text-sm"
+                                    placeholder={
+                                      o.status === "accepted"
+                                        ? "e.g. Saturday at the card shop?"
+                                        : "e.g. Would you add a reverse holo?"
+                                    }
+                                    maxLength={1000}
+                                    value={offerChatText}
+                                    onChange={(e) => setOfferChatText(e.target.value)}
+                                  />
+                                  <button
+                                    className="btn-secondary shrink-0 text-sm"
+                                    disabled={offerChatBusy || !offerChatText.trim()}
+                                  >
+                                    Send
+                                  </button>
+                                </form>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </li>
                   ))}
