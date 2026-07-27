@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
-import { anthropic, MODEL } from "@/lib/anthropic";
+import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { matchDetectedCard, numberKey, cleanCardName } from "@/lib/pokemontcg";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
 import { createClient } from "@/lib/supabase/server";
-import type { DetectedCard, ScanMatch } from "@/lib/types";
+import { rowToSummary, type CardSummaryRow } from "@/lib/types";
+import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const maxDuration = 120; // vision + N lookups can take a while
 
@@ -70,6 +72,39 @@ cannot read; use null instead and lower the confidence. Ignore card backs,
 sleeves without cards, and anything that is not a Pokémon TCG card. List cards
 roughly left-to-right, top-to-bottom.`;
 
+/** Check our own shared card cache before hitting the (slow) external APIs.
+ *  Every card anyone has ever saved is in the cards table, so repeat scans of
+ *  the same sets match instantly. Only accepts an unambiguous name+number
+ *  match — anything uncertain falls through to the full external lookup. */
+async function matchFromLocalDb(
+  supabase: SupabaseClient,
+  detected: DetectedCard
+): Promise<CardSummary | null> {
+  try {
+    const key = numberKey(detected.collectorNumber);
+    if (!detected.name || !key) return null;
+    const { data } = await supabase
+      .from("cards")
+      .select("*")
+      // Exact (case-insensitive) name match; strip ilike wildcards
+      .ilike("name", detected.name.replace(/[%_]/g, ""))
+      .limit(25);
+    let hits = ((data ?? []) as CardSummaryRow[]).filter(
+      (r) => numberKey(r.number) === key
+    );
+    // Same name+number can exist in several sets ("025/198" vs "025/159") —
+    // use the printed set total to disambiguate when we read one.
+    const totalText = detected.setTotal?.trim() ?? "";
+    if (/^\d+$/.test(totalText)) {
+      const total = parseInt(totalText, 10);
+      hits = hits.filter((r) => r.set_printed_total === total);
+    }
+    return hits.length === 1 ? rowToSummary(hits[0]) : null;
+  } catch {
+    return null; // any local hiccup → just use the external APIs
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const { user } = await requireUser();
@@ -81,11 +116,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing image" }, { status: 400 });
     }
 
+    const supabase = await createClient();
     const client = anthropic();
     // Streamed with a generous cap: thinking + per-card JSON both draw from
     // max_tokens, and big multi-card spreads need the headroom.
     const stream = client.messages.stream({
-      model: MODEL,
+      model: SCAN_MODEL,
       max_tokens: 16000,
       system: SYSTEM,
       output_config: {
@@ -113,7 +149,7 @@ export async function POST(req: Request) {
     });
     const response = await stream.finalMessage();
 
-    await logAiUsage(await createClient(), user.id, "scan", MODEL, response.usage);
+    await logAiUsage(supabase, user.id, "scan", SCAN_MODEL, response.usage);
 
     if (response.stop_reason === "refusal") {
       return NextResponse.json(
@@ -176,6 +212,13 @@ export async function POST(req: Request) {
       const batch = detectedCards.slice(i, i + BATCH);
       const matched = await Promise.all(
         batch.map(async (detected) => {
+          // Fast path: a card someone already saved matches from our own
+          // database in one quick query instead of several external calls.
+          const local = await matchFromLocalDb(supabase, detected);
+          if (local) {
+            return { detected, match: local, candidates: [local] } satisfies ScanMatch;
+          }
+
           let { match, candidates } = await matchDetectedCard(detected);
 
           // Consult TCGdex when the primary DB found nothing — or found only

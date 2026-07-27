@@ -106,6 +106,9 @@ cards); special energy must actually be owned.
 
 ## Notes
 
-- `ANTHROPIC_MODEL` defaults to `claude-opus-5`; override in env if desired.
+- `ANTHROPIC_MODEL` defaults to `claude-opus-5` (deck building & coaching); override in env if desired.
+- `SCAN_MODEL` defaults to `claude-sonnet-5` — card scanning is a reading task where the
+  faster model matches Opus accuracy at a fraction of the latency and cost. Set it to
+  `claude-opus-5` to scan with Opus, or `claude-haiku-4-5` for the fastest/cheapest scans.
 - The collection export link grants read-only access to your collection list — treat
   it like a password.
