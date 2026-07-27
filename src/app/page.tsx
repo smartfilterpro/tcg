@@ -604,9 +604,10 @@ export default function CollectionPage() {
             >
               ✕
             </button>
-            <div className="flex gap-4 pr-6">
+            {/* Stacked on phones (image on top), side-by-side from sm up */}
+            <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start sm:pr-6">
               {hasImage(selected) ? (
-                <div className="flex aspect-[63/88] w-40 shrink-0 items-center justify-center self-start overflow-hidden rounded-lg bg-slate-100 shadow">
+                <div className="flex aspect-[63/88] w-40 shrink-0 items-center justify-center self-center overflow-hidden rounded-lg bg-slate-100 shadow sm:self-start">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={selected.card.image_large ?? selected.card.image_small!}
@@ -616,7 +617,7 @@ export default function CollectionPage() {
                   />
                 </div>
               ) : (
-                <div className="flex aspect-[63/88] w-40 flex-col items-center justify-center gap-2 self-start rounded-lg bg-slate-100 p-3 text-center text-xs text-slate-400">
+                <div className="flex aspect-[63/88] w-40 flex-col items-center justify-center gap-2 self-center rounded-lg bg-slate-100 p-3 text-center text-xs text-slate-400 sm:self-start">
                   <span className="text-2xl">📷</span>
                   No card art available
                   <button
@@ -635,7 +636,7 @@ export default function CollectionPage() {
                   </button>
                 </div>
               )}
-              <div className="min-w-0 flex-1">
+              <div className="w-full min-w-0 sm:flex-1">
                 <h2 className="text-lg font-bold">{selected.card.name}</h2>
                 <dl className="mt-2 space-y-1 text-sm text-slate-600">
                   <div>Set: <span className="font-medium">{selected.card.set_name}</span></div>
@@ -647,9 +648,9 @@ export default function CollectionPage() {
                   )}
                   {selected.card.hp && <div>HP: {selected.card.hp}</div>}
                   <div className="flex items-center gap-2">
-                    Finish:
+                    <span className="shrink-0">Finish:</span>
                     <select
-                      className="input w-auto py-1 text-xs"
+                      className="input min-w-0 flex-1 py-1 text-xs sm:w-auto sm:flex-none"
                       value={selected.variant ?? "normal"}
                       onChange={(e) => changeVariant(selected, e.target.value)}
                     >
@@ -674,15 +675,18 @@ export default function CollectionPage() {
                     </div>
                   )}
                   <div className="flex items-center gap-2 pt-1">
-                    <span className="text-xs text-slate-500">Your value $</span>
+                    <span className="shrink-0 text-xs text-slate-500">Your value $</span>
                     <input
-                      className="input w-24 py-1 text-xs"
+                      className="input w-full min-w-0 flex-1 py-1 text-xs sm:w-24 sm:flex-none"
                       inputMode="decimal"
                       placeholder="auto"
                       value={valueDraft}
                       onChange={(e) => setValueDraft(e.target.value)}
                     />
-                    <button className="btn-secondary px-2 py-1 text-xs" onClick={() => saveValue(selected)}>
+                    <button
+                      className="btn-secondary shrink-0 px-2 py-1 text-xs"
+                      onClick={() => saveValue(selected)}
+                    >
                       Set
                     </button>
                     {valueSaved && <span className="text-xs text-green-600">✓</span>}
@@ -713,7 +717,7 @@ export default function CollectionPage() {
               </div>
             </div>
 
-            <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-4">
               <div className="flex items-center gap-2">
                 <button
                   className="btn-secondary h-9 w-9 p-0"
