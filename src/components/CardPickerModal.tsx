@@ -195,18 +195,22 @@ export default function CardPickerModal({
         className="card-panel flex max-h-[85vh] w-full max-w-2xl flex-col p-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-3 flex items-center gap-2">
+        {/* Search gets a full-width row on phones; controls wrap below it */}
+        <div className="mb-3 flex flex-wrap items-center gap-2">
           <input
             autoFocus
-            className="input"
-            placeholder='Search by name or number — e.g. "Charizard", "101/190", "#25"'
+            type="search"
+            className="input w-full sm:w-auto sm:flex-1"
+            placeholder='🔍 Search by name or number — e.g. "Charizard", "101/190"'
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          {headerExtra}
-          <button className="btn-secondary" onClick={onClose}>
-            {toast !== undefined ? "Done" : "Close"}
-          </button>
+          <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
+            {headerExtra ?? <span />}
+            <button className="btn-secondary shrink-0" onClick={onClose}>
+              {toast !== undefined ? "Done" : "Close"}
+            </button>
+          </div>
         </div>
         {toast && (
           <div className="mb-2 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">
