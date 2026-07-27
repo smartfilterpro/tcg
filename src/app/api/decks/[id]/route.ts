@@ -66,11 +66,52 @@ export async function PATCH(req: Request, { params }: Params) {
       shareScope?: string;
       addShareUserId?: string;
       removeShareUserId?: string;
+      name?: string;
+      strategy?: string | null;
+      cards?: Array<{ name?: string; quantity?: number; category?: string; card_id?: string | null }>;
     };
     const supabase = await createClient();
 
     const patch: Record<string, unknown> = {};
     if (typeof body.shared === "boolean") patch.shared = body.shared;
+    if (body.name !== undefined) {
+      if (typeof body.name !== "string" || !body.name.trim() || body.name.length > 100) {
+        return NextResponse.json({ error: "Invalid deck name" }, { status: 400 });
+      }
+      patch.name = body.name.trim();
+    }
+    if (body.strategy !== undefined) {
+      patch.strategy = typeof body.strategy === "string" ? body.strategy.slice(0, 10000) : null;
+    }
+    if (body.cards !== undefined) {
+      if (
+        !Array.isArray(body.cards) ||
+        body.cards.length === 0 ||
+        body.cards.length > 80 ||
+        !body.cards.every(
+          (c) => typeof c.name === "string" && typeof c.quantity === "number" && c.quantity > 0
+        )
+      ) {
+        return NextResponse.json({ error: "Invalid card list" }, { status: 400 });
+      }
+      patch.cards = body.cards;
+      // Editing the list means suggestions may be fulfilled — prune any
+      // wishlist entry whose card is now in the deck (best-effort; the
+      // suggestions column exists after migration 006).
+      const inDeck = new Set(body.cards.map((c) => (c.name as string).trim().toLowerCase()));
+      const { data: existing } = await supabase
+        .from("decks")
+        .select("suggestions")
+        .eq("id", id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      const suggestions = (existing?.suggestions as Array<{ name?: string }> | null) ?? null;
+      if (Array.isArray(suggestions)) {
+        patch.suggestions = suggestions.filter(
+          (s) => !inDeck.has((s.name ?? "").trim().toLowerCase())
+        );
+      }
+    }
     if (body.shareScope !== undefined) {
       if (body.shareScope !== "everyone" && body.shareScope !== "friends") {
         return NextResponse.json({ error: "Invalid share scope" }, { status: 400 });
@@ -82,12 +123,26 @@ export async function PATCH(req: Request, { params }: Params) {
       const update: Record<string, unknown> = {};
       if ("shared" in patch) update.shared = patch.shared;
       if ("shareScope" in patch) update.share_scope = patch.shareScope;
-      const { data, error } = await supabase
+      if ("name" in patch) update.name = patch.name;
+      if ("strategy" in patch) update.strategy = patch.strategy;
+      if ("cards" in patch) update.cards = patch.cards;
+      if ("suggestions" in patch) update.suggestions = patch.suggestions;
+      let { data, error } = await supabase
         .from("decks")
         .update(update)
         .eq("id", id)
         .eq("user_id", user.id)
         .select("id");
+      // Pre-migration-006 fallback: retry without the suggestions column.
+      if (error && /suggestions/i.test(error.message ?? "") && "suggestions" in update) {
+        delete update.suggestions;
+        ({ data, error } = await supabase
+          .from("decks")
+          .update(update)
+          .eq("id", id)
+          .eq("user_id", user.id)
+          .select("id"));
+      }
       if (error) {
         if (/share_scope/i.test(error.message ?? "")) {
           return NextResponse.json(

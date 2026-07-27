@@ -24,7 +24,15 @@ function categoryOf(supertype: string | null | undefined): OwnedCard["category"]
   return "trainer";
 }
 
-function ManualBuilder({ onSaved }: { onSaved: (deck: Deck) => void }) {
+function ManualBuilder({
+  onSaved,
+  editDeck,
+  onEditStarted,
+}: {
+  onSaved: (deck: Deck) => void;
+  editDeck?: Deck | null;
+  onEditStarted?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [owned, setOwned] = useState<OwnedCard[] | null>(null);
   const [search, setSearch] = useState("");
@@ -36,10 +44,11 @@ function ManualBuilder({ onSaved }: { onSaved: (deck: Deck) => void }) {
   const [review, setReview] = useState<string | null>(null);
   const [question, setQuestion] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Editing an existing deck: its id + original record (for suggestions and
+  // rebuilding the updated Deck object after a save).
+  const [editBase, setEditBase] = useState<Deck | null>(null);
 
-  async function openBuilder() {
-    setOpen(true);
-    if (owned !== null) return;
+  async function fetchOwned(): Promise<OwnedCard[]> {
     try {
       const res = await fetch("/api/collection");
       const json = await res.json();
@@ -61,11 +70,52 @@ function ManualBuilder({ onSaved }: { onSaved: (deck: Deck) => void }) {
           });
         }
       }
-      setOwned([...byName.values()].sort((a, b) => a.name.localeCompare(b.name)));
+      return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
     } catch {
-      setOwned([]);
+      return [];
     }
   }
+
+  async function openBuilder() {
+    setOpen(true);
+    if (owned !== null) return;
+    setOwned(await fetchOwned());
+  }
+
+  // Load a saved deck into the builder for editing.
+  useEffect(() => {
+    if (!editDeck) return;
+    onEditStarted?.();
+    void (async () => {
+      setOpen(true);
+      const list = owned ?? (await fetchOwned());
+      // Deck entries missing from the collection list (basic energy the
+      // player never scanned, etc.) get merged in so they stay editable.
+      const have = new Set(list.map((c) => c.name));
+      const merged = [...list];
+      for (const e of editDeck.cards ?? []) {
+        if (!have.has(e.name)) {
+          merged.push({
+            name: e.name,
+            owned: e.category === "energy" ? 60 : e.quantity,
+            category: (e.category as OwnedCard["category"]) ?? "trainer",
+            cardId: e.card_id,
+            image: null,
+            setName: "",
+          });
+        }
+      }
+      merged.sort((a, b) => a.name.localeCompare(b.name));
+      setOwned(merged);
+      setDeck(Object.fromEntries((editDeck.cards ?? []).map((e) => [e.name, e.quantity])));
+      setName(editDeck.name);
+      setNotes(editDeck.strategy ?? "");
+      setEditBase(editDeck);
+      setReview(null);
+      setError(null);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editDeck]);
 
   function maxFor(c: OwnedCard): number {
     // TCG rules: max 4 copies of a card, except basic Energy. We also cap at
@@ -128,22 +178,41 @@ function ManualBuilder({ onSaved }: { onSaved: (deck: Deck) => void }) {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch("/api/decks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const cards = toEntries();
+      if (editBase) {
+        // Update the existing deck in place.
+        const res = await fetch(`/api/decks/${editBase.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: name.trim(), strategy: notes.trim() || null, cards }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Couldn't save the deck");
+        const inDeck = new Set(cards.map((c) => c.name.toLowerCase()));
+        onSaved({
+          ...editBase,
           name: name.trim(),
           strategy: notes.trim() || null,
-          cards: toEntries(),
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Couldn't save the deck");
-      onSaved(json.deck);
+          cards,
+          suggestions: (editBase.suggestions ?? []).filter(
+            (s) => !inDeck.has(s.name.toLowerCase())
+          ),
+        });
+      } else {
+        const res = await fetch("/api/decks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: name.trim(), strategy: notes.trim() || null, cards }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Couldn't save the deck");
+        onSaved(json.deck);
+      }
       setDeck({});
       setName("");
       setNotes("");
       setReview(null);
+      setEditBase(null);
       setOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't save the deck");
@@ -156,20 +225,35 @@ function ManualBuilder({ onSaved }: { onSaved: (deck: Deck) => void }) {
     .slice(0, 60);
 
   return (
-    <div className="card-panel p-4">
+    <div className="card-panel p-4" id="manual-builder">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <h2 className="font-semibold">🛠 Build your own deck</h2>
+          <h2 className="font-semibold">
+            {editBase ? `✏️ Editing “${editBase.name}”` : "🛠 Build your own deck"}
+          </h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            Pick cards from your collection yourself — with optional {AI_NAME} review while
-            you build.
+            {editBase
+              ? "Swap cards in and out, then Save — the deck updates in place."
+              : `Pick cards from your collection yourself — with optional ${AI_NAME} review while you build.`}
           </p>
         </div>
         <button
           className="btn-secondary shrink-0 text-sm"
-          onClick={() => (open ? setOpen(false) : openBuilder())}
+          onClick={() => {
+            if (open) {
+              setOpen(false);
+              if (editBase) {
+                setEditBase(null);
+                setDeck({});
+                setName("");
+                setNotes("");
+              }
+            } else {
+              openBuilder();
+            }
+          }}
         >
-          {open ? "Close" : "Open builder"}
+          {open ? (editBase ? "Cancel edit" : "Close") : "Open builder"}
         </button>
       </div>
 
@@ -182,6 +266,46 @@ function ManualBuilder({ onSaved }: { onSaved: (deck: Deck) => void }) {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
+
+          {editBase &&
+            (editBase.suggestions?.length ?? 0) > 0 &&
+            owned &&
+            (() => {
+              // Wishlist cards the player has since acquired: one tap to swap in.
+              const swappable = editBase.suggestions!.filter((s) => {
+                const c = owned.find((o) => o.name.toLowerCase() === s.name.toLowerCase());
+                return c && c.owned > 0 && (deck[c.name] ?? 0) < maxFor(c);
+              });
+              if (swappable.length === 0) return null;
+              return (
+                <div className="rounded-lg bg-green-50 p-2 text-xs text-green-800">
+                  <b>✅ Wishlist cards you now own — tap to add:</b>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {swappable.map((s) => {
+                      const c = owned.find(
+                        (o) => o.name.toLowerCase() === s.name.toLowerCase()
+                      )!;
+                      const addable = Math.min(
+                        s.quantity,
+                        maxFor(c) - (deck[c.name] ?? 0)
+                      );
+                      return (
+                        <button
+                          key={s.name}
+                          className="chip bg-white text-green-800 hover:bg-green-100"
+                          onClick={() => adjust(c, addable)}
+                        >
+                          + {c.name} ×{addable}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1 text-green-700">
+                    Then remove what they replace so the deck stays at 60.
+                  </p>
+                </div>
+              );
+            })()}
 
           {/* Current deck */}
           <div className="rounded-lg bg-slate-50 p-3">
@@ -492,6 +616,7 @@ export default function DecksPage() {
   const [styleSaved, setStyleSaved] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [format, setFormat] = useState("any");
+  const [editRequest, setEditRequest] = useState<Deck | null>(null);
   const [building, setBuilding] = useState(false);
   const [buildStep, setBuildStep] = useState(0);
   const [built, setBuilt] = useState<BuiltDeck | null>(null);
@@ -799,8 +924,16 @@ export default function DecksPage() {
         )}
       </div>
 
-      {/* Manual builder */}
-      <ManualBuilder onSaved={(d) => setDecks((prev) => [d, ...prev])} />
+      {/* Manual builder (also used to edit any saved deck) */}
+      <ManualBuilder
+        onSaved={(d) =>
+          setDecks((prev) =>
+            prev.some((x) => x.id === d.id) ? prev.map((x) => (x.id === d.id ? d : x)) : [d, ...prev]
+          )
+        }
+        editDeck={editRequest}
+        onEditStarted={() => setEditRequest(null)}
+      />
 
       {/* Saved decks */}
       <div>
@@ -845,6 +978,20 @@ export default function DecksPage() {
             <div className="flex items-start justify-between gap-2">
               <h2 className="text-xl font-bold">{viewing.name}</h2>
               <div className="flex shrink-0 items-center gap-1">
+                <button
+                  className="btn text-sm text-poke-blue hover:bg-poke-blue/10"
+                  title="Swap cards in and out of this deck"
+                  onClick={() => {
+                    setEditRequest(viewing);
+                    setViewing(null);
+                    setTimeout(
+                      () => document.getElementById("manual-builder")?.scrollIntoView({ behavior: "smooth" }),
+                      50
+                    );
+                  }}
+                >
+                  ✏️ Edit
+                </button>
                 <select
                   className="input w-auto py-1.5 text-sm"
                   title="Who can see this deck on the Friends page"
