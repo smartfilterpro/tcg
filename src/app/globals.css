@@ -89,3 +89,14 @@ body {
 .animate-spin-slow {
   animation: spin-slow 1.6s linear infinite;
 }
+
+/* iOS Safari auto-zooms the page when focusing a form control whose font is
+   under 16px — and a zoomed viewport makes fixed-position dialogs drift
+   half off-screen. Forcing 16px on phones prevents the zoom entirely. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}

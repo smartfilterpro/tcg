@@ -972,52 +972,53 @@ export default function DecksPage() {
           onClick={() => setViewing(null)}
         >
           <div
-            className="card-panel mx-auto my-6 w-full max-w-lg p-5"
+            className="card-panel mx-auto my-6 w-full max-w-lg p-4 sm:p-5"
             onClick={(e) => e.stopPropagation()}
           >
+            {/* Title row always fits; actions wrap onto their own line on phones */}
             <div className="flex items-start justify-between gap-2">
-              <h2 className="text-xl font-bold">{viewing.name}</h2>
-              <div className="flex shrink-0 items-center gap-1">
-                <button
-                  className="btn text-sm text-poke-blue hover:bg-poke-blue/10"
-                  title="Swap cards in and out of this deck"
-                  onClick={() => {
-                    setEditRequest(viewing);
-                    setViewing(null);
-                    setTimeout(
-                      () => document.getElementById("manual-builder")?.scrollIntoView({ behavior: "smooth" }),
-                      50
-                    );
-                  }}
-                >
-                  ✏️ Edit
-                </button>
-                <select
-                  className="input w-auto py-1.5 text-sm"
-                  title="Who can see this deck on the Friends page"
-                  value={viewing.shared ? (viewing.share_scope === "friends" ? "friends" : "everyone") : "off"}
-                  onChange={(e) =>
-                    setDeckSharing(viewing, e.target.value as "off" | "everyone" | "friends")
-                  }
-                >
-                  <option value="off">🔒 Not shared</option>
-                  <option value="everyone">🌍 Everyone</option>
-                  <option value="friends">🤝 Pals only</option>
-                </select>
-                <button
-                  className="btn text-sm text-red-600 hover:bg-red-50"
-                  onClick={() => deleteDeck(viewing.id)}
-                >
-                  Delete
-                </button>
-                <button
-                  aria-label="Close"
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200"
-                  onClick={() => setViewing(null)}
-                >
-                  ✕
-                </button>
-              </div>
+              <h2 className="min-w-0 break-words text-xl font-bold">{viewing.name}</h2>
+              <button
+                aria-label="Close"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200"
+                onClick={() => setViewing(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <button
+                className="btn text-sm text-poke-blue hover:bg-poke-blue/10"
+                title="Swap cards in and out of this deck"
+                onClick={() => {
+                  setEditRequest(viewing);
+                  setViewing(null);
+                  setTimeout(
+                    () => document.getElementById("manual-builder")?.scrollIntoView({ behavior: "smooth" }),
+                    50
+                  );
+                }}
+              >
+                ✏️ Edit
+              </button>
+              <select
+                className="input w-auto py-1.5 text-sm"
+                title="Who can see this deck on the Friends page"
+                value={viewing.shared ? (viewing.share_scope === "friends" ? "friends" : "everyone") : "off"}
+                onChange={(e) =>
+                  setDeckSharing(viewing, e.target.value as "off" | "everyone" | "friends")
+                }
+              >
+                <option value="off">🔒 Not shared</option>
+                <option value="everyone">🌍 Everyone</option>
+                <option value="friends">🤝 Pals only</option>
+              </select>
+              <button
+                className="btn text-sm text-red-600 hover:bg-red-50"
+                onClick={() => deleteDeck(viewing.id)}
+              >
+                Delete
+              </button>
             </div>
             <DeckDirectShares deckId={viewing.id} />
             {viewing.strategy && (
