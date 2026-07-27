@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
 import { uploadCardPhoto } from "@/lib/photos";
+import { matchesSearch } from "@/lib/text";
 import {
   availableVariants,
   defaultVariantFor,
@@ -150,8 +151,14 @@ export default function CollectionPage() {
 
   const filtered = useMemo(() => {
     let list = (items ?? []).filter((i) => i.card);
-    const q = search.trim().toLowerCase();
-    if (q) list = list.filter((i) => i.card.name.toLowerCase().includes(q));
+    // Punctuation/accent/space-blind matching — OCR'd or imported names can
+    // carry odd characters that a strict substring match misses.
+    const q = search.trim();
+    if (q) {
+      list = list.filter((i) =>
+        matchesSearch(q, i.card.name, i.card.set_name, i.card.number)
+      );
+    }
     if (typeFilter) list = list.filter((i) => (i.card.types ?? []).includes(typeFilter));
     if (setFilter) list = list.filter((i) => i.card.set_name === setFilter);
     if (rarityFilter) list = list.filter((i) => i.card.rarity === rarityFilter);

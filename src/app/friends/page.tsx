@@ -10,6 +10,7 @@ import {
   type DeckCardEntry,
 } from "@/lib/types";
 import { AI_NAME } from "@/lib/branding";
+import { matchesSearch } from "@/lib/text";
 
 interface PostCardRef {
   id: string;
@@ -899,15 +900,9 @@ function AttachFromCollection({
     }
   }
 
-  const q = search.trim().toLowerCase();
+  const q = search.trim();
   const filtered = (items ?? [])
-    .filter(
-      (it) =>
-        !q ||
-        it.card.name.toLowerCase().includes(q) ||
-        it.card.set_name.toLowerCase().includes(q) ||
-        it.card.number.toLowerCase().includes(q)
-    )
+    .filter((it) => matchesSearch(q, it.card.name, it.card.set_name, it.card.number))
     .slice(0, 60);
 
   return (
@@ -1168,15 +1163,9 @@ function CardPicker({
   setSearch: (s: string) => void;
   onAdd: (it: CollectionItem) => void;
 }) {
-  const q = search.trim().toLowerCase();
+  const q = search.trim();
   const filtered = items
-    .filter(
-      (it) =>
-        !q ||
-        it.card.name.toLowerCase().includes(q) ||
-        it.card.set_name.toLowerCase().includes(q) ||
-        it.card.number.toLowerCase().includes(q)
-    )
+    .filter((it) => matchesSearch(q, it.card.name, it.card.set_name, it.card.number))
     .slice(0, 60);
   return (
     <div className="card-panel p-3">
