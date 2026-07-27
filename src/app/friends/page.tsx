@@ -706,14 +706,15 @@ export default function FriendsPage() {
         </div>
       )}
 
-      {/* Shared deck viewer */}
+      {/* Shared deck viewer — the OVERLAY scrolls (not the panel): inner
+          scroll areas inside fixed overlays are unreliable on iOS Safari */}
       {viewingDeck && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/60 p-4"
           onClick={() => setViewingDeck(null)}
         >
           <div
-            className="card-panel max-h-[90vh] w-full max-w-lg overflow-y-auto p-5"
+            className="card-panel mx-auto my-6 w-full max-w-lg p-5"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-2">
