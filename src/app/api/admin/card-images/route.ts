@@ -199,7 +199,32 @@ export async function POST(req: Request) {
       action?: string;
       cardId?: string;
       url?: string;
+      name?: string;
     };
+
+    // { action: "create", name } — make a card record for a name that has no
+    // entry at all (deck entries are just names; a picture needs a record to
+    // live on). Mostly used for basic energy.
+    if (body.action === "create") {
+      const name = body.name?.trim() ?? "";
+      if (name.length < 2 || name.length > 80) {
+        return NextResponse.json({ error: "Card name must be 2–80 characters." }, { status: 400 });
+      }
+      const isEnergy = /\benergy$/i.test(name);
+      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const id = `custom-admin-${slug}-${Date.now()}`;
+      const { error } = await admin.from("cards").insert({
+        id,
+        name,
+        number: "000",
+        set_id: "custom",
+        set_name: "Custom entry",
+        supertype: isEnergy ? "Energy" : null,
+        subtypes: isEnergy && !/special/i.test(name) ? ["Basic"] : [],
+      });
+      if (error) throw error;
+      return NextResponse.json({ ok: true, id });
+    }
 
     if (!body.cardId || typeof body.cardId !== "string") {
       return NextResponse.json({ error: "Missing cardId" }, { status: 400 });
