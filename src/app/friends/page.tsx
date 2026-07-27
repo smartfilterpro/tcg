@@ -1578,13 +1578,22 @@ function CardPicker({
 function SharedDeckList({ cards }: { cards: DeckCardEntry[] }) {
   // card_id → image url, same visual grid as your own decks
   const [images, setImages] = useState<Record<string, string | null>>({});
+  // name → image, for entries with no card id ("Basic Fighting Energy" etc.)
+  const [nameImages, setNameImages] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
     const ids = [...new Set(cards.map((c) => c.card_id).filter((id): id is string => !!id))];
-    if (ids.length === 0) return;
-    fetch(`/api/cards/images?ids=${encodeURIComponent(ids.join(","))}`)
+    const names = [...new Set(cards.filter((c) => !c.card_id).map((c) => c.name))];
+    if (ids.length === 0 && names.length === 0) return;
+    const params = new URLSearchParams();
+    if (ids.length > 0) params.set("ids", ids.join(","));
+    if (names.length > 0) params.set("names", names.join(","));
+    fetch(`/api/cards/images?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((j) => j?.images && setImages(j.images))
+      .then((j) => {
+        if (j?.images) setImages(j.images);
+        if (j?.imagesByName) setNameImages(j.imagesByName);
+      })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cards]);
@@ -1608,11 +1617,11 @@ function SharedDeckList({ cards }: { cards: DeckCardEntry[] }) {
                 {groups[cat].map((c, i) => (
                   <div key={i} title={c.name}>
                     <div className="relative">
-                      {c.card_id && images[c.card_id] ? (
+                      {(c.card_id && images[c.card_id]) || nameImages[c.name] ? (
                         <div className="aspect-[63/88] w-full overflow-hidden rounded">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
-                            src={images[c.card_id]!}
+                            src={(c.card_id ? images[c.card_id] : null) ?? nameImages[c.name]!}
                             alt={c.name}
                             className="h-full w-full object-cover"
                             loading="lazy"

@@ -83,13 +83,26 @@ export async function expandDeck(
     ),
   ].slice(0, 25);
   for (const name of unnamed) {
-    const { data } = await admin
-      .from("cards")
-      .select("*")
-      .ilike("name", name.replace(/[%_]/g, ""))
-      .not("image_small", "is", null)
-      .limit(1);
-    metaByName.set(name, data?.[0] ? rowToMeta(data[0]) : null);
+    // Try the exact name, then basic-energy aliases ("Basic Fighting
+    // Energy" ↔ "Fighting Energy") — decks and card records disagree here.
+    const variants = [name];
+    const stripped = name.replace(/^basic\s+/i, "").trim();
+    if (stripped && stripped !== name) variants.push(stripped);
+    if (/energy$/i.test(name) && !/^basic\s/i.test(name)) variants.push(`Basic ${name}`);
+    let meta: CardMeta | null = null;
+    for (const variant of variants) {
+      const { data } = await admin
+        .from("cards")
+        .select("*")
+        .ilike("name", variant.replace(/[%_]/g, ""))
+        .not("image_small", "is", null)
+        .limit(1);
+      if (data?.[0]) {
+        meta = rowToMeta(data[0]);
+        break;
+      }
+    }
+    metaByName.set(name, meta);
   }
 
   // Backfill combat stats (attacks/weakness/retreat) for Pokémon that don't
