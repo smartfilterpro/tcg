@@ -30,40 +30,76 @@ export async function expandDeck(
   const entries = (deck.cards ?? []).filter((e) => e?.name && (e.quantity ?? 0) > 0);
   if (entries.length === 0) throw new BattleError("That deck has no cards in it.");
 
+  interface CardMeta {
+    image: string | null;
+    cat: "pokemon" | "trainer" | "energy" | null;
+    basic: boolean | null;
+    sup: boolean;
+    hp: number | null;
+  }
+  const rowToMeta = (row: Record<string, unknown>): CardMeta => {
+    const supertype = ((row.supertype as string | null) ?? "").toLowerCase();
+    const subtypes = ((row.subtypes as string[] | null) ?? []).map((s) => s.toLowerCase());
+    const hpNum = parseInt((row.hp as string | null) ?? "", 10);
+    return {
+      image: (row.image_small as string | null) ?? null,
+      cat: supertype.includes("pok")
+        ? "pokemon"
+        : supertype.includes("trainer")
+          ? "trainer"
+          : supertype.includes("energy")
+            ? "energy"
+            : null,
+      basic: supertype.includes("pok") ? subtypes.includes("basic") : null,
+      sup: subtypes.includes("supporter"),
+      hp: Number.isFinite(hpNum) && hpNum > 0 ? hpNum : null,
+    };
+  };
+
   const ids = [...new Set(entries.map((e) => e.card_id).filter(Boolean))] as string[];
-  const imageById = new Map<string, string | null>();
+  const metaById = new Map<string, CardMeta>();
   if (ids.length > 0) {
-    const { data } = await admin.from("cards").select("id, image_small").in("id", ids);
-    for (const row of data ?? []) imageById.set(row.id as string, row.image_small as string | null);
+    const { data } = await admin
+      .from("cards")
+      .select("id, image_small, supertype, subtypes, hp")
+      .in("id", ids);
+    for (const row of data ?? []) metaById.set(row.id as string, rowToMeta(row));
   }
 
-  const imageByName = new Map<string, string | null>();
+  const metaByName = new Map<string, CardMeta | null>();
   const unnamed = [
     ...new Set(
       entries
-        .filter((e) => !e.card_id || !imageById.get(e.card_id))
+        .filter((e) => !e.card_id || !metaById.get(e.card_id))
         .map((e) => e.name)
     ),
   ].slice(0, 25);
   for (const name of unnamed) {
     const { data } = await admin
       .from("cards")
-      .select("image_small")
+      .select("image_small, supertype, subtypes, hp")
       .ilike("name", name.replace(/[%_]/g, ""))
       .not("image_small", "is", null)
       .limit(1);
-    imageByName.set(name, (data?.[0]?.image_small as string | null) ?? null);
+    metaByName.set(name, data?.[0] ? rowToMeta(data[0]) : null);
   }
 
   const cards: BattleCard[] = [];
   entries.forEach((entry, i) => {
-    const image =
-      (entry.card_id ? imageById.get(entry.card_id) : null) ??
-      imageByName.get(entry.name) ??
-      null;
+    const meta = (entry.card_id ? metaById.get(entry.card_id) : null) ?? metaByName.get(entry.name);
     const qty = Math.min(60, Math.max(1, Math.round(entry.quantity)));
     for (let c = 0; c < qty && cards.length < 100; c++) {
-      cards.push({ uid: `${uidPrefix}${i}-${c}`, name: entry.name, image });
+      cards.push({
+        uid: `${uidPrefix}${i}-${c}`,
+        name: entry.name,
+        image: meta?.image ?? null,
+        // The deck entry's own category is the fallback when the database
+        // doesn't know the card (custom/manual entries).
+        cat: meta?.cat ?? entry.category ?? null,
+        basic: meta?.basic ?? null,
+        sup: meta?.sup ?? false,
+        hp: meta?.hp ?? null,
+      });
     }
   });
   if (cards.length < 7) {

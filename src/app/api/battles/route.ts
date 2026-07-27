@@ -72,9 +72,10 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const { user, profile } = await requireUser();
-    const { deckId, allowShared } = (await req.json()) as {
+    const { deckId, allowShared, rules } = (await req.json()) as {
       deckId?: string;
       allowShared?: boolean;
+      rules?: boolean;
     };
     if (!deckId || typeof deckId !== "string") {
       return NextResponse.json({ error: "Pick a deck to battle with." }, { status: 400 });
@@ -97,6 +98,7 @@ export async function POST(req: Request) {
       sides: { [user.id]: buildSide(cards) },
       names: { [user.id]: myName },
       allowSharedDecks,
+      rules: rules !== false, // referee mode is the default
       turnUser: null,
       turnCount: 1,
       log: [],

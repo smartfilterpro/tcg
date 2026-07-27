@@ -57,12 +57,22 @@ export async function POST(req: Request) {
 
     const hostName = state.names[battle.host_user as string] ?? "Trainer";
     const hostFirst = Math.random() < 0.5;
-    state.turnUser = hostFirst ? (battle.host_user as string) : user.id;
+    const firstUser = hostFirst ? (battle.host_user as string) : user.id;
+    state.turnUser = firstUser;
+    state.firstUser = firstUser;
+    state.flags = {};
+    if (state.rules === true) state.phase = "setup";
     pushLogRaw(
       state,
       `${myName} joined the battle with ${borrowed ? "the shared deck " : ""}“${deck.name}”!`
     );
     pushLogRaw(state, `Opening coin flip: ${hostFirst ? hostName : myName} goes first.`);
+    pushLogRaw(
+      state,
+      state.rules === true
+        ? "Setup: play a Basic Pokémon as your Active (no Basic? mulligan from your deck pile), bench any other Basics, then tap Ready — prizes are set automatically. The referee handles turn draws, knockouts, and prizes."
+        : "Setup: play a Basic Pokémon as your Active (no Basic? mulligan from your deck pile), bench any other Basics, then set your Prize cards. The player going first can't attack on their first turn."
+    );
 
     // Version guard: if someone else grabbed the seat between our read and
     // this write, zero rows match and we bail out instead of clobbering.

@@ -57,8 +57,13 @@ export async function POST(req: Request, { params }: Params) {
         winner = oppId;
         pushLogRaw(state, `${myName} conceded — ${state.names?.[oppId] ?? "their opponent"} wins! 🏆`);
       } else {
-        const text = applyAction(state, user.id, oppId, action);
-        pushLog(state, myName, text);
+        const result = applyAction(state, user.id, oppId, action);
+        pushLog(state, myName, result.text);
+        if (result.winnerId) {
+          status = "finished";
+          winner = result.winnerId;
+          pushLogRaw(state, `🏆 ${state.names?.[result.winnerId] ?? "The winner"} wins the battle!`);
+        }
       }
 
       const { data: updated, error: updateErr } = await admin
