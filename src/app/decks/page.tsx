@@ -527,9 +527,19 @@ export default function DecksPage() {
   }, [viewing]);
 
   useEffect(() => {
+    // Surface load failures loudly — a failed fetch must never look like an
+    // empty (or wiped) deck collection.
     fetch("/api/decks")
-      .then((r) => r.json())
-      .then((j) => setDecks(j.decks ?? []));
+      .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => {
+        if (!ok) throw new Error(j.error || "load failed");
+        setDecks(j.decks ?? []);
+      })
+      .catch(() => {
+        setError(
+          "Couldn't load your decks just now — they are NOT gone. Refresh in a moment (this usually happens during an app update)."
+        );
+      });
     fetch("/api/profile")
       .then((r) => r.json())
       .then((j) => setStyleNotes(j.styleNotes ?? ""));
