@@ -42,7 +42,19 @@ const SCAN_SCHEMA = {
           rarity_hint: {
             type: ["string", "null"],
             description:
-              "Best guess at rarity/finish from visual cues (e.g. 'Special Illustration Rare', 'Full Art', 'Holo', 'Common'). IMPORTANT: if the card carries a special stamp — a gold 'Pokémon Center' logo stamp, a 'PRERELEASE' stamp, or a 'STAFF' stamp — include that in this field (e.g. 'Holo, Pokémon Center stamp'). Null if unsure.",
+              "Best guess at the printed rarity (e.g. 'Special Illustration Rare', 'Full Art', 'Common'). Null if unsure.",
+          },
+          finish: {
+            type: "string",
+            enum: ["normal", "holo", "reverse_holo", "unknown"],
+            description:
+              "The card's foil finish. 'holo': the ARTWORK window itself is foil/rainbow-shiny while the rest of the card is matte. 'reverse_holo': everything EXCEPT the artwork shines — the card body/borders are foil (often with an etched pattern) and the artwork is matte. 'normal': no foil anywhere. Full-art, ex/V/GX, and illustration-rare cards whose entire face is foil count as 'holo'. Use 'unknown' when glare, angle, or resolution makes it impossible to tell — do NOT guess.",
+          },
+          stamp: {
+            type: "string",
+            enum: ["none", "pokemon_center", "prerelease", "staff", "unknown"],
+            description:
+              "Gold foil promo stamp pressed onto the artwork area. 'pokemon_center': a gold Pokémon Center logo stamp. 'prerelease': a gold PRERELEASE wordmark. 'staff': a gold STAFF wordmark. 'none' when there is clearly no stamp; 'unknown' only if the artwork area is obscured.",
           },
           confidence: {
             type: "string",
@@ -51,7 +63,7 @@ const SCAN_SCHEMA = {
               "high = name AND collector number clearly read; medium = name clear but number uncertain; low = partially obscured or blurry.",
           },
         },
-        required: ["name", "collector_number", "set_total", "set_name_hint", "rarity_hint", "confidence"],
+        required: ["name", "collector_number", "set_total", "set_name_hint", "rarity_hint", "finish", "stamp", "confidence"],
         additionalProperties: false,
       },
     },
@@ -70,7 +82,21 @@ full code as collector_number), or '095/SVP' where the part after the slash is a
 set code, not a count (report 'SVP' as set_total). Do not invent numbers you
 cannot read; use null instead and lower the confidence. Ignore card backs,
 sleeves without cards, and anything that is not a Pokémon TCG card. List cards
-roughly left-to-right, top-to-bottom.`;
+roughly left-to-right, top-to-bottom.
+
+FINISH — look carefully at WHERE the shine is, not just whether there is shine:
+- HOLO: only the artwork window is foil (rainbow shimmer inside the picture
+  frame); text box and borders are matte.
+- REVERSE HOLO: the opposite — the artwork is matte while the rest of the card
+  face shines, usually with an etched pattern (stars, Pokéballs, set motifs).
+- Full-art / ex / illustration-rare cards that are foil edge-to-edge: holo.
+- Glare from the photo flash is NOT foil — foil shows rainbow color shifts and
+  pattern, glare is a white hot-spot. If you genuinely cannot tell, answer
+  'unknown' rather than guessing.
+
+STAMPS — check the artwork area of every card for small gold foil stamps: a
+Pokémon Center logo, the word PRERELEASE, or the word STAFF. These are easy to
+miss at small sizes — look twice on promo cards.`;
 
 /** Check our own shared card cache before hitting the (slow) external APIs.
  *  Every card anyone has ever saved is in the cards table, so repeat scans of
@@ -182,6 +208,8 @@ export async function POST(req: Request) {
         set_total: string | null;
         set_name_hint: string | null;
         rarity_hint: string | null;
+        finish?: "normal" | "holo" | "reverse_holo" | "unknown";
+        stamp?: "none" | "pokemon_center" | "prerelease" | "staff" | "unknown";
         confidence: "high" | "medium" | "low";
       }>;
     };
@@ -200,15 +228,28 @@ export async function POST(req: Request) {
     }
     // Match each detected card against the reference database (in parallel,
     // capped to avoid hammering the API).
-    const detectedCards: DetectedCard[] = parsed.cards.map((c) => ({
-      // Normalize away curly apostrophes etc. the vision model may emit
-      name: cleanCardName(c.name),
-      collectorNumber: c.collector_number,
-      setTotal: c.set_total,
-      setNameHint: c.set_name_hint,
-      rarityHint: c.rarity_hint,
-      confidence: c.confidence,
-    }));
+    const detectedCards: DetectedCard[] = parsed.cards.map((c) => {
+      // Fold the structured finish/stamp decisions into the hint string the
+      // finish-defaulting logic keys on ("matte", not "non-holo" — that
+      // substring would false-match the holo check).
+      const hintParts: string[] = [];
+      if (c.stamp === "pokemon_center") hintParts.push("Pokémon Center stamp");
+      else if (c.stamp === "prerelease") hintParts.push("Prerelease stamp");
+      else if (c.stamp === "staff") hintParts.push("Staff stamp");
+      if (c.finish === "reverse_holo") hintParts.push("Reverse Holo");
+      else if (c.finish === "holo") hintParts.push("Holo");
+      else if (c.finish === "normal") hintParts.push("matte");
+      if (c.rarity_hint) hintParts.push(c.rarity_hint);
+      return {
+        // Normalize away curly apostrophes etc. the vision model may emit
+        name: cleanCardName(c.name),
+        collectorNumber: c.collector_number,
+        setTotal: c.set_total,
+        setNameHint: c.set_name_hint,
+        rarityHint: hintParts.length > 0 ? hintParts.join(", ") : null,
+        confidence: c.confidence,
+      };
+    });
 
     const results: ScanMatch[] = [];
     const BATCH = 4;

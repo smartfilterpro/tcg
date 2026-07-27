@@ -134,8 +134,14 @@ export function defaultVariantFor(
   if (hint.includes("center") || hint.includes("pokemon center")) return "pcStamp";
   if (hint.includes("prerelease")) return "prereleaseStamp";
   if (hint.includes("staff")) return "staffStamp";
+  // The scanner explicitly saw NO foil ("matte") — trust it when possible
+  if (hint.includes("matte") && avail.includes("normal")) return "normal";
   if (hint.includes("reverse") && avail.includes("reverseHolofoil")) return "reverseHolofoil";
   if (hint.includes("holo") && avail.includes("holofoil")) return "holofoil";
+  // Database veto: the scanner saw foil, but this printing only exists as
+  // reverse holo — the shine it saw must be the reverse pattern.
+  if (hint.includes("holo") && !avail.includes("holofoil") && avail.includes("reverseHolofoil"))
+    return "reverseHolofoil";
   const rarity = (card.rarity ?? "").toLowerCase();
   if (rarity.includes("holo") && !avail.includes("normal") && avail.includes("holofoil"))
     return "holofoil";
