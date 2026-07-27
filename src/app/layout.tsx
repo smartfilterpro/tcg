@@ -48,6 +48,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                   Decks
                 </Link>
                 <Link
+                  href="/grade"
+                  className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
+                >
+                  Grade
+                </Link>
+                <Link
                   href="/friends"
                   className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
                 >
