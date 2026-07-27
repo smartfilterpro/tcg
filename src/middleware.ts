@@ -5,6 +5,9 @@ type CookieToSet = { name: string; value: string; options?: CookieOptions };
 
 const PUBLIC_PATHS = ["/login", "/auth", "/api/auth", "/api/export", "/terms"];
 
+// Reachable while signed in but before accepting the Terms
+const TOS_EXEMPT_PATHS = [...PUBLIC_PATHS, "/accept-terms"];
+
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
 
@@ -42,6 +45,29 @@ export async function middleware(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
+  }
+
+  // Signed in but hasn't accepted the Terms: everything funnels to the
+  // accept page (server-side — the login-screen gate alone was bypassable
+  // by simply navigating away). Pre-migration-016 profiles (no column, or
+  // query error) skip the gate gracefully.
+  if (user && !TOS_EXEMPT_PATHS.some((p) => pathname.startsWith(p))) {
+    const { data: prof, error } = await supabase
+      .from("profiles")
+      .select("tos_accepted_at")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (!error && prof && prof.tos_accepted_at == null) {
+      if (pathname.startsWith("/api/")) {
+        return NextResponse.json(
+          { error: "Please accept the Terms of Service to continue." },
+          { status: 403 }
+        );
+      }
+      const url = request.nextUrl.clone();
+      url.pathname = "/accept-terms";
+      return NextResponse.redirect(url);
+    }
   }
 
   return response;

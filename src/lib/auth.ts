@@ -26,6 +26,13 @@ export async function requireUser() {
   if (result.profile?.suspended === true) {
     throw new AuthError("Your account is suspended — contact the admin.", 403);
   }
+  // Terms acceptance is enforced at the API layer too — the middleware
+  // redirect alone can be sidestepped by direct requests. Pre-migration-016
+  // profiles (no column) skip the check.
+  const p = result.profile as (typeof result.profile & { tos_accepted_at?: string | null }) | null;
+  if (p && "tos_accepted_at" in p && p.tos_accepted_at == null) {
+    throw new AuthError("Please accept the Terms of Service to continue.", 403);
+  }
   return result;
 }
 
