@@ -48,6 +48,11 @@ const DRAW_TEXT = /draw|search your deck|look at the top/i;
 const DRAW_NAMES =
   /professor'?s research|iono|hop\b|cynthia|marnie|colress|nest ball|ultra ball|quick ball|great ball|pok[eé] ball|level ball|buddy-buddy|capturing aroma|arven|pok[eé]gear/i;
 
+/** Is this trainer a draw/search consistency card? (name + text heuristics) */
+export function isDrawTrainer(name: string, text?: string | null): boolean {
+  return DRAW_TEXT.test(text ?? "") || DRAW_NAMES.test(name);
+}
+
 export function analyzeDeck(entries: DeckMathEntry[]): DeckAnalysis {
   const totalCards = entries.reduce((s, e) => s + (e.quantity || 0), 0);
   const sum = (pred: (e: DeckMathEntry) => boolean) =>

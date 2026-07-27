@@ -5,8 +5,14 @@ import { numberKey } from "@/lib/pokemontcg";
 
 const BASE = "https://api.poketrace.com/v1";
 
+// Trimmed: a stray newline/space from copy-pasting the key into Railway
+// would make every request's header invalid.
+function apiKey(): string {
+  return (process.env.POKETRACE_API_KEY ?? "").trim();
+}
+
 export function poketraceEnabled(): boolean {
-  return !!process.env.POKETRACE_API_KEY;
+  return apiKey().length > 0;
 }
 
 // Free plan burst limit is 1 request per 2 seconds — every call goes through
@@ -29,7 +35,7 @@ function throttled<T>(fn: () => Promise<T>): Promise<T> {
 
 async function ptFetch(path: string): Promise<Response> {
   return fetch(`${BASE}${path}`, {
-    headers: { "X-API-Key": process.env.POKETRACE_API_KEY ?? "", Accept: "application/json" },
+    headers: { "X-API-Key": apiKey(), Accept: "application/json" },
     cache: "no-store",
     signal: AbortSignal.timeout(12_000),
   });

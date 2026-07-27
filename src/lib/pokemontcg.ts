@@ -32,6 +32,8 @@ interface RawCard {
   convertedRetreatCost?: number;
   rules?: string[];
   abilities?: Array<{ name: string; text?: string; type?: string }>;
+  legalities?: { standard?: string; expanded?: string };
+  regulationMark?: string;
 }
 
 /** Card knowledge for referee-mode battles, cached in cards.battle_data.
@@ -52,6 +54,8 @@ export interface CardBattleData {
   hp?: number | null;
   /** Trainer subtype ("Supporter" / "Item" / "Stadium" / "Tool"). */
   trainerType?: string | null;
+  /** Format legality when known (std = Standard, exp = Expanded). */
+  legal?: { std?: boolean; exp?: boolean } | null;
   /** AI-compiled effect ops for Trainers (see battles/lib fx compiler). */
   fx?: { ops: Array<{ op: string; n?: number; note?: string }> } | null;
 }
@@ -77,6 +81,14 @@ function toBattleData(card: RawCard): CardBattleData | null {
     retreat: isPokemon ? card.convertedRetreatCost ?? 0 : 0,
     ...(rules.length > 0 ? { rules } : {}),
     ...(abilities.length > 0 ? { abilities } : {}),
+    ...(card.legalities
+      ? {
+          legal: {
+            std: card.legalities.standard === "Legal",
+            exp: card.legalities.expanded === "Legal",
+          },
+        }
+      : {}),
   };
 }
 
@@ -93,7 +105,8 @@ export async function getBattleDataById(id: string): Promise<CardBattleData | nu
 
 function headers(): Record<string, string> {
   const h: Record<string, string> = {};
-  if (process.env.POKEMONTCG_API_KEY) h["X-Api-Key"] = process.env.POKEMONTCG_API_KEY;
+  const key = (process.env.POKEMONTCG_API_KEY ?? "").trim();
+  if (key) h["X-Api-Key"] = key;
   return h;
 }
 
