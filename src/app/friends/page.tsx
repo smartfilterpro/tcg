@@ -17,6 +17,7 @@ interface PostCardRef {
   image: string | null;
   set_name: string | null;
   number: string | null;
+  qty?: number;
 }
 
 interface TradePostComment {
@@ -640,7 +641,7 @@ function TradeBoard() {
               value={offering}
               onChange={(e) => setOffering(e.target.value)}
             />
-            <AttachCards cards={offeringCards} setCards={setOfferingCards} />
+            <AttachFromCollection cards={offeringCards} setCards={setOfferingCards} />
           </div>
           <div className="flex gap-2">
             <button className="btn-primary" disabled={posting}>
@@ -766,15 +767,197 @@ function PostSide({
       {cards.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {cards.map((c) => (
-            <div key={c.id} className="w-12" title={`${c.name} #${c.number ?? ""}`}>
+            <div
+              key={c.id}
+              className="relative w-12"
+              title={`${(c.qty ?? 1) > 1 ? `${c.qty}x ` : ""}${c.name} #${c.number ?? ""}`}
+            >
               <div className="overflow-hidden rounded aspect-[63/88] bg-slate-200">
                 {c.image && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={c.image} alt={c.name} className="h-full w-full object-cover" loading="lazy" />
                 )}
               </div>
+              {(c.qty ?? 1) > 1 && (
+                <span className="absolute -right-1 -top-1 rounded-full bg-poke-dark px-1 text-[10px] font-bold text-white">
+                  x{c.qty}
+                </span>
+              )}
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Pick offered cards from YOUR OWN collection — you can only trade away
+ *  cards you actually have, up to the number of copies you own. */
+function AttachFromCollection({
+  cards,
+  setCards,
+}: {
+  cards: PostCardRef[];
+  setCards: (c: PostCardRef[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<CollectionItem[] | null>(null);
+  const [search, setSearch] = useState("");
+
+  async function openPicker() {
+    setOpen(true);
+    if (items === null) {
+      try {
+        const res = await fetch("/api/collection");
+        const json = await res.json();
+        setItems(res.ok ? (json.items ?? []) : []);
+      } catch {
+        setItems([]);
+      }
+    }
+  }
+
+  function refFor(it: CollectionItem): PostCardRef {
+    const finish = it.variant && it.variant !== "normal" ? ` (${variantLabel(it.variant)})` : "";
+    return {
+      id: it.id, // collection item id — distinguishes finishes of the same card
+      name: `${it.card.name}${finish}`,
+      image: it.card.image_small,
+      set_name: it.card.set_name,
+      number: it.card.number,
+      qty: 1,
+    };
+  }
+
+  function addOne(it: CollectionItem) {
+    const existing = cards.find((c) => c.id === it.id);
+    if (existing) {
+      if ((existing.qty ?? 1) >= it.quantity) return; // can't offer more than you own
+      setCards(cards.map((c) => (c.id === it.id ? { ...c, qty: (c.qty ?? 1) + 1 } : c)));
+    } else {
+      if (cards.length >= 10) return;
+      setCards([...cards, refFor(it)]);
+    }
+  }
+
+  function removeOne(id: string) {
+    const existing = cards.find((c) => c.id === id);
+    if (!existing) return;
+    if ((existing.qty ?? 1) > 1) {
+      setCards(cards.map((c) => (c.id === id ? { ...c, qty: (c.qty ?? 1) - 1 } : c)));
+    } else {
+      setCards(cards.filter((c) => c.id !== id));
+    }
+  }
+
+  const q = search.trim().toLowerCase();
+  const filtered = (items ?? [])
+    .filter(
+      (it) =>
+        !q ||
+        it.card.name.toLowerCase().includes(q) ||
+        it.card.set_name.toLowerCase().includes(q) ||
+        it.card.number.toLowerCase().includes(q)
+    )
+    .slice(0, 60);
+
+  return (
+    <div className="mt-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {cards.map((c) => (
+          <div key={c.id} className="relative w-10" title={`${c.qty ?? 1}x ${c.name}`}>
+            <div className="overflow-hidden rounded aspect-[63/88] bg-slate-200">
+              {c.image && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={c.image} alt={c.name} className="h-full w-full object-cover" />
+              )}
+            </div>
+            {(c.qty ?? 1) > 1 && (
+              <span className="absolute -left-1 -top-1 rounded-full bg-poke-dark px-1 text-[10px] font-bold text-white">
+                x{c.qty}
+              </span>
+            )}
+            <button
+              type="button"
+              aria-label={`Remove one ${c.name}`}
+              className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-slate-700 text-[10px] text-white"
+              onClick={() => removeOne(c.id)}
+            >
+              −
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="chip bg-slate-200 text-slate-600 hover:bg-slate-300"
+          onClick={() => (open ? setOpen(false) : openPicker())}
+        >
+          {open ? "Done" : "🗂 Pick from my collection"}
+        </button>
+      </div>
+      {open && (
+        <div className="mt-1.5">
+          {items === null ? (
+            <p className="text-xs text-slate-400">Loading your collection…</p>
+          ) : (
+            <>
+              <input
+                className="input text-sm"
+                placeholder="Search your cards…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <ul className="mt-1 max-h-48 divide-y divide-slate-100 overflow-y-auto rounded border border-slate-200 bg-white">
+                {filtered.map((it) => {
+                  const picked = cards.find((c) => c.id === it.id)?.qty ?? 0;
+                  const value = itemPrice(it);
+                  return (
+                    <li key={it.id}>
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 p-1.5 text-left hover:bg-slate-50 disabled:opacity-50"
+                        disabled={picked >= it.quantity}
+                        onClick={() => addOne(it)}
+                      >
+                        <div className="h-9 w-6 shrink-0 overflow-hidden rounded bg-slate-100">
+                          {it.card.image_small && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={it.card.image_small} alt="" className="h-full w-full object-cover" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs font-medium">
+                            {it.card.name}
+                            {it.variant !== "normal" && (
+                              <span className="text-slate-400"> · {variantLabel(it.variant)}</span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            #{it.card.number} · you own x{it.quantity}
+                            {value != null ? ` · ~$${value.toFixed(2)}` : ""}
+                          </div>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            picked > 0
+                              ? "bg-green-100 text-green-700"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {picked > 0 ? `${picked} added` : "+ Add"}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+                {filtered.length === 0 && (
+                  <li className="p-2 text-xs text-slate-400">
+                    {items.length === 0 ? "Your collection is empty." : "No cards match."}
+                  </li>
+                )}
+              </ul>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -814,7 +997,7 @@ function AttachCards({
   }
 
   function add(c: CardSummary) {
-    if (cards.some((x) => x.id === c.id) || cards.length >= 6) return;
+    if (cards.some((x) => x.id === c.id) || cards.length >= 10) return;
     setCards([
       ...cards,
       { id: c.id, name: c.name, image: c.imageSmall, set_name: c.setName, number: c.number },
