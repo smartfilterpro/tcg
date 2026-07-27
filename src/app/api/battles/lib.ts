@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AuthError } from "@/lib/auth";
 import { BattleError, type BattleCard } from "@/lib/battle";
+import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import type { Deck, Profile } from "@/lib/types";
 
 export const MIGRATION_HINT =
@@ -31,17 +32,22 @@ export async function expandDeck(
   if (entries.length === 0) throw new BattleError("That deck has no cards in it.");
 
   interface CardMeta {
+    id: string | null;
     image: string | null;
     cat: "pokemon" | "trainer" | "energy" | null;
     basic: boolean | null;
     sup: boolean;
     hp: number | null;
+    types: string[];
+    bd: CardBattleData | null;
+    hasBdColumn: boolean;
   }
   const rowToMeta = (row: Record<string, unknown>): CardMeta => {
     const supertype = ((row.supertype as string | null) ?? "").toLowerCase();
     const subtypes = ((row.subtypes as string[] | null) ?? []).map((s) => s.toLowerCase());
     const hpNum = parseInt((row.hp as string | null) ?? "", 10);
     return {
+      id: (row.id as string | null) ?? null,
       image: (row.image_small as string | null) ?? null,
       cat: supertype.includes("pok")
         ? "pokemon"
@@ -53,16 +59,18 @@ export async function expandDeck(
       basic: supertype.includes("pok") ? subtypes.includes("basic") : null,
       sup: subtypes.includes("supporter"),
       hp: Number.isFinite(hpNum) && hpNum > 0 ? hpNum : null,
+      types: (row.types as string[] | null) ?? [],
+      bd: (row.battle_data as CardBattleData | null) ?? null,
+      hasBdColumn: "battle_data" in row,
     };
   };
 
+  // select("*") — battle_data only exists after migration 019, and naming a
+  // missing column would fail the whole lookup.
   const ids = [...new Set(entries.map((e) => e.card_id).filter(Boolean))] as string[];
   const metaById = new Map<string, CardMeta>();
   if (ids.length > 0) {
-    const { data } = await admin
-      .from("cards")
-      .select("id, image_small, supertype, subtypes, hp")
-      .in("id", ids);
+    const { data } = await admin.from("cards").select("*").in("id", ids);
     for (const row of data ?? []) metaById.set(row.id as string, rowToMeta(row));
   }
 
@@ -77,11 +85,42 @@ export async function expandDeck(
   for (const name of unnamed) {
     const { data } = await admin
       .from("cards")
-      .select("image_small, supertype, subtypes, hp")
+      .select("*")
       .ilike("name", name.replace(/[%_]/g, ""))
       .not("image_small", "is", null)
       .limit(1);
     metaByName.set(name, data?.[0] ? rowToMeta(data[0]) : null);
+  }
+
+  // Backfill combat stats (attacks/weakness/retreat) for Pokémon that don't
+  // have them cached yet — one API fetch per card, ever. Custom and TCGdex
+  // cards are skipped (no pokemontcg.io id); they fall back to manual damage.
+  const needsBd = [...metaById.values()].filter(
+    (m) =>
+      m.cat === "pokemon" &&
+      !m.bd &&
+      m.id &&
+      !m.id.startsWith("custom-") &&
+      !m.id.startsWith("tcgdex-")
+  );
+  const BD_BATCH = 5;
+  for (let i = 0; i < Math.min(needsBd.length, 20); i += BD_BATCH) {
+    const batch = needsBd.slice(i, i + BD_BATCH);
+    await Promise.all(
+      batch.map(async (m) => {
+        const bd = await getBattleDataById(m.id!);
+        if (!bd) return;
+        m.bd = bd;
+        if (m.hasBdColumn) {
+          // Cache for every future battle (best-effort).
+          await admin
+            .from("cards")
+            .update({ battle_data: bd })
+            .eq("id", m.id!)
+            .then(() => {});
+        }
+      })
+    );
   }
 
   const cards: BattleCard[] = [];
@@ -99,6 +138,11 @@ export async function expandDeck(
         basic: meta?.basic ?? null,
         sup: meta?.sup ?? false,
         hp: meta?.hp ?? null,
+        types: meta?.types?.length ? meta.types : undefined,
+        atk: meta?.bd?.attacks?.length ? meta.bd.attacks : undefined,
+        weak: meta?.bd?.weak?.type ?? undefined,
+        resist: meta?.bd?.resist?.type ?? undefined,
+        retreat: meta?.bd?.retreat ?? undefined,
       });
     }
   });
