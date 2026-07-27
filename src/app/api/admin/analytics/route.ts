@@ -7,6 +7,8 @@ import { itemPrice } from "@/lib/types";
 export interface ScanStats {
   scans: number;
   avgSeconds: number | null;
+  /** total scan time ÷ total cards detected — time per identified card */
+  avgSecondsPerCard: number | null;
   avgCardsPerScan: number | null;
   /** % of detected cards that auto-matched a database card */
   matchRate: number | null;
@@ -17,15 +19,24 @@ export interface ScanStats {
 function scanStats(rows: Array<Record<string, number>>): ScanStats {
   const scans = rows.length;
   if (scans === 0)
-    return { scans: 0, avgSeconds: null, avgCardsPerScan: null, matchRate: null, accuracy: null };
+    return {
+      scans: 0,
+      avgSeconds: null,
+      avgSecondsPerCard: null,
+      avgCardsPerScan: null,
+      matchRate: null,
+      accuracy: null,
+    };
   const sum = (k: string) => rows.reduce((s, r) => s + (r[k] ?? 0), 0);
   const detected = sum("cards_detected");
   const auto = sum("cards_auto_matched");
   const saved = sum("cards_saved");
   const kept = sum("cards_kept_match");
+  const totalSeconds = sum("duration_ms") / 1000;
   return {
     scans,
-    avgSeconds: sum("duration_ms") / scans / 1000,
+    avgSeconds: totalSeconds / scans,
+    avgSecondsPerCard: detected > 0 ? totalSeconds / detected : null,
     avgCardsPerScan: detected / scans,
     matchRate: detected > 0 ? (auto / detected) * 100 : null,
     accuracy: saved > 0 ? (kept / saved) * 100 : null,

@@ -13,6 +13,7 @@ interface Invite {
 interface ScanStats {
   scans: number;
   avgSeconds: number | null;
+  avgSecondsPerCard: number | null;
   avgCardsPerScan: number | null;
   matchRate: number | null;
   accuracy: number | null;
@@ -537,13 +538,22 @@ export default function AdminPage() {
           ) : (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <StatTile
-                label="Avg. time to identify"
+                label="Avg. time per scan"
                 value={
                   analytics.scans30d.avgSeconds != null
                     ? `${analytics.scans30d.avgSeconds.toFixed(0)}s`
                     : "—"
                 }
                 sub="last 30 days"
+              />
+              <StatTile
+                label="Avg. time per card"
+                value={
+                  analytics.scans30d.avgSecondsPerCard != null
+                    ? `${analytics.scans30d.avgSecondsPerCard.toFixed(1)}s`
+                    : "—"
+                }
+                sub="scan time ÷ cards found"
               />
               <StatTile
                 label="Avg. cards per scan"
