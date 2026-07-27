@@ -317,6 +317,32 @@ export default function BattleBoardPage() {
         )}
       </div>
 
+      {/* ===== Stadium (shared zone) ===== */}
+      {view.stadium && (
+        <div className="card-panel flex items-center gap-2 p-2">
+          <button type="button" onClick={() => setZoomCard(view.stadium!.card)}>
+            <CardTile card={view.stadium.card} className="w-10" />
+          </button>
+          <div className="min-w-0 flex-1 text-xs">
+            <span className="font-semibold">🏟 Stadium: {view.stadium.card.name}</span>{" "}
+            <span className="text-slate-400">
+              (played by {view.stadium.mine ? "you" : oppName} — tap to read)
+            </span>
+          </div>
+          {!finished && (
+            <button
+              className="shrink-0 text-xs text-red-500 hover:underline"
+              disabled={busy}
+              onClick={() => {
+                if (confirm("Discard the Stadium?")) act({ type: "discardStadium" });
+              }}
+            >
+              discard
+            </button>
+          )}
+        </div>
+      )}
+
       {/* ===== Log + notices ===== */}
       {notice && <div className="rounded-lg bg-red-50 p-2 text-center text-xs text-red-700">{notice}</div>}
       <div ref={logRef} className="card-panel h-24 overflow-y-auto p-2 text-xs text-slate-600">
@@ -603,28 +629,42 @@ export default function BattleBoardPage() {
               </button>
             </div>
             <p className="mb-2 text-xs text-slate-500">
-              Cards are shown A→Z (the real order stays secret). Tap a card to take it into
-              your hand — your deck shuffles afterwards, and your opponent only sees that you
-              took 1 card.
+              Cards are shown A→Z (the real order stays secret). Tap a card to read it, then
+              take it to your hand or put it on top — your deck shuffles first either way,
+              and your opponent only sees that you took 1 card.
             </p>
             <div className="grid grid-cols-4 gap-2">
               {deckSearch.map((c) => (
-                <button
-                  key={c.uid}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    if (confirm(`Take ${c.name} into your hand and shuffle?`)) {
-                      act({ type: "deckTake", uid: c.uid });
-                      setDeckSearch(null);
-                    }
-                  }}
-                >
-                  <CardTile card={c} className="w-full" />
+                <div key={c.uid}>
+                  <button type="button" className="w-full" onClick={() => setZoomCard(c)}>
+                    <CardTile card={c} className="w-full" />
+                  </button>
                   <span className="block truncate text-center text-[10px] text-slate-500">
                     {c.name}
                   </span>
-                </button>
+                  <div className="mt-0.5 flex justify-center gap-1 text-[10px]">
+                    <button
+                      className="text-poke-blue hover:underline"
+                      disabled={busy}
+                      onClick={() => {
+                        act({ type: "deckTake", uid: c.uid, to: "hand" });
+                        setDeckSearch(null);
+                      }}
+                    >
+                      → hand
+                    </button>
+                    <button
+                      className="text-slate-500 hover:underline"
+                      disabled={busy}
+                      onClick={() => {
+                        act({ type: "deckTake", uid: c.uid, to: "top" });
+                        setDeckSearch(null);
+                      }}
+                    >
+                      → top
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
@@ -832,13 +872,22 @@ function SheetContent({
             Energy attaches to your Pokémon once the battle starts — keep it in hand for now.
           </p>
         )}
-        {rules && phase === "play" && cat === "trainer" && (
+        {rules && phase === "play" && cat === "trainer" && !card.stad && (
           <button
             className={row}
             disabled={busy}
             onClick={() => act({ type: "playCard", handIndex: sheet.index })}
           >
             ▶️ Play {card.name} (then to your discard)
+          </button>
+        )}
+        {inPlay && cat === "trainer" && (
+          <button
+            className={`${row}${card.stad ? "" : " text-slate-500"}`}
+            disabled={busy}
+            onClick={() => act({ type: "playStadium", handIndex: sheet.index })}
+          >
+            🏟 Play as Stadium — stays in play{card.stad ? "" : " (if this is a Stadium card)"}
           </button>
         )}
         {!me.active && canBoard && (
@@ -920,6 +969,26 @@ function SheetContent({
           </button>
         )}
         <button
+          className={row}
+          disabled={busy}
+          onClick={() => act({ type: "reveal", handIndex: sheet.index })}
+        >
+          📤 Reveal to {oppName} (shows the name in the log)
+        </button>
+        <div className="flex items-center gap-2 border-b border-slate-100 py-2.5 text-sm">
+          <span>🂠 To your deck:</span>
+          {(["top", "bottom", "shuffle"] as const).map((where) => (
+            <button
+              key={where}
+              className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700"
+              disabled={busy}
+              onClick={() => act({ type: "handToDeck", handIndex: sheet.index, where })}
+            >
+              {where}
+            </button>
+          ))}
+        </div>
+        <button
           className={`${row} text-red-600`}
           disabled={busy}
           onClick={() => act({ type: "handToDiscard", handIndex: sheet.index })}
@@ -965,9 +1034,18 @@ function SheetContent({
       </div>
       {(stack.face.abilities?.length ?? 0) > 0 && (
         <div className="mb-2 space-y-1 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
-          {stack.face.abilities!.map((a) => (
+          {stack.face.abilities!.map((a, ai) => (
             <p key={a.name}>
               <b>Ability — {a.name}:</b> {a.text}
+              {mine && (
+                <button
+                  className="ml-1 text-poke-blue hover:underline"
+                  disabled={busy}
+                  onClick={() => act({ type: "useAbility", target: sheet.target, abilityIndex: ai })}
+                >
+                  announce use
+                </button>
+              )}
             </p>
           ))}
         </div>
@@ -1091,12 +1169,52 @@ function SheetContent({
                 : ""}
             </button>
           )}
+          {sheet.target === "active" &&
+            me.bench.map((b, bi) => (
+              <button
+                key={b.face.uid}
+                className="block w-full border-b border-slate-100 py-2.5 text-left text-sm"
+                disabled={busy}
+                onClick={() => act({ type: "promote", benchIndex: bi })}
+              >
+                🔁 Retreat — switch with {b.face.name}
+                {rules && phase === "play" && (stack.face.retreat ?? 0) > 0
+                  ? ` (discards ${stack.face.retreat} energy)`
+                  : ""}
+              </button>
+            ))}
+          {stack.attached.some((c) => c.cat === "pokemon" || c.cat == null) && (
+            <div className="flex items-center gap-2 border-b border-slate-100 py-2.5 text-sm">
+              <span>⬇️ Devolve {stack.face.name} to:</span>
+              <button
+                className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700"
+                disabled={busy}
+                onClick={() => act({ type: "devolve", target: sheet.target, to: "hand" })}
+              >
+                hand
+              </button>
+              <button
+                className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700"
+                disabled={busy}
+                onClick={() => act({ type: "devolve", target: sheet.target, to: "discard" })}
+              >
+                discard
+              </button>
+            </div>
+          )}
           <button
             className="block w-full border-b border-slate-100 py-2.5 text-left text-sm"
             disabled={busy}
             onClick={() => act({ type: "stackToHand", target: sheet.target })}
           >
             ✋ Pick up into your hand
+          </button>
+          <button
+            className="block w-full border-b border-slate-100 py-2.5 text-left text-sm"
+            disabled={busy}
+            onClick={() => act({ type: "stackToDeck", target: sheet.target })}
+          >
+            🔀 Shuffle into your deck (with everything attached)
           </button>
           <button
             className="block w-full border-b border-slate-100 py-2.5 text-left text-sm text-red-600"
@@ -1106,6 +1224,16 @@ function SheetContent({
             ☠️ Knocked Out — send to discard
           </button>
         </>
+      )}
+      {!mine && sheet.target !== "active" && (
+        <button
+          className="block w-full border-b border-slate-100 py-2.5 text-left text-sm"
+          disabled={busy}
+          onClick={() => act({ type: "promoteOpp", benchIndex: sheet.target as number })}
+        >
+          ⭐ Switch this to {oppName}&apos;s Active — gust card effect (Boss&apos;s Orders
+          etc.)
+        </button>
       )}
       <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
         Close

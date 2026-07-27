@@ -125,6 +125,7 @@ export async function expandDeck(
     cat: "pokemon" | "trainer" | "energy" | null;
     basic: boolean | null;
     sup: boolean;
+    stad: boolean;
     hp: number | null;
     types: string[];
     bd: CardBattleData | null;
@@ -147,6 +148,7 @@ export async function expandDeck(
             : null,
       basic: supertype.includes("pok") ? subtypes.includes("basic") : null,
       sup: subtypes.includes("supporter"),
+      stad: subtypes.includes("stadium"),
       hp: Number.isFinite(hpNum) && hpNum > 0 ? hpNum : null,
       types: (row.types as string[] | null) ?? [],
       bd: (row.battle_data as CardBattleData | null) ?? null,
@@ -261,6 +263,7 @@ export async function expandDeck(
         cat: meta?.cat ?? entry.category ?? null,
         basic: meta?.basic ?? null,
         sup: meta?.sup ?? false,
+        stad: meta?.stad ?? false,
         hp: meta?.hp ?? null,
         types: meta?.types?.length ? meta.types : undefined,
         atk: meta?.bd?.attacks?.length ? meta.bd.attacks : undefined,
