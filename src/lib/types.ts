@@ -158,6 +158,10 @@ export interface Profile {
   role: "admin" | "member";
   /** Opt-in: collection visible to other members (for browsing & trades). */
   share_collection?: boolean;
+  /** Monthly AI spend cap in USD (admins are never capped). */
+  ai_budget_usd?: number | null;
+  /** Suspended members can't sign in or use the app. */
+  suspended?: boolean;
   created_at: string;
 }
 

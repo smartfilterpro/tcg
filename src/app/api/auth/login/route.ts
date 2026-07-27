@@ -70,5 +70,19 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: msg }, { status: 401 });
   }
 
+  // Suspended members can't sign in (column exists after migration 011).
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("email", normalized)
+    .maybeSingle();
+  if (prof?.suspended === true) {
+    await supabase.auth.signOut();
+    return NextResponse.json(
+      { error: "Your account is suspended — contact the admin." },
+      { status: 403 }
+    );
+  }
+
   return NextResponse.json({ ok: true });
 }

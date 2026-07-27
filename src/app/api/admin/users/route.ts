@@ -9,6 +9,7 @@ export interface UserUsage {
   outputTokens: number;
   costUsd: number;
   costUsd30d: number;
+  costUsdMonth: number; // current calendar month — what the budget cap counts
 }
 
 /** GET: all users + pending invites + per-user AI usage (admin only). */
@@ -25,8 +26,11 @@ export async function GET() {
         .limit(50000),
     ]);
 
-    // Aggregate token usage per user (all-time + last 30 days)
+    // Aggregate token usage per user (all-time + last 30 days + this month)
     const cutoff30d = Date.now() - 30 * 24 * 3600 * 1000;
+    const monthStart = new Date();
+    monthStart.setUTCDate(1);
+    monthStart.setUTCHours(0, 0, 0, 0);
     const usage: Record<string, UserUsage> = {};
     for (const row of usageRows ?? []) {
       const u = (usage[row.user_id] ??= {
@@ -35,13 +39,16 @@ export async function GET() {
         outputTokens: 0,
         costUsd: 0,
         costUsd30d: 0,
+        costUsdMonth: 0,
       });
       u.calls += 1;
       u.inputTokens += row.input_tokens ?? 0;
       u.outputTokens += row.output_tokens ?? 0;
       const cost = estimateCostUsd(row.model ?? "", row.input_tokens ?? 0, row.output_tokens ?? 0);
       u.costUsd += cost;
-      if (new Date(row.created_at).getTime() >= cutoff30d) u.costUsd30d += cost;
+      const t = new Date(row.created_at).getTime();
+      if (t >= cutoff30d) u.costUsd30d += cost;
+      if (t >= monthStart.getTime()) u.costUsdMonth += cost;
     }
 
     const profileEmails = new Set((profiles ?? []).map((p) => p.email));

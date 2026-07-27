@@ -10,6 +10,30 @@ interface Invite {
   created_at: string;
 }
 
+interface ScanStats {
+  scans: number;
+  avgSeconds: number | null;
+  avgCardsPerScan: number | null;
+  matchRate: number | null;
+  accuracy: number | null;
+}
+
+interface Analytics {
+  scanTracking: boolean;
+  community: {
+    members: number;
+    totalCards: number;
+    totalValue: number;
+    decks: number;
+    sharedDecks: number;
+    openTradePosts: number;
+    openTickets: number;
+    aiCostMonth: number;
+  };
+  scansAllTime: ScanStats;
+  scans30d: ScanStats;
+}
+
 interface TicketMessage {
   id: string;
   user_id: string;
@@ -55,6 +79,17 @@ interface UserUsage {
   outputTokens: number;
   costUsd: number;
   costUsd30d: number;
+  costUsdMonth: number;
+}
+
+function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="rounded-lg bg-slate-50 p-2.5">
+      <div className="text-lg font-bold leading-tight">{value}</div>
+      <div className="text-[11px] text-slate-500">{label}</div>
+      {sub && <div className="text-[10px] text-slate-400">{sub}</div>}
+    </div>
+  );
 }
 
 function formatTokens(n: number): string {
@@ -113,10 +148,16 @@ export default function AdminPage() {
     if (res.ok) setTickets(json.tickets ?? []);
   }
 
+  const [analytics, setAnalytics] = useState<Analytics | null>(null);
+
   useEffect(() => {
     load();
     loadReview();
     loadTickets();
+    fetch("/api/admin/analytics")
+      .then((r) => r.json())
+      .then((j) => j?.community && setAnalytics(j))
+      .catch(() => {});
   }, []);
 
   async function setTicketStatus(t: Ticket, status: Ticket["status"]) {
@@ -193,6 +234,49 @@ export default function AdminPage() {
     const res = await fetch(`/api/admin/users/${id}`, { method: "DELETE" });
     const json = await res.json();
     if (!res.ok) setError(json.error);
+    load();
+  }
+
+  async function toggleSuspend(u: Profile) {
+    const next = !(u.suspended === true);
+    if (
+      next &&
+      !confirm(
+        `Suspend ${u.display_name || u.email}? They won't be able to sign in or use the app until you unsuspend them. Their collection is kept.`
+      )
+    )
+      return;
+    const res = await fetch(`/api/admin/users/${u.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ suspended: next }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else setMessage(`${u.display_name || u.email} ${next ? "suspended" : "unsuspended"}.`);
+    load();
+  }
+
+  async function setAiBudget(u: Profile) {
+    const current = u.ai_budget_usd != null ? Number(u.ai_budget_usd) : 10;
+    const answer = prompt(
+      `Monthly AI limit for ${u.display_name || u.email} in USD.\nThey've spent ~$${(usage[u.id]?.costUsdMonth ?? 0).toFixed(2)} this month. Set 0 to block AI features entirely.`,
+      String(current)
+    );
+    if (answer == null) return;
+    const value = Number(answer);
+    if (!Number.isFinite(value) || value < 0) {
+      setError("Enter a number, e.g. 10");
+      return;
+    }
+    const res = await fetch(`/api/admin/users/${u.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ aiBudgetUsd: value }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else setMessage(`AI limit for ${u.display_name || u.email} set to $${value}/month.`);
     load();
   }
 
@@ -343,15 +427,34 @@ export default function AdminPage() {
                       {formatTokens(usage[u.id].inputTokens + usage[u.id].outputTokens)} tokens ·{" "}
                       <span className="font-semibold">
                         ~${usage[u.id].costUsd.toFixed(2)} all-time
-                      </span>{" "}
-                      · ~${usage[u.id].costUsd30d.toFixed(2)} last 30d
+                      </span>
                     </>
                   ) : (
                     "🤖 No AI usage yet"
+                  )}{" "}
+                  ·{" "}
+                  {u.role === "admin" ? (
+                    <span className="text-slate-400">no monthly cap</span>
+                  ) : (
+                    <span
+                      className={
+                        (usage[u.id]?.costUsdMonth ?? 0) >=
+                        (u.ai_budget_usd != null ? Number(u.ai_budget_usd) : 10)
+                          ? "font-semibold text-red-600"
+                          : ""
+                      }
+                    >
+                      ~${(usage[u.id]?.costUsdMonth ?? 0).toFixed(2)} of $
+                      {(u.ai_budget_usd != null ? Number(u.ai_budget_usd) : 10).toFixed(0)} this
+                      month
+                    </span>
                   )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {u.suspended === true && (
+                  <span className="chip bg-red-100 text-red-700">suspended</span>
+                )}
                 <span
                   className={`chip ${
                     u.role === "admin" ? "bg-poke-gold/30 text-yellow-900" : "bg-slate-100 text-slate-600"
@@ -359,6 +462,14 @@ export default function AdminPage() {
                 >
                   {u.role}
                 </span>
+                {u.role !== "admin" && (
+                  <button
+                    className="btn text-xs text-slate-500 hover:bg-slate-100"
+                    onClick={() => setAiBudget(u)}
+                  >
+                    AI limit
+                  </button>
+                )}
                 <button
                   className="btn text-xs text-slate-500 hover:bg-slate-100"
                   onClick={() => resetPassword(u.id, u.email)}
@@ -366,18 +477,104 @@ export default function AdminPage() {
                   Reset password
                 </button>
                 {u.role !== "admin" && (
-                  <button
-                    className="btn text-xs text-red-600 hover:bg-red-50"
-                    onClick={() => removeUser(u.id, u.email)}
-                  >
-                    Remove
-                  </button>
+                  <>
+                    <button
+                      className={`btn text-xs ${
+                        u.suspended === true
+                          ? "text-green-700 hover:bg-green-50"
+                          : "text-yellow-700 hover:bg-yellow-50"
+                      }`}
+                      onClick={() => toggleSuspend(u)}
+                    >
+                      {u.suspended === true ? "Unsuspend" : "Suspend"}
+                    </button>
+                    <button
+                      className="btn text-xs text-red-600 hover:bg-red-50"
+                      onClick={() => removeUser(u.id, u.email)}
+                    >
+                      Remove
+                    </button>
+                  </>
                 )}
               </div>
             </li>
           ))}
         </ul>
       </div>
+
+      {analytics && (
+        <div className="card-panel p-4">
+          <h2 className="mb-2 font-semibold">📊 Analytics</h2>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <StatTile label="Members" value={String(analytics.community.members)} />
+            <StatTile label="Cards tracked" value={analytics.community.totalCards.toLocaleString()} />
+            <StatTile label="Est. total value" value={`$${Math.round(analytics.community.totalValue).toLocaleString()}`} />
+            <StatTile label="AI spend this month" value={`~$${analytics.community.aiCostMonth.toFixed(2)}`} />
+            <StatTile
+              label="Decks"
+              value={`${analytics.community.decks}`}
+              sub={`${analytics.community.sharedDecks} shared`}
+            />
+            <StatTile label="Open trade posts" value={String(analytics.community.openTradePosts)} />
+            <StatTile label="Open tickets" value={String(analytics.community.openTickets)} />
+            <StatTile
+              label="Scans (30d)"
+              value={String(analytics.scans30d.scans)}
+              sub={`${analytics.scansAllTime.scans} all-time`}
+            />
+          </div>
+          <h3 className="mb-1 mt-4 text-sm font-semibold">🔎 Scanning quality</h3>
+          {!analytics.scanTracking ? (
+            <p className="text-xs text-yellow-800">
+              Scan tracking needs a one-time database update — run{" "}
+              <code>supabase/migrations/012_analytics.sql</code>. Stats start collecting from
+              then on.
+            </p>
+          ) : analytics.scansAllTime.scans === 0 ? (
+            <p className="text-xs text-slate-400">
+              No scans recorded yet — stats collect from each saved scan.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <StatTile
+                label="Avg. time to identify"
+                value={
+                  analytics.scans30d.avgSeconds != null
+                    ? `${analytics.scans30d.avgSeconds.toFixed(0)}s`
+                    : "—"
+                }
+                sub="last 30 days"
+              />
+              <StatTile
+                label="Avg. cards per scan"
+                value={
+                  analytics.scans30d.avgCardsPerScan != null
+                    ? analytics.scans30d.avgCardsPerScan.toFixed(1)
+                    : "—"
+                }
+              />
+              <StatTile
+                label="Auto-match rate"
+                value={
+                  analytics.scans30d.matchRate != null
+                    ? `${analytics.scans30d.matchRate.toFixed(0)}%`
+                    : "—"
+                }
+                sub="cards found in the database"
+              />
+              <StatTile
+                label="Scan accuracy"
+                value={
+                  analytics.scans30d.accuracy != null
+                    ? `${analytics.scans30d.accuracy.toFixed(0)}%`
+                    : "—"
+                }
+                sub="saved without correction"
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card-panel p-4">
         <h2 className="mb-2 font-semibold">

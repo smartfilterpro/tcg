@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
-import { logAiUsage } from "@/lib/usage";
+import { logAiUsage, checkAiBudget } from "@/lib/usage";
 
 export const maxDuration = 120;
 
@@ -32,6 +32,11 @@ export async function POST(req: Request, { params }: Params) {
 
     const body = (await req.json().catch(() => ({}))) as { asAdmin?: boolean };
     const asAdmin = body?.asAdmin === true && profile?.role === "admin";
+
+    const budget = await checkAiBudget(supabase, user, profile);
+    if (!budget.ok) {
+      return NextResponse.json({ error: budget.message }, { status: 429 });
+    }
 
     const [{ data: owned }, { data: card }] = await Promise.all([
       supabase

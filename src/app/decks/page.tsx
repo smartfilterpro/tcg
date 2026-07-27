@@ -2,9 +2,340 @@
 
 import { useEffect, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
-import type { Deck, DeckCardEntry, DeckSuggestion } from "@/lib/types";
+import { matchesSearch } from "@/lib/text";
+import type { CollectionItem, Deck, DeckCardEntry, DeckSuggestion } from "@/lib/types";
 
 type UpgradeSuggestion = DeckSuggestion;
+
+/** A card in the manual builder's pick list: your collection aggregated by
+ *  card name (finishes combined — a deck list doesn't care about holos). */
+interface OwnedCard {
+  name: string;
+  owned: number;
+  category: "pokemon" | "trainer" | "energy";
+  cardId: string | null;
+  image: string | null;
+  setName: string;
+}
+
+function categoryOf(supertype: string | null | undefined): OwnedCard["category"] {
+  if (supertype === "Pokémon" || supertype === "Pokemon") return "pokemon";
+  if (supertype === "Energy") return "energy";
+  return "trainer";
+}
+
+function ManualBuilder({ onSaved }: { onSaved: (deck: Deck) => void }) {
+  const [open, setOpen] = useState(false);
+  const [owned, setOwned] = useState<OwnedCard[] | null>(null);
+  const [search, setSearch] = useState("");
+  const [name, setName] = useState("");
+  const [notes, setNotes] = useState("");
+  const [deck, setDeck] = useState<Record<string, number>>({}); // card name → qty
+  const [saving, setSaving] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [review, setReview] = useState<string | null>(null);
+  const [question, setQuestion] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  async function openBuilder() {
+    setOpen(true);
+    if (owned !== null) return;
+    try {
+      const res = await fetch("/api/collection");
+      const json = await res.json();
+      const byName = new Map<string, OwnedCard>();
+      for (const it of (json.items ?? []) as CollectionItem[]) {
+        if (!it.card) continue;
+        const prev = byName.get(it.card.name);
+        if (prev) {
+          prev.owned += it.quantity;
+          if (!prev.image && it.card.image_small) prev.image = it.card.image_small;
+        } else {
+          byName.set(it.card.name, {
+            name: it.card.name,
+            owned: it.quantity,
+            category: categoryOf(it.card.supertype),
+            cardId: it.card.id,
+            image: it.card.image_small,
+            setName: it.card.set_name,
+          });
+        }
+      }
+      setOwned([...byName.values()].sort((a, b) => a.name.localeCompare(b.name)));
+    } catch {
+      setOwned([]);
+    }
+  }
+
+  function maxFor(c: OwnedCard): number {
+    // TCG rules: max 4 copies of a card, except basic Energy. We also cap at
+    // what you own — except Energy, which the app assumes you have plenty of.
+    return c.category === "energy" ? 60 : Math.min(4, c.owned);
+  }
+
+  function adjust(c: OwnedCard, delta: number) {
+    setDeck((prev) => {
+      const next = Math.max(0, Math.min(maxFor(c), (prev[c.name] ?? 0) + delta));
+      const copy = { ...prev };
+      if (next === 0) delete copy[c.name];
+      else copy[c.name] = next;
+      return copy;
+    });
+  }
+
+  function toEntries(): DeckCardEntry[] {
+    return (owned ?? [])
+      .filter((c) => (deck[c.name] ?? 0) > 0)
+      .map((c) => ({
+        name: c.name,
+        quantity: deck[c.name],
+        category: c.category,
+        card_id: c.cardId,
+        reason: null,
+      }));
+  }
+
+  const total = Object.values(deck).reduce((s, q) => s + q, 0);
+  const entries = (owned ?? []).filter((c) => (deck[c.name] ?? 0) > 0);
+  const counts = {
+    pokemon: entries.filter((c) => c.category === "pokemon").reduce((s, c) => s + deck[c.name], 0),
+    trainer: entries.filter((c) => c.category === "trainer").reduce((s, c) => s + deck[c.name], 0),
+    energy: entries.filter((c) => c.category === "energy").reduce((s, c) => s + deck[c.name], 0),
+  };
+
+  async function askReview() {
+    if (total === 0 || reviewing) return;
+    setReviewing(true);
+    setReview(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/decks/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, cards: toEntries(), question }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Review failed");
+      setReview(json.answer);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Review failed");
+    }
+    setReviewing(false);
+  }
+
+  async function save() {
+    if (!name.trim() || total === 0 || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/decks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          strategy: notes.trim() || null,
+          cards: toEntries(),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't save the deck");
+      onSaved(json.deck);
+      setDeck({});
+      setName("");
+      setNotes("");
+      setReview(null);
+      setOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save the deck");
+    }
+    setSaving(false);
+  }
+
+  const filtered = (owned ?? [])
+    .filter((c) => matchesSearch(search, c.name, c.setName))
+    .slice(0, 60);
+
+  return (
+    <div className="card-panel p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h2 className="font-semibold">🛠 Build your own deck</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Pick cards from your collection yourself — with optional {AI_NAME} review while
+            you build.
+          </p>
+        </div>
+        <button
+          className="btn-secondary shrink-0 text-sm"
+          onClick={() => (open ? setOpen(false) : openBuilder())}
+        >
+          {open ? "Close" : "Open builder"}
+        </button>
+      </div>
+
+      {open && (
+        <div className="mt-3 space-y-3">
+          <input
+            className="input"
+            placeholder="Deck name (e.g. My Fire Deck)"
+            maxLength={100}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+
+          {/* Current deck */}
+          <div className="rounded-lg bg-slate-50 p-3">
+            <div className="mb-1 flex items-center justify-between text-sm font-semibold">
+              <span>
+                Deck: {total}/60{" "}
+                {total === 60 ? "✅" : total > 60 ? "⚠️ over 60" : ""}
+              </span>
+              <span className="text-xs font-normal text-slate-500">
+                {counts.pokemon} Pokémon · {counts.trainer} Trainer · {counts.energy} Energy
+              </span>
+            </div>
+            {entries.length === 0 ? (
+              <p className="text-xs text-slate-400">Tap cards below to add them.</p>
+            ) : (
+              <ul className="space-y-1">
+                {(["pokemon", "trainer", "energy"] as const).map((cat) =>
+                  entries
+                    .filter((c) => c.category === cat)
+                    .map((c) => (
+                      <li key={c.name} className="flex items-center gap-2 text-sm">
+                        <button
+                          aria-label={`Remove one ${c.name}`}
+                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600 hover:bg-red-100"
+                          onClick={() => adjust(c, -1)}
+                        >
+                          −
+                        </button>
+                        <button
+                          aria-label={`Add one ${c.name}`}
+                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-50 text-green-700 hover:bg-green-100 disabled:opacity-40"
+                          disabled={deck[c.name] >= maxFor(c)}
+                          onClick={() => adjust(c, 1)}
+                        >
+                          +
+                        </button>
+                        <span className="truncate">
+                          {deck[c.name]}x {c.name}
+                        </span>
+                      </li>
+                    ))
+                )}
+              </ul>
+            )}
+          </div>
+
+          {/* Picker */}
+          <div>
+            <input
+              className="input mb-2"
+              placeholder="🔍 Search your collection…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {owned === null ? (
+              <p className="text-sm text-slate-400">Loading your collection…</p>
+            ) : (
+              <ul className="max-h-72 divide-y divide-slate-100 overflow-y-auto rounded border border-slate-200">
+                {filtered.map((c) => {
+                  const inDeck = deck[c.name] ?? 0;
+                  return (
+                    <li key={c.name} className="flex items-center gap-2 p-1.5">
+                      <div className="h-10 w-7 shrink-0 overflow-hidden rounded bg-slate-100">
+                        {c.image && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={c.image} alt="" className="h-full w-full object-cover" loading="lazy" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium">{c.name}</div>
+                        <div className="text-[11px] text-slate-400">
+                          {c.category} · you own x{c.owned}
+                          {c.category === "energy" ? " (energy is unlimited)" : ""}
+                        </div>
+                      </div>
+                      <button
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          inDeck > 0
+                            ? "bg-green-100 text-green-700"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                        disabled={inDeck >= maxFor(c)}
+                        onClick={() => adjust(c, 1)}
+                      >
+                        {inDeck > 0 ? `${inDeck} in deck` : "+ Add"}
+                      </button>
+                    </li>
+                  );
+                })}
+                {filtered.length === 0 && (
+                  <li className="p-2 text-xs text-slate-400">No cards match.</li>
+                )}
+              </ul>
+            )}
+            <p className="mt-1 text-[11px] text-slate-400">
+              Max 4 copies per card (except Energy). Aim for 60 cards.
+            </p>
+          </div>
+
+          <textarea
+            className="input"
+            rows={2}
+            maxLength={2000}
+            placeholder="Notes / strategy (optional — saved with the deck)"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+
+          {/* AI review */}
+          <div className="rounded-lg border border-slate-200 p-3">
+            <div className="flex gap-2">
+              <input
+                className="input text-sm"
+                placeholder={`Optional question for ${AI_NAME} (e.g. "what should I add next?")`}
+                maxLength={2000}
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+              />
+              <button
+                className="btn-secondary shrink-0 text-sm"
+                disabled={reviewing || total === 0}
+                onClick={askReview}
+              >
+                {reviewing ? "Reviewing…" : `🤖 Review`}
+              </button>
+            </div>
+            {review && (
+              <p className="mt-2 whitespace-pre-wrap rounded bg-slate-50 p-2 text-sm text-slate-700">
+                {review}
+              </p>
+            )}
+          </div>
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          <div className="flex gap-2">
+            <button
+              className="btn-primary"
+              disabled={saving || !name.trim() || total === 0}
+              onClick={save}
+            >
+              {saving ? "Saving…" : "Save deck"}
+            </button>
+            {total !== 60 && total > 0 && (
+              <span className="self-center text-xs text-slate-400">
+                (you can save at any size — 60 is tournament-legal)
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CoachBox({ deck }: { deck: { name: string; strategy: string | null; cards: DeckCardEntry[] } }) {
   const [question, setQuestion] = useState("");
@@ -422,6 +753,9 @@ export default function DecksPage() {
           </div>
         )}
       </div>
+
+      {/* Manual builder */}
+      <ManualBuilder onSaved={(d) => setDecks((prev) => [d, ...prev])} />
 
       {/* Saved decks */}
       <div>
