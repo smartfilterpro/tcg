@@ -55,6 +55,7 @@ interface Analytics {
       error?: string;
     } | null;
     textWarmed?: number;
+    error?: string;
   } | null;
 }
 
@@ -1005,6 +1006,7 @@ function PriceRefreshPanel({
       error?: string;
     } | null;
     textWarmed?: number;
+    error?: string;
   } | null;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1016,10 +1018,29 @@ function PriceRefreshPanel({
     setBusy(true);
     setError(null);
     try {
+      // Start the run in the background, then poll for the recorded result —
+      // a full run can take minutes (rate-limited price sources), far longer
+      // than a phone browser keeps one request open.
       const res = await fetch("/api/admin/refresh-prices", { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Refresh failed");
-      setResult(json.summary);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error || `Couldn't start (${res.status})`);
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 5 * 60_000) {
+        await new Promise((r) => setTimeout(r, 8000));
+        const poll = await fetch("/api/admin/refresh-prices").catch(() => null);
+        if (!poll?.ok) continue;
+        const pj = (await poll.json().catch(() => null)) as {
+          summary?: NonNullable<typeof info>;
+          running?: boolean;
+        } | null;
+        const s = pj?.summary;
+        if (s?.ranAt && new Date(s.ranAt).getTime() >= startedAt - 60_000 && pj?.running !== true) {
+          setResult(s);
+          setBusy(false);
+          return;
+        }
+      }
+      throw new Error("Still running — check back in a couple of minutes (results appear here).");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Refresh failed");
     }
@@ -1048,6 +1069,9 @@ function PriceRefreshPanel({
         </button>
       </div>
       {error && <p className="text-xs text-red-600">{error}</p>}
+      {current?.error && (
+        <p className="text-xs text-red-600">⚠️ Last run failed: {current.error}</p>
+      )}
       {current?.pt && (
         <p className="text-xs text-slate-500">
           PokeTrace: {current.pt.priced} priced, {current.pt.matched} newly matched

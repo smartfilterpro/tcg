@@ -34,6 +34,8 @@ export interface PriceRefreshSummary {
   } | null;
   /** Cards whose printed text/combat data was cached this run. */
   textWarmed?: number;
+  /** Set when the run failed partway — shown in the admin panel. */
+  error?: string;
 }
 
 const STATE_KEY = "price_refresh";
@@ -49,6 +51,7 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
     suspicious: [],
   };
 
+  try {
   // Only cards someone actually owns are worth refreshing.
   const { data: owned, error: ownedErr } = await admin
     .from("collection_items")
@@ -217,6 +220,12 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
   } catch {
     // Warming is best-effort.
   }
+  } catch (err) {
+    // A failed run must still RECORD itself — otherwise the admin panel
+    // shows nothing and the failure reason is lost.
+    summary.error = err instanceof Error ? err.message : String(err);
+    console.error("price refresh failed", err);
+  }
 
   // Remember the run for the admin dashboard (best-effort — app_state exists
   // after migration 022).
@@ -250,6 +259,7 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
       suspicious: Array.isArray(value.suspicious) ? value.suspicious : [],
       pt: value.pt ?? null,
       textWarmed: value.textWarmed ?? 0,
+      ...(value.error ? { error: value.error } : {}),
     };
   } catch {
     return null;
@@ -280,8 +290,22 @@ export function startPriceRefreshLoop() {
       const summary = await refreshStalePrices();
       console.log(
         `price refresh: checked ${summary.checked}, updated ${summary.updated}, ` +
-          `${summary.suspicious.length} suspicious, ${summary.unpriced} without data`
+          `${summary.suspicious.length} suspicious, ${summary.unpriced} without data` +
+          (summary.error ? ` — FAILED: ${summary.error}` : "")
       );
+      if (summary.error) {
+        // Release most of the claim window so the next hourly tick retries,
+        // instead of a failed run blocking refreshes for a whole day.
+        await admin
+          .from("app_state")
+          .update({
+            updated_at: new Date(
+              Date.now() - (MIN_HOURS_BETWEEN_RUNS - 0.5) * 3600_000
+            ).toISOString(),
+          })
+          .eq("key", STATE_KEY)
+          .then(() => {});
+      }
     } catch (err) {
       console.error("price refresh loop error", err);
     }

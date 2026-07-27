@@ -105,7 +105,8 @@ export async function getBattleDataById(id: string): Promise<CardBattleData | nu
 
 function headers(): Record<string, string> {
   const h: Record<string, string> = {};
-  if (process.env.POKEMONTCG_API_KEY) h["X-Api-Key"] = process.env.POKEMONTCG_API_KEY;
+  const key = (process.env.POKEMONTCG_API_KEY ?? "").trim();
+  if (key) h["X-Api-Key"] = key;
   return h;
 }
 
