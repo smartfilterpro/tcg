@@ -496,6 +496,23 @@ export default function BattleBoardPage() {
             >
               🪙 Flip coin
             </button>
+            {view.phase === "play" && !view.myTurn && (
+              <button
+                className="text-xs text-slate-400 hover:underline"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    confirm(
+                      "Take the turn? Use this when you both agree the table is out of sync (someone forgot End turn) or a card effect passes the turn. It's announced in the log."
+                    )
+                  ) {
+                    act({ type: "claimTurn" });
+                  }
+                }}
+              >
+                ⚠️ Take turn
+              </button>
+            )}
             <button
               className="ml-auto text-xs text-red-500 hover:underline"
               onClick={() => setSheet({ kind: "concede" })}

@@ -45,6 +45,13 @@ export interface CardBattleData {
   /** Printed rules text (Trainer / Special Energy / rule-box lines). */
   rules?: string[];
   abilities?: Array<{ name: string; text: string }>;
+  /** Evolution stage ("Basic", "Stage 1", …) — sources that don't fill
+   *  subtypes (TCGdex, AI-read cards) report it here. */
+  stage?: string | null;
+  /** HP for sources where the cards row lacks it (AI-read customs). */
+  hp?: number | null;
+  /** Trainer subtype ("Supporter" / "Item" / "Stadium" / "Tool"). */
+  trainerType?: string | null;
   /** AI-compiled effect ops for Trainers (see battles/lib fx compiler). */
   fx?: { ops: Array<{ op: string; n?: number; note?: string }> } | null;
 }

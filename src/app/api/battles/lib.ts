@@ -3,9 +3,132 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { AuthError } from "@/lib/auth";
 import { BattleError, type BattleCard } from "@/lib/battle";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
-import { anthropic } from "@/lib/anthropic";
+import { getTcgdexBattleDataById } from "@/lib/tcgdex";
+import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { logAiUsage } from "@/lib/usage";
 import type { Deck, Profile } from "@/lib/types";
+
+/** AI card reader: for cards NO database knows (photo-scanned customs),
+ *  read the card's own picture once and extract its battle data. Cached in
+ *  cards.battle_data forever — battles themselves never call AI. */
+const CARD_READ_SCHEMA = {
+  type: "object",
+  properties: {
+    readable: { type: "boolean", description: "False if the image is too blurry/small to read the card's text reliably." },
+    category: { type: "string", enum: ["pokemon", "trainer", "energy", "unknown"] },
+    stage: {
+      type: ["string", "null"],
+      description: "For Pokémon: 'Basic', 'Stage 1', 'Stage 2', or the printed stage. Null otherwise.",
+    },
+    hp: { type: ["integer", "null"] },
+    attacks: {
+      type: "array",
+      maxItems: 4,
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          cost_count: { type: "integer", description: "Number of energy symbols in the attack cost." },
+          damage: { type: "string", description: "Printed damage, e.g. '80', '30+', '20×', or '' for none." },
+          text: { type: ["string", "null"] },
+        },
+        required: ["name", "cost_count", "damage", "text"],
+        additionalProperties: false,
+      },
+    },
+    abilities: {
+      type: "array",
+      maxItems: 2,
+      items: {
+        type: "object",
+        properties: { name: { type: "string" }, text: { type: "string" } },
+        required: ["name", "text"],
+        additionalProperties: false,
+      },
+    },
+    rules_text: {
+      type: "array",
+      maxItems: 4,
+      items: { type: "string" },
+      description: "Trainer/Special Energy effect text, exactly as printed.",
+    },
+    retreat: { type: ["integer", "null"] },
+    weakness_type: { type: ["string", "null"] },
+    trainer_type: { type: ["string", "null"], enum: ["Supporter", "Item", "Stadium", "Tool", null] },
+  },
+  required: [
+    "readable", "category", "stage", "hp", "attacks", "abilities",
+    "rules_text", "retreat", "weakness_type", "trainer_type",
+  ],
+  additionalProperties: false,
+} as const;
+
+const CARD_READ_SYSTEM = `You read a single Pokémon TCG card from its photo and
+transcribe its printed game data EXACTLY — name of attacks, energy-symbol
+counts, damage numbers, ability and effect text word for word. Do not guess
+values you cannot read; use null (or readable=false if the whole card is
+illegible). Transcribe, never invent.`;
+
+async function aiReadCard(
+  imageUrl: string,
+  userId: string | null,
+  admin: SupabaseClient
+): Promise<CardBattleData | null> {
+  try {
+    const client = anthropic();
+    const response = await client.messages.create({
+      model: SCAN_MODEL,
+      max_tokens: 2000,
+      system: CARD_READ_SYSTEM,
+      output_config: {
+        format: { type: "json_schema", schema: CARD_READ_SCHEMA as unknown as Record<string, unknown> },
+      },
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image", source: { type: "url", url: imageUrl } },
+            { type: "text", text: "Transcribe this card's game data." },
+          ],
+        },
+      ],
+    });
+    if (userId) await logAiUsage(admin, userId, "card_fx", SCAN_MODEL, response.usage);
+    const block = response.content.find((b) => b.type === "text");
+    if (!block || block.type !== "text") return null;
+    const read = JSON.parse(block.text) as {
+      readable: boolean;
+      category: string;
+      stage: string | null;
+      hp: number | null;
+      attacks: Array<{ name: string; cost_count: number; damage: string; text: string | null }>;
+      abilities: Array<{ name: string; text: string }>;
+      rules_text: string[];
+      retreat: number | null;
+      weakness_type: string | null;
+      trainer_type: string | null;
+    };
+    if (!read.readable) return null;
+    return {
+      attacks: (read.attacks ?? []).map((a) => ({
+        name: a.name,
+        cost: Array.from({ length: Math.max(0, Math.min(5, a.cost_count)) }, () => "Colorless"),
+        damage: a.damage ?? "",
+        text: a.text || null,
+      })),
+      weak: read.weakness_type ? { type: read.weakness_type, value: "×2" } : null,
+      resist: null,
+      retreat: read.retreat ?? 0,
+      ...(read.rules_text?.length ? { rules: read.rules_text } : {}),
+      ...(read.abilities?.length ? { abilities: read.abilities } : {}),
+      stage: read.stage,
+      hp: read.hp,
+      trainerType: read.trainer_type,
+    };
+  } catch {
+    return null;
+  }
+}
 
 /** AI effect compiler: turns a Trainer card's printed text into a tiny op
  *  script the referee can execute — ONCE per unique card, ever. The result
@@ -146,7 +269,14 @@ export async function expandDeck(
           : supertype.includes("energy")
             ? "energy"
             : null,
-      basic: supertype.includes("pok") ? subtypes.includes("basic") : null,
+      // Empty subtypes = UNKNOWN stage, not "evolution" — TCGdex/custom
+      // cards often have no subtypes, and guessing false blocked benching
+      // Basics like Regirock.
+      basic: supertype.includes("pok")
+        ? subtypes.length > 0
+          ? subtypes.includes("basic")
+          : null
+        : null,
       sup: subtypes.includes("supporter"),
       stad: subtypes.includes("stadium"),
       hp: Number.isFinite(hpNum) && hpNum > 0 ? hpNum : null,
@@ -197,34 +327,59 @@ export async function expandDeck(
   }
 
   // Backfill card knowledge (attacks/weakness/retreat for Pokémon, printed
-  // rules text for Trainers & Special Energy) — one API fetch per card,
-  // ever. Custom and TCGdex cards are skipped (no pokemontcg.io id).
-  const needsBd = [...metaById.values()].filter(
-    (m) =>
-      !m.bd &&
-      m.cat !== null &&
-      m.id &&
-      !m.id.startsWith("custom-") &&
-      !m.id.startsWith("tcgdex-")
+  // rules text for Trainers & Special Energy) — one fetch per card, ever,
+  // routed by source: primary DB ids → pokemontcg.io, tcgdex- ids → TCGdex,
+  // custom- ids (photo scans) → AI reads the card's own picture once.
+  const needsBd = [...metaById.values()].filter((m) => !m.bd && m.cat !== null && m.id);
+  const primary = needsBd.filter(
+    (m) => !m.id!.startsWith("custom-") && !m.id!.startsWith("tcgdex-")
   );
+  const viaTcgdex = needsBd.filter((m) => m.id!.startsWith("tcgdex-"));
+  const viaAi = needsBd
+    .filter((m) => m.id!.startsWith("custom-") && (m.big || m.image))
+    .slice(0, 4); // vision reads are the priciest — small cap per battle
+
+  const persistBd = async (m: (typeof needsBd)[number]) => {
+    if (m.bd && m.hasBdColumn) {
+      await admin.from("cards").update({ battle_data: m.bd }).eq("id", m.id!).then(() => {});
+    }
+  };
   const BD_BATCH = 5;
-  for (let i = 0; i < Math.min(needsBd.length, 25); i += BD_BATCH) {
-    const batch = needsBd.slice(i, i + BD_BATCH);
+  for (let i = 0; i < Math.min(primary.length, 25); i += BD_BATCH) {
     await Promise.all(
-      batch.map(async (m) => {
-        const bd = await getBattleDataById(m.id!);
-        if (!bd) return;
-        m.bd = bd;
-        if (m.hasBdColumn) {
-          // Cache for every future battle (best-effort).
-          await admin
-            .from("cards")
-            .update({ battle_data: bd })
-            .eq("id", m.id!)
-            .then(() => {});
-        }
+      primary.slice(i, i + BD_BATCH).map(async (m) => {
+        m.bd = await getBattleDataById(m.id!);
+        await persistBd(m);
       })
     );
+  }
+  for (let i = 0; i < Math.min(viaTcgdex.length, 25); i += BD_BATCH) {
+    await Promise.all(
+      viaTcgdex.slice(i, i + BD_BATCH).map(async (m) => {
+        m.bd = await getTcgdexBattleDataById(m.id!);
+        await persistBd(m);
+      })
+    );
+  }
+  for (let i = 0; i < viaAi.length; i += 2) {
+    await Promise.all(
+      viaAi.slice(i, i + 2).map(async (m) => {
+        m.bd = await aiReadCard((m.big ?? m.image)!, opts?.userId ?? null, admin);
+        await persistBd(m);
+      })
+    );
+  }
+
+  // Let battle data fill gaps the cards row couldn't answer: stage →
+  // Basic/evolution, HP, and Supporter/Stadium flags.
+  for (const m of metaById.values()) {
+    if (!m.bd) continue;
+    if (m.basic == null && m.bd.stage) m.basic = /basic/i.test(m.bd.stage);
+    if (m.hp == null && m.bd.hp) m.hp = m.bd.hp;
+    if (m.bd.trainerType) {
+      if (/supporter/i.test(m.bd.trainerType)) m.sup = true;
+      if (/stadium/i.test(m.bd.trainerType)) m.stad = true;
+    }
   }
 
   // AI effect compile for Trainers that have text but no fx yet — Haiku,
