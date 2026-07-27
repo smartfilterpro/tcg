@@ -64,6 +64,11 @@ export default function BattlesPage() {
 
   useEffect(() => {
     load();
+    // Battle invite links: /battles?code=ABCDE pre-fills the join form.
+    try {
+      const c = new URLSearchParams(window.location.search).get("code");
+      if (c) setJoinCode(c.toUpperCase().slice(0, 8));
+    } catch {}
   }, []);
 
   async function createBattle(e: React.FormEvent) {

@@ -210,19 +210,46 @@ export default function BattleBoardPage() {
   if (!data) return <p className="text-slate-500">Loading the table…</p>;
 
   if (data.status === "waiting") {
+    const inviteUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/battles?code=${data.code}`;
+    const shareInvite = async () => {
+      try {
+        if (navigator.share) {
+          await navigator.share({
+            title: "PokéDeck battle",
+            text: `⚔️ Battle me in PokéDeck! Join code: ${data.code}`,
+            url: inviteUrl,
+          });
+          return;
+        }
+      } catch {
+        return; // user closed the share sheet
+      }
+      try {
+        await navigator.clipboard.writeText(inviteUrl);
+        showNotice("Invite link copied — paste it to your friend!");
+      } catch {
+        showNotice(inviteUrl);
+      }
+    };
     return (
       <div className="mx-auto max-w-md space-y-4 text-center">
         <h1 className="text-2xl font-bold">Waiting for an opponent…</h1>
         <p className="text-sm text-slate-500">
-          Share this code with a friend — they join from the Battles page.
+          Send a friend the invite link — it opens the join form with this code filled in.
         </p>
         <div className="card-panel py-6 text-4xl font-black tracking-[0.3em] text-poke-blue">
           {data.code}
         </div>
+        <div className="flex justify-center gap-2">
+          <button className="btn-primary" onClick={shareInvite}>
+            📤 Share invite link
+          </button>
+          <button className="btn-secondary" onClick={removeBattle}>
+            Cancel battle
+          </button>
+        </div>
+        {notice && <p className="break-all text-xs text-green-700">{notice}</p>}
         <p className="text-xs text-slate-400">This page updates by itself once they join.</p>
-        <button className="btn-secondary" onClick={removeBattle}>
-          Cancel battle
-        </button>
       </div>
     );
   }

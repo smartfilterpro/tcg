@@ -30,11 +30,22 @@ export default function LoginPage() {
         setBusy(false);
         return;
       }
-      window.location.href = "/";
+      window.location.href = afterLoginDest();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setBusy(false);
     }
+  }
+
+
+  /** Where to land after signing in: an internal ?next= path when present
+   *  (battle invites etc.), else the collection. */
+  function afterLoginDest(): string {
+    try {
+      const n = new URLSearchParams(window.location.search).get("next");
+      if (n && /^\/(?!\/)/.test(n)) return n;
+    } catch {}
+    return "/";
   }
 
   async function acceptTos() {
@@ -44,7 +55,7 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/accept-tos", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Something went wrong");
-      window.location.href = "/";
+      window.location.href = afterLoginDest();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setBusy(false);
