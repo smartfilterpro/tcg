@@ -222,9 +222,14 @@ export default function BattleBoardPage() {
       <div className="card-panel space-y-2 p-3">
         <div className="flex items-center justify-between gap-2">
           <div className="text-sm font-semibold">{oppName}</div>
-          {!finished && !view.myTurn && (
-            <span className="chip bg-yellow-50 text-yellow-800">their turn</span>
-          )}
+          {!finished &&
+            (view.rules && view.phase === "setup" ? (
+              <span className={`chip ${opp.ready ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
+                {opp.ready ? "ready" : "setting up"}
+              </span>
+            ) : (
+              !view.myTurn && <span className="chip bg-yellow-50 text-yellow-800">their turn</span>
+            ))}
         </div>
         <div className="flex items-start justify-between gap-2">
           <div className="flex gap-2">
@@ -287,7 +292,30 @@ export default function BattleBoardPage() {
           <div className="text-sm font-semibold">{data.myName ?? "You"}</div>
           {!finished && view.myTurn && <span className="chip bg-green-50 text-green-700">your turn</span>}
         </div>
-        {!finished && me.prizeCount === 0 && (
+        {!finished && view.rules && view.phase === "setup" && (
+          <div className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
+            {me.ready ? (
+              <>
+                <b>Ready!</b> Waiting for {oppName} to finish setup…
+              </>
+            ) : (
+              <>
+                <b>Setup:</b> play a Basic Pokémon as your Active and bench any others. No
+                Basic in hand? Tap your deck pile → Mulligan. When your board is set,{" "}
+                <button
+                  type="button"
+                  className="font-semibold underline"
+                  disabled={busy}
+                  onClick={() => act({ type: "ready" })}
+                >
+                  tap Ready
+                </button>{" "}
+                — prizes are set automatically.
+              </>
+            )}
+          </div>
+        )}
+        {!finished && !view.rules && me.prizeCount === 0 && (
           <div className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
             <b>Setup:</b> play a Basic Pokémon as your Active and bench any others. No Basic in
             hand? Tap your deck pile → Mulligan (your hand is revealed in the log, and your
@@ -301,6 +329,11 @@ export default function BattleBoardPage() {
               set your 6 Prize cards
             </button>
             .
+          </div>
+        )}
+        {!finished && view.rules && view.phase === "play" && !me.active && me.bench.length > 0 && (
+          <div className="rounded-lg bg-red-50 p-2 text-xs font-semibold text-red-700">
+            Choose a new Active — tap a Bench Pokémon, then “Move to Active”.
           </div>
         )}
         <div className="flex items-start justify-between gap-2">
@@ -355,22 +388,40 @@ export default function BattleBoardPage() {
 
         {!finished && (
           <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
-            <button className="btn-secondary text-sm" disabled={busy} onClick={() => act({ type: "draw" })}>
-              🃏 Draw
-            </button>
+            {view.phase === "setup" ? (
+              !me.ready && (
+                <button
+                  className="btn-primary text-sm"
+                  disabled={busy || !me.active}
+                  onClick={() => act({ type: "ready" })}
+                >
+                  ✅ Ready
+                </button>
+              )
+            ) : (
+              <>
+                <button
+                  className="btn-secondary text-sm"
+                  disabled={busy}
+                  onClick={() => act({ type: "draw" })}
+                >
+                  🃏 Draw
+                </button>
+                <button
+                  className={`${view.myTurn ? "btn-primary" : "btn-secondary"} text-sm`}
+                  disabled={busy}
+                  onClick={() => act({ type: "endTurn" })}
+                >
+                  End turn
+                </button>
+              </>
+            )}
             <button
               className="btn-secondary text-sm"
               disabled={busy}
               onClick={() => act({ type: "flipCoin" })}
             >
               🪙 Flip coin
-            </button>
-            <button
-              className={`${view.myTurn ? "btn-primary" : "btn-secondary"} text-sm`}
-              disabled={busy}
-              onClick={() => act({ type: "endTurn" })}
-            >
-              End turn
             </button>
             <button
               className="ml-auto text-xs text-red-500 hover:underline"
@@ -406,7 +457,9 @@ export default function BattleBoardPage() {
       </div>
 
       <p className="text-center text-[11px] text-slate-400">
-        The app keeps the table — you two enforce the rules, just like playing in person.
+        {view.rules
+          ? "Referee mode: turns, draws, energy limits, knockouts, and prizes are enforced — attacks and card effects are still yours to play. Options marked ✨ bypass a rule when a card allows it."
+          : "The app keeps the table — you two enforce the rules, just like playing in person."}
       </p>
 
       {/* ===== Action sheet ===== */}
@@ -424,6 +477,8 @@ export default function BattleBoardPage() {
               me={me}
               opp={opp}
               oppName={oppName}
+              rules={view.rules}
+              phase={view.phase}
               busy={busy}
               act={act}
               close={() => setSheet(null)}
@@ -469,6 +524,8 @@ function SheetContent({
   me,
   opp,
   oppName,
+  rules,
+  phase,
   busy,
   act,
   close,
@@ -477,6 +534,8 @@ function SheetContent({
   me: BattleView["me"];
   opp: BattleView["opp"];
   oppName: string;
+  rules: boolean;
+  phase: "setup" | "play";
   busy: boolean;
   act: (a: BattleAction) => void;
   close: () => void;
@@ -514,12 +573,23 @@ function SheetContent({
         <button className={row} disabled={busy} onClick={() => act({ type: "shuffleDeck" })}>
           🔀 Shuffle deck
         </button>
-        <button className={row} disabled={busy} onClick={() => act({ type: "mulligan" })}>
-          ♻️ Mulligan — no Basic Pokémon? Reveal, reshuffle, draw 7
-        </button>
-        {me.prizeCount === 0 && (
+        {(!rules || phase === "setup") && (
+          <button className={row} disabled={busy} onClick={() => act({ type: "mulligan" })}>
+            ♻️ Mulligan — no Basic Pokémon? Reveal, reshuffle, draw 7
+          </button>
+        )}
+        {!rules && me.prizeCount === 0 && (
           <button className={row} disabled={busy} onClick={() => act({ type: "setPrizes" })}>
             🏆 Set your 6 Prize cards (once mulligans are done)
+          </button>
+        )}
+        {rules && phase === "play" && (
+          <button
+            className={row}
+            disabled={busy}
+            onClick={() => act({ type: "draw", override: true })}
+          >
+            ✨ Draw (card effect / ability)
           </button>
         )}
         <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
@@ -555,6 +625,15 @@ function SheetContent({
           <CardTile card={card} className="w-14" />
           <h2 className="font-semibold">{card.name}</h2>
         </div>
+        {rules && phase === "play" && card.cat === "trainer" && (
+          <button
+            className={row}
+            disabled={busy}
+            onClick={() => act({ type: "playCard", handIndex: sheet.index })}
+          >
+            ▶️ Play {card.name} (then to your discard)
+          </button>
+        )}
         {!me.active && (
           <button
             className={row}
@@ -564,7 +643,7 @@ function SheetContent({
             ⭐ Play as your Active Pokémon
           </button>
         )}
-        {me.active && (
+        {me.active && (!rules || phase === "play") && (
           <>
             <button
               className={row}
@@ -591,31 +670,43 @@ function SheetContent({
             🪑 Play to your Bench
           </button>
         )}
-        {me.bench.map((s, i) => (
-          <div key={s.face.uid} className="flex items-center gap-2 border-b border-slate-100">
-            <span className="min-w-0 flex-1 truncate py-2.5 text-sm text-slate-500">
-              Bench: {s.face.name}
-            </span>
-            <button
-              className="text-sm text-poke-blue"
-              disabled={busy}
-              onClick={() =>
-                act({ type: "handToBench", handIndex: sheet.index, benchIndex: i, mode: "attach" })
-              }
-            >
-              attach
-            </button>
-            <button
-              className="text-sm text-poke-blue"
-              disabled={busy}
-              onClick={() =>
-                act({ type: "handToBench", handIndex: sheet.index, benchIndex: i, mode: "evolve" })
-              }
-            >
-              evolve
-            </button>
-          </div>
-        ))}
+        {(!rules || phase === "play") &&
+          me.bench.map((s, i) => (
+            <div key={s.face.uid} className="flex items-center gap-2 border-b border-slate-100">
+              <span className="min-w-0 flex-1 truncate py-2.5 text-sm text-slate-500">
+                Bench: {s.face.name}
+              </span>
+              <button
+                className="text-sm text-poke-blue"
+                disabled={busy}
+                onClick={() =>
+                  act({ type: "handToBench", handIndex: sheet.index, benchIndex: i, mode: "attach" })
+                }
+              >
+                attach
+              </button>
+              <button
+                className="text-sm text-poke-blue"
+                disabled={busy}
+                onClick={() =>
+                  act({ type: "handToBench", handIndex: sheet.index, benchIndex: i, mode: "evolve" })
+                }
+              >
+                evolve
+              </button>
+            </div>
+          ))}
+        {rules && phase === "play" && card.cat === "energy" && me.active && (
+          <button
+            className={`${row} text-slate-500`}
+            disabled={busy}
+            onClick={() =>
+              act({ type: "handToActive", handIndex: sheet.index, mode: "attach", override: true })
+            }
+          >
+            ✨ Attach to {me.active.face.name} as a card effect (skips one-per-turn)
+          </button>
+        )}
         <button
           className={`${row} text-red-600`}
           disabled={busy}
@@ -645,7 +736,9 @@ function SheetContent({
             {mine ? "" : `${oppName}'s `}
             {stack.face.name}
           </h2>
-          <p className="text-xs text-slate-500">{stack.damage} damage</p>
+          <p className="text-xs text-slate-500">
+            {stack.damage} damage{stack.face.hp ? ` / ${stack.face.hp} HP` : ""}
+          </p>
         </div>
       </div>
 
