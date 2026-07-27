@@ -6,6 +6,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { searchCards, getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { checkAiBudget } from "@/lib/usage";
+import { analyzeDeck, analysisSummary, type DeckMathEntry } from "@/lib/deckMath";
 import type { CardSummary, CardSummaryRow, DeckCardEntry } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -355,6 +356,93 @@ export async function POST(req: Request) {
               : "The deck came back malformed — please try again."
           );
         }
+
+        // ===== Verify → revise: run the deterministic deck math and give
+        // the model ONE shot at fixing what the numbers prove is wrong. =====
+        const collByName = new Map(collection.map((c) => [c.name.toLowerCase(), c]));
+        const toMathEntry = (dc: DeckCardEntry): DeckMathEntry => {
+          const src =
+            (dc.card_id ? byId.get(dc.card_id) : undefined) ??
+            collByName.get(dc.name.toLowerCase());
+          const subtypes = (src?.subtypes ?? []).map((s) => s.toLowerCase());
+          const stage =
+            src?.bd?.stage ??
+            (subtypes.includes("basic")
+              ? "Basic"
+              : subtypes.find((s) => /^stage/.test(s)) ?? null);
+          const isPokemon = /pok/i.test(src?.supertype ?? "");
+          return {
+            name: dc.name,
+            quantity: dc.quantity,
+            category: dc.category,
+            basic: isPokemon
+              ? subtypes.length > 0
+                ? subtypes.includes("basic")
+                : stage
+                  ? /basic/i.test(stage)
+                  : null
+              : null,
+            stage,
+            text: src?.bd?.rules?.join(" ") ?? null,
+            attackCosts: src?.bd?.attacks?.map((a) => a.cost.length),
+          };
+        };
+
+        let analysis = analyzeDeck((deck.cards ?? []).map(toMathEntry));
+        if (analysis.issues.length > 0) {
+          try {
+            const revisionStream = client.messages.stream({
+              model: MODEL,
+              max_tokens: 32000,
+              system: SYSTEM,
+              output_config: {
+                format: {
+                  type: "json_schema",
+                  schema: DECK_SCHEMA as unknown as Record<string, unknown>,
+                },
+              },
+              messages: [
+                { role: "user", content: userContent },
+                { role: "assistant", content: textBlock.text },
+                {
+                  role: "user",
+                  content:
+                    `DECK CHECK (computed by the app — these numbers are exact, trust them):\n` +
+                    `${analysisSummary(analysis)}\n\nPROBLEMS TO FIX:\n- ${analysis.issues.join("\n- ")}\n\n` +
+                    `Revise the deck to fix EVERY listed problem while keeping the same strategy, ` +
+                    `the same card-pool rules, and the 60-card limit. Return the complete corrected deck JSON.`,
+                },
+              ],
+            });
+            const revision = await revisionStream.finalMessage();
+            try {
+              await createAdminClient().from("ai_usage").insert({
+                user_id: user.id,
+                endpoint: "deck_build",
+                model: MODEL,
+                input_tokens: revision.usage?.input_tokens ?? 0,
+                output_tokens: revision.usage?.output_tokens ?? 0,
+              });
+            } catch {}
+            const revText = revision.content.find((b) => b.type === "text");
+            if (revText && revText.type === "text") {
+              const revised = JSON.parse(revText.text) as typeof deck;
+              if (Array.isArray(revised.cards) && revised.cards.length > 0) {
+                deck = revised;
+                analysis = analyzeDeck(revised.cards.map(toMathEntry));
+              }
+            }
+          } catch {
+            // Revision is best-effort — the original deck still ships.
+          }
+        }
+        // The verified numbers ride along in the strategy text, visible
+        // everywhere decks are shown.
+        deck.strategy = `${deck.strategy}\n\n📊 ${analysisSummary(analysis)}${
+          analysis.issues.length > 0
+            ? `\n⚠️ Remaining flags: ${analysis.issues.join(" ")}`
+            : ""
+        }`;
 
         // Enrich upgrade suggestions with real card data (image + market
         // price) so the wishlist shows what to buy and what it costs.

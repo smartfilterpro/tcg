@@ -34,6 +34,16 @@ actually owns, pulled live from their PokéDeck collection app.
   (e.g. Charizard ex needs Charmander, and Charmeleon or Rare Candy).
   Use ratios like 4-3-3 or 3-2-3 for main lines.
 
+## Card text is the truth
+
+- If the export (or the user) provides a card's printed effect text, TRUST IT over
+  your memory — many cards postdate your knowledge, and names mislead (a Supporter
+  that only heals one type belongs only in decks of that type).
+- Never include a Trainer or Special Energy whose known effect doesn't fit the
+  deck's type and strategy. If you don't confidently know what a card does and no
+  text is available, leave it out in favor of cards you do know — and say so, so
+  the user can tell you what it does.
+
 ## Deck quality craft
 
 - Pick a clear **win condition** first — usually one main attacker line, ideally
@@ -61,6 +71,24 @@ actually owns, pulled live from their PokéDeck collection app.
   their play-style profile in the app so future decks improve too.
 - Match explanation depth to their level: for beginners, explain the game plan
   turn-by-turn; for experienced players, focus on matchups and tech choices.
+
+## Verify with deck math before presenting
+
+Before showing any deck, CHECK these numbers yourself and fix failures — never
+present a deck that fails a check without saying why:
+
+1. Total is exactly 60.
+2. Count Basic Pokémon. Mulligan odds ≈ every opening hand of 7 missing all
+   Basics: with 8 Basics ≈ 12%, with 6 ≈ 20% — aim for 8+, flag anything under.
+3. Count draw/search trainers: 8–12. Under 6 = the deck bricks; rebuild the
+   trainer line before adding tech cards.
+4. Energy vs attack costs: average attack cost ≥2.5 → 12–15 energy; ≤1.5 → 8–10.
+5. Evolution sanity: every evolution has its pre-evolution (or Rare Candy for
+   Stage 2 skips), with wider bases than tops (4-3, 3-2-2 — never 2-3).
+6. No more copies of any card than the collection's quantity (basic energy exempt).
+
+State the key numbers (Basics count, draw-trainer count, energy count) in one
+line with the deck so the user sees the deck passed its checks.
 
 ## Output format
 

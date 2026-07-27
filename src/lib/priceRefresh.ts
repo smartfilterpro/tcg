@@ -2,6 +2,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getCardById } from "@/lib/pokemontcg";
 import { getTcgdexPriceById } from "@/lib/tcgdex";
 import { poketraceEnabled, searchPoketraceCard, getPoketracePrices } from "@/lib/poketrace";
+import { getBattleDataById } from "@/lib/pokemontcg";
+import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 
 /** Background price refresher.
  *
@@ -30,6 +32,8 @@ export interface PriceRefreshSummary {
     requests: number;
     error?: string;
   } | null;
+  /** Cards whose printed text/combat data was cached this run. */
+  textWarmed?: number;
 }
 
 const STATE_KEY = "price_refresh";
@@ -182,6 +186,38 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
 
   if (pt) summary.pt = pt;
 
+  // Pre-warm printed card text / combat data for owned cards that don't
+  // have it yet — the deck builder, deck review, and battles all read this
+  // cache, and a warm cache means no build-time fetching and no AI
+  // guessing what a card does. A slice per night covers whole collections
+  // within days. (battle_data column exists after migration 019.)
+  try {
+    const needsText = (cards ?? [])
+      .filter(
+        (c) =>
+          "battle_data" in c &&
+          c.battle_data == null &&
+          !(c.id as string).startsWith("custom-")
+      )
+      .slice(0, 30);
+    summary.textWarmed = 0;
+    for (let i = 0; i < needsText.length; i += 5) {
+      await Promise.all(
+        needsText.slice(i, i + 5).map(async (c) => {
+          const bd = (c.id as string).startsWith("tcgdex-")
+            ? await getTcgdexBattleDataById(c.id as string)
+            : await getBattleDataById(c.id as string);
+          if (bd) {
+            const { error } = await admin.from("cards").update({ battle_data: bd }).eq("id", c.id);
+            if (!error) summary.textWarmed = (summary.textWarmed ?? 0) + 1;
+          }
+        })
+      );
+    }
+  } catch {
+    // Warming is best-effort.
+  }
+
   // Remember the run for the admin dashboard (best-effort — app_state exists
   // after migration 022).
   await admin
@@ -213,6 +249,7 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
       unpriced: value.unpriced ?? 0,
       suspicious: Array.isArray(value.suspicious) ? value.suspicious : [],
       pt: value.pt ?? null,
+      textWarmed: value.textWarmed ?? 0,
     };
   } catch {
     return null;
