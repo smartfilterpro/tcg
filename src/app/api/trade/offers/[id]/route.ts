@@ -11,8 +11,23 @@ export async function DELETE(_req: Request, { params }: Params) {
     await requireUser();
     const { id } = await params;
     const supabase = await createClient();
-    const { error } = await supabase.from("trade_offers").delete().eq("id", id);
+    // .select() so a zero-row delete (blocked by RLS — e.g. migration 014
+    // not run, or a pending offer) is a visible error, not a silent no-op.
+    const { data, error } = await supabase
+      .from("trade_offers")
+      .delete()
+      .eq("id", id)
+      .select("id");
     if (error) throw error;
+    if (!data || data.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Nothing was cleared. Pending requests can't be cleared — and if this trade is finished, the admin needs to run supabase/migrations/014_trade_cleanup.sql.",
+        },
+        { status: 400 }
+      );
+    }
     return NextResponse.json({ ok: true });
   } catch (err) {
     if (err instanceof AuthError) {

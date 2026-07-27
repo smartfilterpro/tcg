@@ -134,13 +134,14 @@ export async function DELETE() {
   try {
     const { user } = await requireUser();
     const supabase = await createClient();
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("trade_offers")
       .delete()
       .neq("status", "pending")
-      .or(`from_user.eq.${user.id},to_user.eq.${user.id}`);
+      .or(`from_user.eq.${user.id},to_user.eq.${user.id}`)
+      .select("id");
     if (error) throw error;
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, cleared: data?.length ?? 0 });
   } catch (err) {
     return errorResponse(err);
   }
