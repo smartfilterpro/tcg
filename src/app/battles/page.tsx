@@ -14,6 +14,10 @@ interface BattleListItem {
   updatedAt: string;
 }
 
+interface SharedDeck extends Deck {
+  ownerName: string;
+}
+
 function deckSize(d: Deck): number {
   return (d.cards ?? []).reduce((n, c) => n + (c.quantity ?? 0), 0);
 }
@@ -21,18 +25,24 @@ function deckSize(d: Deck): number {
 export default function BattlesPage() {
   const router = useRouter();
   const [decks, setDecks] = useState<Deck[]>([]);
+  const [sharedDecks, setSharedDecks] = useState<SharedDeck[]>([]);
   const [battles, setBattles] = useState<BattleListItem[]>([]);
   const [migrated, setMigrated] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [createDeck, setCreateDeck] = useState("");
+  const [allowShared, setAllowShared] = useState(false);
   const [joinDeck, setJoinDeck] = useState("");
   const [joinCode, setJoinCode] = useState("");
 
   async function load() {
     try {
-      const [dRes, bRes] = await Promise.all([fetch("/api/decks"), fetch("/api/battles")]);
+      const [dRes, bRes, fRes] = await Promise.all([
+        fetch("/api/decks"),
+        fetch("/api/battles"),
+        fetch("/api/friends"),
+      ]);
       const dJson = await dRes.json();
       const bJson = await bRes.json();
       if (!dRes.ok) throw new Error(dJson.error || "Failed to load decks");
@@ -40,6 +50,11 @@ export default function BattlesPage() {
       setDecks(dJson.decks ?? []);
       setBattles(bJson.battles ?? []);
       setMigrated(bJson.migrated !== false);
+      // Shared decks are a bonus — don't fail the page if friends data errors.
+      if (fRes.ok) {
+        const fJson = await fRes.json();
+        setSharedDecks(fJson.sharedDecks ?? []);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     }
@@ -56,10 +71,11 @@ export default function BattlesPage() {
     setBusy(true);
     setError(null);
     try {
+      const usingSharedDeck = sharedDecks.some((d) => d.id === createDeck);
       const res = await fetch("/api/battles", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deckId: createDeck }),
+        body: JSON.stringify({ deckId: createDeck, allowShared: allowShared || usingSharedDeck }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Couldn't create the battle");
@@ -100,11 +116,26 @@ export default function BattlesPage() {
 
   if (loading) return <p className="text-slate-500">Loading…</p>;
 
-  const deckOptions = decks.map((d) => (
-    <option key={d.id} value={d.id}>
-      {d.name} ({deckSize(d)} cards)
-    </option>
-  ));
+  const deckOptions = (
+    <>
+      <optgroup label="My decks">
+        {decks.map((d) => (
+          <option key={d.id} value={d.id}>
+            {d.name} ({deckSize(d)} cards)
+          </option>
+        ))}
+      </optgroup>
+      {sharedDecks.length > 0 && (
+        <optgroup label="Shared decks (borrowed)">
+          {sharedDecks.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name} — {d.ownerName} ({deckSize(d)} cards)
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </>
+  );
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -126,7 +157,7 @@ export default function BattlesPage() {
         </div>
       )}
 
-      {decks.length === 0 ? (
+      {decks.length === 0 && sharedDecks.length === 0 ? (
         <div className="card-panel p-4 text-sm text-slate-500">
           You need a deck first — build one on the{" "}
           <a href="/decks" className="text-poke-blue hover:underline">
@@ -150,6 +181,20 @@ export default function BattlesPage() {
               <option value="">Choose your deck…</option>
               {deckOptions}
             </select>
+            <label className="flex items-start gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={allowShared || sharedDecks.some((d) => d.id === createDeck)}
+                disabled={sharedDecks.some((d) => d.id === createDeck)}
+                onChange={(e) => setAllowShared(e.target.checked)}
+              />
+              <span>
+                Allow shared decks — either player can borrow any deck members have shared
+                {sharedDecks.some((d) => d.id === createDeck) &&
+                  " (on, because you picked a shared deck)"}
+              </span>
+            </label>
             <button className="btn-primary w-full" disabled={busy || !createDeck}>
               {busy ? "Setting up…" : "Create battle"}
             </button>

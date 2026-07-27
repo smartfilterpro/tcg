@@ -23,6 +23,7 @@ interface ReviewRow {
   variant: string; // finish: normal | holofoil | reverseHolofoil | ...
   photoUrl: string | null; // user-taken photo, used when the DB has no image
   originalCardId: string | null; // the scan's auto-match, to measure accuracy
+  predictedVariant: string | null; // the finish the scanner suggested, to learn from edits
 }
 
 /** Downscale a photo client-side so uploads stay fast and under limits. */
@@ -95,16 +96,23 @@ export default function ScanPage() {
         throw new Error("No cards were detected. Try better lighting and make sure the collector numbers are visible.");
       }
       setRows(
-        results.map((r, i) => ({
-          key: i,
-          detected: r.detected,
-          card: r.match,
-          candidates: r.candidates,
-          quantity: 1,
-          variant: r.match ? defaultVariantFor(r.match, r.detected.rarityHint) : "normal",
-          photoUrl: null,
-          originalCardId: r.match?.id ?? null,
-        }))
+        results.map((r, i) => {
+          // Learned memory (past member corrections) beats the fresh guess.
+          const variant =
+            r.suggestedVariant ??
+            (r.match ? defaultVariantFor(r.match, r.detected.rarityHint) : "normal");
+          return {
+            key: i,
+            detected: r.detected,
+            card: r.match,
+            candidates: r.candidates,
+            quantity: 1,
+            variant,
+            photoUrl: null,
+            originalCardId: r.match?.id ?? null,
+            predictedVariant: r.match ? variant : null,
+          };
+        })
       );
       setScanSeconds(Math.round((Date.now() - startedAt) / 1000));
       setPhase("review");
@@ -154,6 +162,22 @@ export default function ScanPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Save failed");
       setAddedCount(json.added);
+      // Best-effort learning: tell the scanner which finish guesses were kept
+      // and which were corrected, so repeat scans of the same card improve.
+      const feedback = valid
+        .filter((r) => r.card && r.predictedVariant)
+        .map((r) => ({
+          cardId: r.card!.id,
+          predicted: r.predictedVariant!,
+          corrected: r.variant,
+        }));
+      if (feedback.length > 0) {
+        fetch("/api/scan/finish-feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ entries: feedback }),
+        }).catch(() => {});
+      }
       // Best-effort analytics: how long the scan took and how often the
       // auto-match was kept (admin dashboard fodder).
       fetch("/api/scan/telemetry", {
@@ -437,10 +461,8 @@ export default function ScanPage() {
           candidates={pickerRow.candidates}
           onClose={() => setPickerRow(null)}
           onPick={(card) => {
-            updateRow(pickerRow.key, {
-              card,
-              variant: defaultVariantFor(card, pickerRow.detected.rarityHint),
-            });
+            const variant = defaultVariantFor(card, pickerRow.detected.rarityHint);
+            updateRow(pickerRow.key, { card, variant, predictedVariant: variant });
             setPickerRow(null);
           }}
         />

@@ -5,8 +5,9 @@ import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage, checkAiBudget } from "@/lib/usage";
 import { createClient } from "@/lib/supabase/server";
-import { rowToSummary, type CardSummaryRow } from "@/lib/types";
+import { rowToSummary, defaultVariantFor, type CardSummaryRow } from "@/lib/types";
 import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
+import { loadFinishOverrides } from "@/lib/finishFeedback";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const maxDuration = 120; // vision + N lookups can take a while
@@ -90,9 +91,14 @@ FINISH — look carefully at WHERE the shine is, not just whether there is shine
 - REVERSE HOLO: the opposite — the artwork is matte while the rest of the card
   face shines, usually with an etched pattern (stars, Pokéballs, set motifs).
 - Full-art / ex / illustration-rare cards that are foil edge-to-edge: holo.
-- Glare from the photo flash is NOT foil — foil shows rainbow color shifts and
-  pattern, glare is a white hot-spot. If you genuinely cannot tell, answer
-  'unknown' rather than guessing.
+- NORMAL is the default and the most common answer by far: most commons,
+  uncommons, and trainers in a real collection are plain matte cardstock.
+  Require positive evidence of foil — rainbow color shifts or an etched
+  pattern — before answering holo or reverse_holo. Glossy cardstock catching
+  the light, white hot-spots from the flash, sleeve shine, and washed-out
+  photos are NOT foil. When you see shine but cannot see rainbow color or an
+  etched pattern, answer 'normal' for common/uncommon cards and 'unknown'
+  otherwise — never default to holo or reverse_holo on weak evidence.
 
 STAMPS — check the artwork area of every card for small gold foil stamps: a
 Pokémon Center logo, the word PRERELEASE, or the word STAFF. These are easy to
@@ -296,6 +302,22 @@ export async function POST(req: Request) {
         })
       );
       results.push(...matched);
+    }
+
+    // Apply the scanner's learned finish memory: if this exact guess on this
+    // exact card has been corrected by members before, suggest the corrected
+    // finish instead of repeating the mistake.
+    try {
+      const matchedIds = results.filter((r) => r.match).map((r) => r.match!.id);
+      const override = await loadFinishOverrides(supabase, matchedIds);
+      for (const r of results) {
+        if (!r.match) continue;
+        const predicted = defaultVariantFor(r.match, r.detected.rarityHint);
+        const learned = override(r.match.id, predicted);
+        if (learned) r.suggestedVariant = learned;
+      }
+    } catch {
+      // Memory is best-effort — a failure here never breaks a scan.
     }
 
     return NextResponse.json({ results });

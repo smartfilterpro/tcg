@@ -39,6 +39,9 @@ export interface ScanMatch {
   detected: DetectedCard;
   match: CardSummary | null;
   candidates: CardSummary[];
+  /** Finish learned from past member corrections of this card — takes
+   *  precedence over the scanner's own guess when present. */
+  suggestedVariant?: string | null;
 }
 
 export interface CollectionItem {

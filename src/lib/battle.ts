@@ -40,6 +40,8 @@ export interface BattleState {
   sides: Record<string, SideState>;
   /** Display names, keyed by user id. */
   names: Record<string, string>;
+  /** Host's choice: may players borrow decks members have shared? */
+  allowSharedDecks?: boolean;
   turnUser: string | null;
   turnCount: number;
   log: LogEntry[];

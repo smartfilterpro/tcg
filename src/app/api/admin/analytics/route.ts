@@ -43,6 +43,16 @@ function scanStats(rows: Array<Record<string, number>>): ScanStats {
   };
 }
 
+/** Group raw variant strings into the finishes people actually talk about. */
+function finishBucket(variant: string): string {
+  const v = variant.toLowerCase();
+  if (variant === "normal") return "Normal";
+  if (v.includes("reverse")) return "Reverse Holo";
+  if (v.includes("holo")) return "Holo";
+  if (v.includes("stamp")) return "Stamped";
+  return "Other";
+}
+
 /** GET: community + scanning analytics for the admin dashboard. */
 export async function GET() {
   try {
@@ -63,6 +73,7 @@ export async function GET() {
       { count: openTickets },
       { data: usageMonth },
       scanRes,
+      finishRes,
     ] = await Promise.all([
       admin.from("profiles").select("id", { count: "exact", head: true }),
       admin
@@ -82,6 +93,7 @@ export async function GET() {
         .gte("created_at", monthStart.toISOString())
         .limit(50000),
       admin.from("scan_events").select("*").order("created_at", { ascending: false }).limit(5000),
+      admin.from("finish_feedback").select("predicted, corrected").limit(20000),
     ]);
 
     const items = (itemRows ?? []) as unknown as Array<{
@@ -111,8 +123,53 @@ export async function GET() {
       (r) => ((r as { created_at?: string }).created_at ?? "") >= cutoff30d
     );
 
+    // finish_feedback may not exist pre-migration-018
+    const finishRows = (finishRes.error ? [] : (finishRes.data ?? [])) as Array<{
+      predicted: string;
+      corrected: string;
+    }>;
+    const finishSamples = finishRows.length;
+    const finishCorrected = finishRows.filter((r) => r.predicted !== r.corrected).length;
+
+    // Per-finish breakdown: how accurate is the scanner when it CLAIMS a
+    // card is normal / holo / reverse holo / stamped?
+    const byBucket = new Map<string, { samples: number; kept: number }>();
+    const confusionCounts = new Map<string, number>();
+    for (const r of finishRows) {
+      const bucket = finishBucket(r.predicted);
+      const entry = byBucket.get(bucket) ?? { samples: 0, kept: 0 };
+      entry.samples += 1;
+      if (r.predicted === r.corrected) entry.kept += 1;
+      else {
+        const key = `${bucket}|${finishBucket(r.corrected)}`;
+        confusionCounts.set(key, (confusionCounts.get(key) ?? 0) + 1);
+      }
+      byBucket.set(bucket, entry);
+    }
+    const byFinish = ["Normal", "Holo", "Reverse Holo", "Stamped", "Other"]
+      .filter((b) => byBucket.has(b))
+      .map((b) => {
+        const e = byBucket.get(b)!;
+        return { finish: b, samples: e.samples, accuracy: (e.kept / e.samples) * 100 };
+      });
+    const confusions = [...confusionCounts.entries()]
+      .map(([key, count]) => {
+        const [from, to] = key.split("|");
+        return { from, to, count };
+      })
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
+
     return NextResponse.json({
       scanTracking: !scanRes.error,
+      finish: {
+        tracking: !finishRes.error,
+        samples: finishSamples,
+        corrected: finishCorrected,
+        accuracy: finishSamples > 0 ? ((finishSamples - finishCorrected) / finishSamples) * 100 : null,
+        byFinish,
+        confusions,
+      },
       community: {
         members: members ?? 0,
         totalCards,
