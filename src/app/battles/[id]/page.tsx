@@ -1,0 +1,712 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import type { BattleAction, BattleCard, BattleStack, BattleView } from "@/lib/battle";
+
+interface BattleData {
+  status: "waiting" | "active" | "finished";
+  code: string;
+  version: number;
+  opponentName?: string;
+  myName?: string;
+  winnerName?: string | null;
+  youWon?: boolean | null;
+  view?: BattleView;
+}
+
+type Sheet =
+  | { kind: "hand"; index: number }
+  | { kind: "mystack"; target: "active" | number }
+  | { kind: "oppstack"; target: "active" | number }
+  | { kind: "deck" }
+  | { kind: "prizes" }
+  | { kind: "concede" };
+
+function CardTile({ card, className }: { card: BattleCard; className: string }) {
+  return card.image ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={card.image}
+      alt={card.name}
+      className={`${className} rounded-md object-cover shadow-sm`}
+    />
+  ) : (
+    <div
+      className={`${className} flex items-center justify-center overflow-hidden rounded-md border border-slate-300 bg-slate-100 p-0.5 text-center text-[9px] font-semibold leading-tight text-slate-600 shadow-sm`}
+    >
+      {card.name}
+    </div>
+  );
+}
+
+function StackTile({
+  stack,
+  className,
+  onClick,
+}: {
+  stack: BattleStack;
+  className: string;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className="relative shrink-0" onClick={onClick}>
+      <CardTile card={stack.face} className={className} />
+      {stack.damage > 0 && (
+        <span className="absolute -right-1.5 -top-1.5 flex h-6 min-w-6 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white shadow">
+          {stack.damage}
+        </span>
+      )}
+      {stack.attached.length > 0 && (
+        <span className="absolute -bottom-1 -right-1 rounded-full bg-slate-700 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow">
+          +{stack.attached.length}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function FaceDownPile({
+  count,
+  label,
+  onClick,
+}: {
+  count: number;
+  label: string;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      className="flex flex-col items-center gap-0.5"
+    >
+      <span className="flex aspect-[63/88] w-11 items-center justify-center rounded-md border border-slate-400 bg-gradient-to-b from-poke-red from-50% to-white to-50% text-sm font-bold text-slate-800 shadow-sm">
+        {count}
+      </span>
+      <span className="text-[10px] text-slate-500">{label}</span>
+    </button>
+  );
+}
+
+const DAMAGE_STEPS = [10, 30, 50, -10];
+
+export default function BattleBoardPage() {
+  const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+  const [data, setData] = useState<BattleData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<Sheet | null>(null);
+  const [viewPile, setViewPile] = useState<{ title: string; cards: BattleCard[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const dataRef = useRef<BattleData | null>(null);
+  const logRef = useRef<HTMLDivElement | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/battles/${id}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to load the battle");
+      // Ignore stale polls that resolve after a newer action response.
+      if (dataRef.current && json.version < dataRef.current.version) return;
+      dataRef.current = json;
+      setData(json);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load the battle");
+    }
+  }, [id]);
+
+  useEffect(() => {
+    refresh();
+    const t = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, 2500);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [data?.view?.log?.length]);
+
+  function showNotice(text: string) {
+    setNotice(text);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(null), 4000);
+  }
+
+  async function act(action: BattleAction) {
+    if (busy) return;
+    setBusy(true);
+    setSheet(null);
+    try {
+      const res = await fetch(`/api/battles/${id}/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "That move didn't work");
+      dataRef.current = json;
+      setData(json);
+    } catch (e) {
+      showNotice(e instanceof Error ? e.message : "That move didn't work");
+    }
+    setBusy(false);
+  }
+
+  async function removeBattle() {
+    if (!confirm("Remove this battle for both players?")) return;
+    await fetch(`/api/battles/${id}`, { method: "DELETE" });
+    router.push("/battles");
+  }
+
+  if (error && !data) return <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>;
+  if (!data) return <p className="text-slate-500">Loading the table…</p>;
+
+  if (data.status === "waiting") {
+    return (
+      <div className="mx-auto max-w-md space-y-4 text-center">
+        <h1 className="text-2xl font-bold">Waiting for an opponent…</h1>
+        <p className="text-sm text-slate-500">
+          Share this code with a friend — they join from the Battles page.
+        </p>
+        <div className="card-panel py-6 text-4xl font-black tracking-[0.3em] text-poke-blue">
+          {data.code}
+        </div>
+        <p className="text-xs text-slate-400">This page updates by itself once they join.</p>
+        <button className="btn-secondary" onClick={removeBattle}>
+          Cancel battle
+        </button>
+      </div>
+    );
+  }
+
+  const view = data.view!;
+  const me = view.me;
+  const opp = view.opp;
+  const oppName = data.opponentName ?? "Opponent";
+  const finished = data.status === "finished";
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-3 pb-4">
+      <div className="flex items-center justify-between gap-2">
+        <a href="/battles" className="text-sm text-poke-blue hover:underline">
+          ← Battles
+        </a>
+        <span className="text-xs text-slate-400">code {data.code}</span>
+      </div>
+
+      {finished && (
+        <div
+          className={`rounded-xl p-4 text-center font-bold ${
+            data.youWon ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-600"
+          }`}
+        >
+          🏆 {data.youWon ? "You won!" : `${data.winnerName ?? oppName} wins!`}
+          <div className="mt-2 flex justify-center gap-2 text-sm font-normal">
+            <a href="/battles" className="btn-secondary">
+              Back to battles
+            </a>
+            <button className="text-slate-500 hover:underline" onClick={removeBattle}>
+              Remove battle
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Opponent side ===== */}
+      <div className="card-panel space-y-2 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold">{oppName}</div>
+          {!finished && !view.myTurn && (
+            <span className="chip bg-yellow-50 text-yellow-800">their turn</span>
+          )}
+        </div>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex gap-2">
+            <FaceDownPile count={opp.handCount} label="hand" />
+            <FaceDownPile count={opp.deckCount} label="deck" />
+            <FaceDownPile count={opp.prizeCount} label="prizes" />
+            <button
+              type="button"
+              className="flex flex-col items-center gap-0.5"
+              onClick={() => setViewPile({ title: `${oppName}'s discard`, cards: opp.discard })}
+            >
+              <span className="flex aspect-[63/88] w-11 items-center justify-center rounded-md border border-dashed border-slate-300 text-sm font-bold text-slate-500">
+                {opp.discard.length}
+              </span>
+              <span className="text-[10px] text-slate-500">discard</span>
+            </button>
+          </div>
+          <div className="flex flex-col items-end gap-1">
+            <span className="text-[10px] uppercase tracking-wide text-slate-400">active</span>
+            {opp.active ? (
+              <StackTile
+                stack={opp.active}
+                className="w-20"
+                onClick={() => setSheet({ kind: "oppstack", target: "active" })}
+              />
+            ) : (
+              <span className="flex aspect-[63/88] w-20 items-center justify-center rounded-md border border-dashed border-slate-300 text-[10px] text-slate-400">
+                none
+              </span>
+            )}
+          </div>
+        </div>
+        {opp.bench.length > 0 && (
+          <div className="flex gap-1.5 overflow-x-auto">
+            {opp.bench.map((s, i) => (
+              <StackTile
+                key={s.face.uid}
+                stack={s}
+                className="w-12"
+                onClick={() => setSheet({ kind: "oppstack", target: i })}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ===== Log + notices ===== */}
+      {notice && <div className="rounded-lg bg-red-50 p-2 text-center text-xs text-red-700">{notice}</div>}
+      <div ref={logRef} className="card-panel h-24 overflow-y-auto p-2 text-xs text-slate-600">
+        {view.log.map((l, i) => (
+          <div key={i} className="py-0.5">
+            {l.text}
+          </div>
+        ))}
+      </div>
+
+      {/* ===== My side ===== */}
+      <div className="card-panel space-y-2 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold">{data.myName ?? "You"}</div>
+          {!finished && view.myTurn && <span className="chip bg-green-50 text-green-700">your turn</span>}
+        </div>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-wide text-slate-400">active</span>
+            {me.active ? (
+              <StackTile
+                stack={me.active}
+                className="w-20"
+                onClick={() => setSheet({ kind: "mystack", target: "active" })}
+              />
+            ) : (
+              <span className="flex aspect-[63/88] w-20 items-center justify-center rounded-md border border-dashed border-slate-300 text-[10px] text-slate-400">
+                tap a hand card
+              </span>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <FaceDownPile count={me.deckCount} label="deck" onClick={() => setSheet({ kind: "deck" })} />
+            <FaceDownPile
+              count={me.prizeCount}
+              label="prizes"
+              onClick={() => setSheet({ kind: "prizes" })}
+            />
+            <button
+              type="button"
+              className="flex flex-col items-center gap-0.5"
+              onClick={() => setViewPile({ title: "Your discard", cards: me.discard })}
+            >
+              <span className="flex aspect-[63/88] w-11 items-center justify-center rounded-md border border-dashed border-slate-300 text-sm font-bold text-slate-500">
+                {me.discard.length}
+              </span>
+              <span className="text-[10px] text-slate-500">discard</span>
+            </button>
+          </div>
+        </div>
+        {me.bench.length > 0 && (
+          <div>
+            <span className="text-[10px] uppercase tracking-wide text-slate-400">bench</span>
+            <div className="mt-0.5 flex gap-1.5 overflow-x-auto">
+              {me.bench.map((s, i) => (
+                <StackTile
+                  key={s.face.uid}
+                  stack={s}
+                  className="w-14"
+                  onClick={() => setSheet({ kind: "mystack", target: i })}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!finished && (
+          <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
+            <button className="btn-secondary text-sm" disabled={busy} onClick={() => act({ type: "draw" })}>
+              🃏 Draw
+            </button>
+            <button
+              className="btn-secondary text-sm"
+              disabled={busy}
+              onClick={() => act({ type: "flipCoin" })}
+            >
+              🪙 Flip coin
+            </button>
+            <button
+              className={`${view.myTurn ? "btn-primary" : "btn-secondary"} text-sm`}
+              disabled={busy}
+              onClick={() => act({ type: "endTurn" })}
+            >
+              End turn
+            </button>
+            <button
+              className="ml-auto text-xs text-red-500 hover:underline"
+              onClick={() => setSheet({ kind: "concede" })}
+            >
+              Concede
+            </button>
+          </div>
+        )}
+
+        <div>
+          <span className="text-[10px] uppercase tracking-wide text-slate-400">
+            your hand ({me.hand.length})
+          </span>
+          {me.hand.length === 0 ? (
+            <p className="py-2 text-xs text-slate-400">No cards in hand — draw from your deck.</p>
+          ) : (
+            <div className="mt-1 flex gap-1.5 overflow-x-auto pb-1">
+              {me.hand.map((c, i) => (
+                <button
+                  key={c.uid}
+                  type="button"
+                  className="shrink-0"
+                  onClick={() => setSheet({ kind: "hand", index: i })}
+                  disabled={finished}
+                >
+                  <CardTile card={c} className="w-16" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <p className="text-center text-[11px] text-slate-400">
+        The app keeps the table — you two enforce the rules, just like playing in person.
+      </p>
+
+      {/* ===== Action sheet ===== */}
+      {sheet && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+          onClick={() => setSheet(null)}
+        >
+          <div
+            className="max-h-[70vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <SheetContent
+              sheet={sheet}
+              me={me}
+              opp={opp}
+              oppName={oppName}
+              busy={busy}
+              act={act}
+              close={() => setSheet(null)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ===== Pile viewer ===== */}
+      {viewPile && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/40"
+          onClick={() => setViewPile(null)}
+        >
+          <div
+            className="mx-auto my-6 w-[92%] max-w-md rounded-2xl bg-white p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="font-semibold">{viewPile.title}</h2>
+              <button className="text-slate-400" onClick={() => setViewPile(null)}>
+                ✕
+              </button>
+            </div>
+            {viewPile.cards.length === 0 ? (
+              <p className="text-sm text-slate-400">Empty.</p>
+            ) : (
+              <div className="grid grid-cols-4 gap-2">
+                {viewPile.cards.map((c) => (
+                  <CardTile key={c.uid} card={c} className="w-full" />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SheetContent({
+  sheet,
+  me,
+  opp,
+  oppName,
+  busy,
+  act,
+  close,
+}: {
+  sheet: Sheet;
+  me: BattleView["me"];
+  opp: BattleView["opp"];
+  oppName: string;
+  busy: boolean;
+  act: (a: BattleAction) => void;
+  close: () => void;
+}) {
+  const row = "block w-full border-b border-slate-100 py-2.5 text-left text-sm";
+
+  if (sheet.kind === "concede") {
+    return (
+      <div className="space-y-3 text-center">
+        <h2 className="font-semibold">Concede the battle?</h2>
+        <p className="text-sm text-slate-500">{oppName} will be declared the winner.</p>
+        <div className="flex justify-center gap-2">
+          <button className="btn-secondary" onClick={close}>
+            Keep playing
+          </button>
+          <button
+            className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+            disabled={busy}
+            onClick={() => act({ type: "concede" })}
+          >
+            Concede
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (sheet.kind === "deck") {
+    return (
+      <div>
+        <h2 className="mb-1 font-semibold">Your deck ({me.deckCount})</h2>
+        <button className={row} disabled={busy} onClick={() => act({ type: "draw" })}>
+          🃏 Draw a card
+        </button>
+        <button className={row} disabled={busy} onClick={() => act({ type: "shuffleDeck" })}>
+          🔀 Shuffle deck
+        </button>
+        <button className={row} disabled={busy} onClick={() => act({ type: "mulligan" })}>
+          ♻️ Mulligan — shuffle hand into deck, draw 7
+        </button>
+        <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  if (sheet.kind === "prizes") {
+    return (
+      <div>
+        <h2 className="mb-1 font-semibold">Your Prize cards ({me.prizeCount})</h2>
+        <p className="mb-1 text-xs text-slate-500">
+          Take one after you knock out an opposing Pokémon.
+        </p>
+        <button className={row} disabled={busy} onClick={() => act({ type: "takePrize" })}>
+          🏆 Take a Prize card into your hand
+        </button>
+        <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  if (sheet.kind === "hand") {
+    const card = me.hand[sheet.index];
+    if (!card) return null;
+    return (
+      <div>
+        <div className="mb-2 flex items-center gap-3">
+          <CardTile card={card} className="w-14" />
+          <h2 className="font-semibold">{card.name}</h2>
+        </div>
+        {!me.active && (
+          <button
+            className={row}
+            disabled={busy}
+            onClick={() => act({ type: "handToActive", handIndex: sheet.index, mode: "new" })}
+          >
+            ⭐ Play as your Active Pokémon
+          </button>
+        )}
+        {me.active && (
+          <>
+            <button
+              className={row}
+              disabled={busy}
+              onClick={() => act({ type: "handToActive", handIndex: sheet.index, mode: "attach" })}
+            >
+              ⚡ Attach to {me.active.face.name} (energy / tool)
+            </button>
+            <button
+              className={row}
+              disabled={busy}
+              onClick={() => act({ type: "handToActive", handIndex: sheet.index, mode: "evolve" })}
+            >
+              ⬆️ Evolve {me.active.face.name}
+            </button>
+          </>
+        )}
+        {me.bench.length < 5 && (
+          <button
+            className={row}
+            disabled={busy}
+            onClick={() => act({ type: "handToBench", handIndex: sheet.index, mode: "new" })}
+          >
+            🪑 Play to your Bench
+          </button>
+        )}
+        {me.bench.map((s, i) => (
+          <div key={s.face.uid} className="flex items-center gap-2 border-b border-slate-100">
+            <span className="min-w-0 flex-1 truncate py-2.5 text-sm text-slate-500">
+              Bench: {s.face.name}
+            </span>
+            <button
+              className="text-sm text-poke-blue"
+              disabled={busy}
+              onClick={() =>
+                act({ type: "handToBench", handIndex: sheet.index, benchIndex: i, mode: "attach" })
+              }
+            >
+              attach
+            </button>
+            <button
+              className="text-sm text-poke-blue"
+              disabled={busy}
+              onClick={() =>
+                act({ type: "handToBench", handIndex: sheet.index, benchIndex: i, mode: "evolve" })
+              }
+            >
+              evolve
+            </button>
+          </div>
+        ))}
+        <button
+          className={`${row} text-red-600`}
+          disabled={busy}
+          onClick={() => act({ type: "handToDiscard", handIndex: sheet.index })}
+        >
+          🗑 Discard
+        </button>
+        <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  // My stack or opponent's stack
+  const mine = sheet.kind === "mystack";
+  const side = mine ? me : opp;
+  const stack = sheet.target === "active" ? side.active : side.bench[sheet.target];
+  if (!stack) return null;
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-3">
+        <CardTile card={stack.face} className="w-14" />
+        <div>
+          <h2 className="font-semibold">
+            {mine ? "" : `${oppName}'s `}
+            {stack.face.name}
+          </h2>
+          <p className="text-xs text-slate-500">{stack.damage} damage</p>
+        </div>
+      </div>
+
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-500">Damage:</span>
+        {DAMAGE_STEPS.map((d) => (
+          <button
+            key={d}
+            className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700"
+            disabled={busy}
+            onClick={() =>
+              act({ type: "damage", side: mine ? "me" : "opp", target: sheet.target, delta: d })
+            }
+          >
+            {d > 0 ? `+${d}` : d}
+          </button>
+        ))}
+      </div>
+
+      {stack.attached.length > 0 && (
+        <div className="mb-1">
+          <span className="text-xs font-semibold text-slate-500">Attached / under:</span>
+          {stack.attached.map((c, i) => (
+            <div key={c.uid} className="flex items-center gap-2 border-b border-slate-100 py-1.5">
+              <span className="min-w-0 flex-1 truncate text-sm">{c.name}</span>
+              {mine && (
+                <>
+                  <button
+                    className="text-xs text-red-600"
+                    disabled={busy}
+                    onClick={() =>
+                      act({ type: "detach", target: sheet.target, attachedIndex: i, to: "discard" })
+                    }
+                  >
+                    discard
+                  </button>
+                  <button
+                    className="text-xs text-poke-blue"
+                    disabled={busy}
+                    onClick={() =>
+                      act({ type: "detach", target: sheet.target, attachedIndex: i, to: "hand" })
+                    }
+                  >
+                    to hand
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {mine && (
+        <>
+          {sheet.target !== "active" && (
+            <button
+              className="block w-full border-b border-slate-100 py-2.5 text-left text-sm"
+              disabled={busy}
+              onClick={() => act({ type: "promote", benchIndex: sheet.target as number })}
+            >
+              ⭐ Move to Active {me.active ? `(swap with ${me.active.face.name})` : ""}
+            </button>
+          )}
+          <button
+            className="block w-full border-b border-slate-100 py-2.5 text-left text-sm"
+            disabled={busy}
+            onClick={() => act({ type: "stackToHand", target: sheet.target })}
+          >
+            ✋ Pick up into your hand
+          </button>
+          <button
+            className="block w-full border-b border-slate-100 py-2.5 text-left text-sm text-red-600"
+            disabled={busy}
+            onClick={() => act({ type: "knockout", target: sheet.target })}
+          >
+            ☠️ Knocked Out — send to discard
+          </button>
+        </>
+      )}
+      <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
+        Close
+      </button>
+    </div>
+  );
+}
