@@ -182,12 +182,13 @@ export async function loadBattleDeck(
   if (ownErr) throw ownErr;
   if (own) return { deck: own as Deck, borrowed: false };
 
-  // Not theirs — maybe a shared deck (readable via the migration-008 policy).
+  // Not theirs — maybe a deck shared with them. Row-level security decides
+  // visibility (everyone-scope, pals-only, or a direct share — migrations
+  // 008 + 020), so no explicit shared filter here.
   const { data: shared, error: sharedErr } = await supabase
     .from("decks")
     .select("*")
     .eq("id", deckId)
-    .eq("shared", true)
     .maybeSingle();
   if (sharedErr) throw sharedErr;
   if (!shared) return { error: "Deck not found." };

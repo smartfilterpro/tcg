@@ -200,6 +200,8 @@ export interface Deck {
   suggestions?: DeckSuggestion[];
   /** Visible read-only to other members when true. */
   shared?: boolean;
+  /** Who a shared deck is visible to: the whole group or accepted pals only. */
+  share_scope?: "everyone" | "friends";
   created_at: string;
 }
 
