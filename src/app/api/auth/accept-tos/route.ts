@@ -1,11 +1,18 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { requireUser, AuthError } from "@/lib/auth";
+import { getUserAndProfile, AuthError } from "@/lib/auth";
 
-/** POST: record that the signed-in user accepted the Terms of Service. */
+/** POST: record that the signed-in user accepted the Terms of Service.
+ *  Uses getUserAndProfile directly — requireUser rejects users who haven't
+ *  accepted yet, which is exactly who calls this endpoint. */
 export async function POST() {
   try {
-    const { user } = await requireUser();
+    const result = await getUserAndProfile();
+    if (!result) throw new AuthError("Not authenticated");
+    if (result.profile?.suspended === true) {
+      throw new AuthError("Your account is suspended — contact the admin.", 403);
+    }
+    const { user } = result;
     const supabase = await createClient();
     const { error } = await supabase
       .from("profiles")

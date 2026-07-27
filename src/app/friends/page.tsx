@@ -229,13 +229,25 @@ export default function FriendsPage() {
   }
 
   async function clearOffer(offer: TradeOffer) {
-    await fetch(`/api/trade/offers/${offer.id}`, { method: "DELETE" });
+    setError(null);
+    const res = await fetch(`/api/trade/offers/${offer.id}`, { method: "DELETE" });
+    const json = await res.json();
+    if (!res.ok) setError(json.error || "Couldn't clear the trade request");
     loadOffers();
   }
 
   async function clearResolvedOffers() {
     if (!confirm("Clear all finished trade requests? This removes them for both sides.")) return;
-    await fetch("/api/trade/offers", { method: "DELETE" });
+    setError(null);
+    const res = await fetch("/api/trade/offers", { method: "DELETE" });
+    const json = await res.json();
+    if (!res.ok) {
+      setError(json.error || "Couldn't clear trade requests");
+    } else if ((json.cleared ?? 0) === 0) {
+      setError(
+        "Nothing was cleared — the admin needs to run supabase/migrations/014_trade_cleanup.sql to enable clearing."
+      );
+    }
     loadOffers();
   }
 
