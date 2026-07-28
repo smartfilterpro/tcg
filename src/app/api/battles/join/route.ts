@@ -64,7 +64,6 @@ export async function POST(req: Request) {
     state.turnUser = firstUser;
     state.firstUser = firstUser;
     state.flags = {};
-    if (state.rules === true) state.phase = "setup";
     pushLogRaw(
       state,
       `${myName} joined the battle with ${borrowed ? "the shared deck " : ""}“${deck.name}”!`
@@ -72,9 +71,7 @@ export async function POST(req: Request) {
     pushLogRaw(state, `Opening coin flip: ${hostFirst ? hostName : myName} goes first.`);
     pushLogRaw(
       state,
-      state.rules === true
-        ? "Setup: play a Basic Pokémon as your Active (no Basic? mulligan from your deck pile), bench any other Basics, then tap Ready — prizes are set automatically. The referee handles turn draws, knockouts, and prizes."
-        : "Setup: play a Basic Pokémon as your Active (no Basic? mulligan from your deck pile), bench any other Basics, then set your Prize cards. The player going first can't attack on their first turn."
+      "Setup: play a Basic Pokémon as your Active and bench any other Basics. No Basic in hand? Redraw 7. Prize cards are already set — the app takes them on a knockout, draws you a card each turn, and calls the winner."
     );
 
     // Version guard: if someone else grabbed the seat between our read and

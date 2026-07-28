@@ -292,13 +292,7 @@ export default function BattleBoardPage() {
         <div className="flex items-center justify-between gap-2">
           <div className="text-sm font-semibold">{oppName}</div>
           {!finished &&
-            (view.rules && view.phase === "setup" ? (
-              <span className={`chip ${opp.ready ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
-                {opp.ready ? "ready" : "setting up"}
-              </span>
-            ) : (
-              !view.myTurn && <span className="chip bg-yellow-50 text-yellow-800">their turn</span>
-            ))}
+            !view.myTurn && <span className="chip bg-yellow-50 text-yellow-800">their turn</span>}
         </div>
         <div className="flex items-start justify-between gap-2">
           <div className="flex gap-2">
@@ -409,7 +403,7 @@ export default function BattleBoardPage() {
         <div className="flex items-center justify-between gap-2">
           <div className="text-sm font-semibold">{data.myName ?? "You"}</div>
           <span className="flex items-center gap-1">
-            {!finished && view.myTurn && view.rules && view.phase === "play" && (
+            {!finished && view.myTurn && (
               <span
                 className={`chip ${view.energyUsed ? "bg-slate-100 text-slate-400" : "bg-yellow-50 text-yellow-800"}`}
               >
@@ -419,54 +413,21 @@ export default function BattleBoardPage() {
             {!finished && view.myTurn && <span className="chip bg-green-50 text-green-700">your turn</span>}
           </span>
         </div>
-        {!finished && view.rules && view.phase === "setup" && (
-          <div className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
-            {me.ready ? (
-              <>
-                <b>Ready!</b> Waiting for {oppName} to finish setup…
-              </>
-            ) : (
-              <>
-                <b>Setup:</b> play a Basic Pokémon as your Active and bench any others. No
-                Basic in hand? Tap your deck pile → Mulligan. When your board is set,{" "}
-                <button
-                  type="button"
-                  className="font-semibold underline"
-                  disabled={busy}
-                  onClick={() => act({ type: "ready" })}
-                >
-                  tap Ready
-                </button>{" "}
-                — prizes are set automatically.
-              </>
-            )}
-          </div>
-        )}
-        {!finished && !view.rules && me.prizeCount === 0 && (
+        {!finished && !me.active && me.bench.length === 0 && (
           <div className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
             <b>Setup:</b> play a Basic Pokémon as your Active and bench any others. No Basic in
-            hand? Tap your deck pile → Mulligan (your hand is revealed in the log, and your
-            opponent may draw 1 extra card each time). Once your board is ready,{" "}
-            <button
-              type="button"
-              className="font-semibold underline"
-              disabled={busy}
-              onClick={() => act({ type: "setPrizes" })}
-            >
-              set your 6 Prize cards
-            </button>
-            .
+            hand? Use <b>Redraw 7</b> below your hand — your Prize cards are already set.
           </div>
         )}
-        {!finished && view.rules && view.phase === "play" && !me.active && me.bench.length > 0 && (
+        {!finished && !me.active && me.bench.length > 0 && (
           <div className="rounded-lg bg-red-50 p-2 text-xs font-semibold text-red-700">
             Choose a new Active — tap a Bench Pokémon, then “Move to Active”.
           </div>
         )}
-        {!finished && view.rules && view.phase === "play" && view.myTurn && view.turnCount === 1 && (
+        {!finished && view.myTurn && view.turnCount === 1 && (
           <div className="rounded-lg bg-poke-blue/5 p-2 text-xs text-slate-600">
-            <b>Turn 1:</b> you can play Basics, attach 1 energy, evolve nothing, and play
-            Items — but no attacking and no Supporters on the game&apos;s very first turn.
+            <b>Turn 1:</b> whoever goes first can&apos;t attack or play a Supporter — the app
+            won&apos;t stop you, it just keeps score.
           </div>
         )}
         <div className="flex items-start justify-between gap-2">
@@ -535,17 +496,7 @@ export default function BattleBoardPage() {
 
         {!finished && (
           <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
-            {view.phase === "setup" ? (
-              !me.ready && (
-                <button
-                  className="btn-primary text-sm"
-                  disabled={busy || !me.active}
-                  onClick={() => act({ type: "ready" })}
-                >
-                  ✅ Ready
-                </button>
-              )
-            ) : (
+            {(
               <>
                 <button
                   className="btn-secondary text-sm"
@@ -617,13 +568,42 @@ export default function BattleBoardPage() {
               ))}
             </div>
           )}
+          {!finished && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              <button
+                className="chip bg-slate-100 text-slate-600"
+                disabled={busy}
+                onClick={() => act({ type: "redrawSeven" })}
+                title="Shuffle your hand and Prize cards back, draw 7, set 6 prizes again"
+              >
+                🔄 Redraw 7
+              </button>
+              <button
+                className="chip bg-slate-100 text-slate-600"
+                disabled={busy || me.hand.length === 0}
+                onClick={() => act({ type: "handToDeckAll" })}
+              >
+                🂠 Hand into deck
+              </button>
+              <button
+                className="chip bg-slate-100 text-slate-600"
+                disabled={busy || me.hand.length === 0}
+                onClick={() => {
+                  if (confirm(`Discard all ${me.hand.length} cards in your hand?`)) {
+                    act({ type: "discardHand" });
+                  }
+                }}
+              >
+                🗑 Discard hand
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
       <p className="text-center text-[11px] text-slate-400">
-        {view.rules
-          ? "Referee mode: turns, draws, energy limits, knockouts, and prizes are enforced — attacks and card effects are still yours to play. Options marked ✨ bypass a rule when a card allows it."
-          : "The app keeps the table — you two enforce the rules, just like playing in person."}
+        The app keeps score — Prize cards, the draw each turn, knockouts, poison and burn, and
+        the win — and never blocks a play. Calling the rules is yours, just like across a table.
       </p>
 
       {/* ===== Action sheet ===== */}
@@ -641,8 +621,6 @@ export default function BattleBoardPage() {
               me={me}
               opp={opp}
               oppName={oppName}
-              rules={view.rules}
-              phase={view.phase}
               busy={busy}
               act={act}
               close={() => setSheet(null)}
@@ -811,8 +789,6 @@ function SheetContent({
   me,
   opp,
   oppName,
-  rules,
-  phase,
   busy,
   act,
   close,
@@ -823,8 +799,6 @@ function SheetContent({
   me: BattleView["me"];
   opp: BattleView["opp"];
   oppName: string;
-  rules: boolean;
-  phase: "setup" | "play";
   busy: boolean;
   act: (a: BattleAction) => void;
   close: () => void;
@@ -877,7 +851,7 @@ function SheetContent({
             </button>
           ))}
         </div>
-        {(!rules || phase === "play") && (
+        {(
           <>
             <button className={row} disabled={busy} onClick={openDeckSearch}>
               🔍 Search your deck — take a card, then shuffle
@@ -897,17 +871,10 @@ function SheetContent({
             </div>
           </>
         )}
-        {(!rules || phase === "setup") && (
-          <button className={row} disabled={busy} onClick={() => act({ type: "mulligan" })}>
-            ♻️ Mulligan — no Basic Pokémon? Reveal, reshuffle, draw 7
-          </button>
-        )}
-        {!rules && me.prizeCount === 0 && (
-          <button className={row} disabled={busy} onClick={() => act({ type: "setPrizes" })}>
-            🏆 Set your 6 Prize cards (once mulligans are done)
-          </button>
-        )}
-        {rules && phase === "play" && (
+        <button className={row} disabled={busy} onClick={() => act({ type: "mulligan" })}>
+          ♻️ Mulligan — reveal your hand, reshuffle and draw 7 (opponent draws 1)
+        </button>
+        {(
           <button
             className={row}
             disabled={busy}
@@ -950,7 +917,6 @@ function SheetContent({
     const canBoard = isPoke && card.basic !== false; // Basics (or unknown) hit the board
     const canEvolve = isPoke && card.basic !== true; // evolutions (or unknown) go on top
     const canAttach = cat === "energy" || cat === "trainer" || cat === null; // energy + tools
-    const inPlay = !rules || phase === "play";
     const catLabel =
       cat === "energy" ? "Energy" : cat === "trainer" ? "Trainer" : cat === "pokemon" ? "Pokémon" : null;
     return (
@@ -982,21 +948,17 @@ function SheetContent({
             ))}
           </div>
         )}
-        {rules && phase === "setup" && cat === "energy" && (
-          <p className="border-b border-slate-100 py-2.5 text-sm text-slate-500">
-            Energy attaches to your Pokémon once the battle starts — keep it in hand for now.
-          </p>
-        )}
-        {rules && phase === "play" && cat === "trainer" && !card.stad && (
+        {(cat === "trainer" || cat === null) && !card.stad && (
           <button
             className={row}
             disabled={busy}
             onClick={() => act({ type: "playCard", handIndex: sheet.index })}
           >
-            ▶️ Play {card.name} (then to your discard)
+            ▶️ Play {card.sup ? "Supporter" : "Trainer"}: {card.name} — onto the table, then
+            discarded when your turn ends
           </button>
         )}
-        {inPlay && cat === "trainer" && (
+        {cat === "trainer" && (
           <button
             className={`${row}${card.stad ? "" : " text-slate-500"}`}
             disabled={busy}
@@ -1014,7 +976,7 @@ function SheetContent({
             ⭐ Play as your Active Pokémon
           </button>
         )}
-        {me.active && inPlay && canAttach && (
+        {me.active && canAttach && (
           <button
             className={row}
             disabled={busy}
@@ -1023,7 +985,7 @@ function SheetContent({
             ⚡ Attach to {me.active.face.name}
           </button>
         )}
-        {me.active && inPlay && canEvolve && (
+        {me.active && canEvolve && (
           <button
             className={row}
             disabled={busy}
@@ -1041,8 +1003,7 @@ function SheetContent({
             🪑 Play to your Bench
           </button>
         )}
-        {inPlay &&
-          (canAttach || canEvolve) &&
+        {(canAttach || canEvolve) &&
           me.bench.map((s, i) => (
             <div key={s.face.uid} className="flex items-center gap-2 border-b border-slate-100">
               <span className="min-w-0 flex-1 truncate py-2.5 text-sm text-slate-500">
@@ -1072,7 +1033,7 @@ function SheetContent({
               )}
             </div>
           ))}
-        {rules && phase === "play" && cat === "energy" && me.active && (
+        {cat === "energy" && me.active && (
           <button
             className={`${row} text-slate-500`}
             disabled={busy}
@@ -1168,8 +1129,6 @@ function SheetContent({
 
       {mine &&
         sheet.target === "active" &&
-        rules &&
-        phase === "play" &&
         stack.face.cat === "pokemon" &&
         (stack.face.atk?.length ?? 0) === 0 && (
           <p className="mb-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
@@ -1178,7 +1137,7 @@ function SheetContent({
             Pokémon.
           </p>
         )}
-      {mine && sheet.target === "active" && rules && phase === "play" && (stack.face.atk?.length ?? 0) > 0 && (
+      {mine && sheet.target === "active" && (stack.face.atk?.length ?? 0) > 0 && (
         <div className="mb-2">
           <span className="text-xs font-semibold text-slate-500">Attacks (ends your turn):</span>
           {stack.face.atk!.map((a, i) => (
@@ -1216,7 +1175,7 @@ function SheetContent({
         ))}
       </div>
 
-      {sheet.target === "active" && rules && phase === "play" && (
+      {sheet.target === "active" && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-slate-500">Status:</span>
           {STATUS_LIST.map(({ key, emoji, label }) => {
@@ -1308,7 +1267,7 @@ function SheetContent({
               ⭐ Move to Active{" "}
               {me.active
                 ? `(retreat ${me.active.face.name}${
-                    rules && phase === "play" && (me.active.face.retreat ?? 0) > 0
+                    (me.active.face.retreat ?? 0) > 0
                       ? ` — discards ${me.active.face.retreat} energy`
                       : ""
                   })`
@@ -1324,7 +1283,7 @@ function SheetContent({
                 onClick={() => act({ type: "promote", benchIndex: bi })}
               >
                 🔁 Retreat — switch with {b.face.name}
-                {rules && phase === "play" && (stack.face.retreat ?? 0) > 0
+                {(stack.face.retreat ?? 0) > 0
                   ? ` (discards ${stack.face.retreat} energy)`
                   : ""}
               </button>

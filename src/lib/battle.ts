@@ -119,8 +119,9 @@ export type BattleAction = { override?: boolean } & (
   | { type: "draw" }
   | { type: "shuffleDeck"; keepTop?: number }
   | { type: "mulligan" }
-  | { type: "setPrizes" }
-  | { type: "ready" }
+  | { type: "discardHand" }
+  | { type: "handToDeckAll" }
+  | { type: "redrawSeven" }
   | { type: "handToActive"; handIndex: number; mode: "new" | "evolve" | "attach" }
   | { type: "handToBench"; handIndex: number; benchIndex?: number; mode: "new" | "evolve" | "attach" }
   | { type: "handToDiscard"; handIndex: number }
@@ -172,14 +173,16 @@ export function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-/** Deal a fresh side: shuffle and draw the 7-card hand. Prizes are NOT
- *  dealt here — official rules set prizes only after mulligans resolve and
- *  Basics are placed. Dealing them earlier can strand a player's only Basic
- *  Pokémon in the prize pile where no mulligan can ever recover it. */
+/** Deal a fresh side: shuffle, draw seven, set six Prize cards. Setting
+ *  prizes up front can bury the only Basic in the prize pile, which is why
+ *  official rules do it after mulligans — so "redraw seven" puts the prizes
+ *  back in the deck before re-dealing, which makes a stranded Basic
+ *  recoverable without anyone having to think about the ordering. */
 export function buildSide(cards: BattleCard[]): SideState {
   const deck = shuffle(cards);
   const hand = deck.splice(0, 7);
-  return { deck, hand, prizes: [], discard: [], active: null, bench: [] };
+  const prizes = deck.splice(0, 6);
+  return { deck, hand, prizes, discard: [], active: null, bench: [] };
 }
 
 function getStack(side: SideState, target: "active" | number): BattleStack {
@@ -237,9 +240,29 @@ export function applyAction(
   const opp = state.sides[oppId];
   if (!me || !opp) throw new BattleError("Battle state is missing a player.");
 
-  const rules = state.rules === true;
-  const phase = rules ? (state.phase ?? "setup") : "play";
+  // One mode. The app keeps score — prizes, the per-turn draw, knockouts,
+  // poison and burn, and the win — but it does not block plays. Refereeing
+  // was a separate mode that gated the useful half of the board (attack
+  // buttons, playing a Trainer) behind a checkbox, and enforcing rules the
+  // cards themselves constantly break caused more stuck games than it
+  // prevented. Score-keeping is the part worth automating; judgement stays
+  // with the players.
+  const phase: "setup" | "play" = "play";
   const override = action.override === true;
+  // Battles created before prizes were dealt at the start have an empty
+  // pile. Fill it while that side's board is still untouched, so those games
+  // behave like new ones rather than never awarding a Prize card.
+  for (const side of [me, opp]) {
+    if (
+      side.prizes.length === 0 &&
+      !side.active &&
+      side.bench.length === 0 &&
+      side.discard.length === 0 &&
+      side.deck.length >= 6
+    ) {
+      side.prizes = side.deck.splice(0, 6);
+    }
+  }
   const myTurn = state.turnUser === meId;
   const oppName = state.names[oppId] ?? "your opponent";
   const flags = (state.flags ??= {});
@@ -258,55 +281,18 @@ export function applyAction(
   const myFirstTurn =
     myTurnsDone === 0 && state.turnCount <= (meId === state.firstUser ? 1 : 2);
 
-  function needTurn(what: string) {
-    if (rules && phase === "play" && !myTurn && !override) {
-      throw new BattleError(
-        `It's ${oppName}'s turn — wait for yours to ${what}. (Table out of sync? Use “Take turn”.)`
-      );
-    }
-  }
-  function needPlayPhase() {
-    if (rules && phase === "setup" && !override) {
-      throw new BattleError("Finish setup first — place your Basics and tap Ready.");
-    }
-  }
-  /** Basic-Pokémon-only check for putting a card straight onto the board. */
-  function checkBoardPlay(card: BattleCard) {
-    if (!rules || override) return;
-    if (card.cat && card.cat !== "pokemon") {
-      throw new BattleError(`${card.name} isn't a Pokémon — it can't be played to the board.`);
-    }
-    if (card.basic === false) {
-      throw new BattleError(
-        `${card.name} is an evolution — play it on top of a Pokémon in play, not straight to the board.`
-      );
-    }
-  }
-  function checkEvolve(stack: BattleStack, card: BattleCard) {
-    if (!rules || override) return;
-    if (card.cat && card.cat !== "pokemon") {
-      throw new BattleError(`${card.name} isn't a Pokémon — use Attach for energy and tools.`);
-    }
-    if (card.basic === true) {
-      throw new BattleError(`${card.name} is a Basic Pokémon — it can't evolve another Pokémon.`);
-    }
-    if ((stack.playedTurn ?? 0) === state.turnCount) {
-      throw new BattleError(`${stack.face.name} came into play this turn — it can't evolve yet.`);
-    }
-    if (myFirstTurn) {
-      throw new BattleError("No evolving on your first turn.");
-    }
-  }
+  // Kept as named no-ops so every call site still reads as the rule it used
+  // to enforce. Nothing here refuses a move any more: players call their own
+  // game, and the cards break these rules often enough that enforcing them
+  // stranded more turns than it saved.
+  function needTurn(_what: string) {}
+  function needPlayPhase() {}
+  function checkBoardPlay(_card: BattleCard) {}
+  function checkEvolve(_stack: BattleStack, _card: BattleCard) {}
+  /** Records that an energy went down this turn — the board shows a chip so
+   *  you can see it, but attaching a second one is still allowed. */
   function checkAttach(card: BattleCard) {
-    if (!rules || override || phase !== "play") return;
-    if (card.cat === "energy") {
-      if (flags.energy) {
-        throw new BattleError(
-          "You've already attached an energy this turn — End turn (or attack) passes play and resets the limit. A card effect allowing extra energy? Use the ✨ option."
-        );
-      }
-      flags.energy = true;
-    }
+    if (card.cat === "energy") flags.energy = true;
   }
   /** Knock a stack out: cards to its owner's discard, prize to the other
    *  player, and check every way this can end the game. */
@@ -321,21 +307,22 @@ export function applyAction(
     const stack = removeStack(owner, target);
     owner.discard.push(...stackCards(stack));
     let text = `${cause} ${stack.face.name} is Knocked Out!`;
-    if (rules) {
-      const prize = taker.prizes.shift();
-      if (prize) {
-        taker.hand.push(prize);
-        text += ` ${state.names[takerId] ?? "The opponent"} takes a Prize card (${taker.prizes.length} left).`;
-      }
-      if (taker.prizes.length === 0 && (state.phase ?? "play") === "play") {
+    const prize = taker.prizes.shift();
+    if (prize) {
+      taker.hand.push(prize);
+      text += ` ${state.names[takerId] ?? "The opponent"} takes a Prize card (${taker.prizes.length} left).`;
+      // Only a prize actually taken can be the last one. Without this, a
+      // battle that started before prizes were dealt automatically — and so
+      // has an empty pile — would declare a winner on the first knockout.
+      if (taker.prizes.length === 0) {
         return { text: `${text} That was the last Prize — the battle is over!`, winnerId: takerId };
       }
-      if (!owner.active && owner.bench.length === 0) {
-        return {
-          text: `${text} ${state.names[ownerId] ?? "That player"} has no Pokémon left in play!`,
-          winnerId: takerId,
-        };
-      }
+    }
+    if (!owner.active && owner.bench.length === 0) {
+      return {
+        text: `${text} ${state.names[ownerId] ?? "That player"} has no Pokémon left in play!`,
+        winnerId: takerId,
+      };
     }
     return { text };
   }
@@ -344,7 +331,6 @@ export function applyAction(
    *  just ended, sleep gets its wake-up reminder. Call AFTER the turn has
    *  passed (me = the player who just ended their turn). */
   function runCheckup(): { text: string; winnerId?: string } {
-    if (!rules) return { text: "" };
     const parts: string[] = [];
     for (const [ownerId, side] of [
       [meId, me],
@@ -413,9 +399,6 @@ export function applyAction(
       return { text: "shuffled their deck" };
     }
     case "mulligan": {
-      if (rules && phase === "play" && !override) {
-        throw new BattleError("Mulligans only happen during setup.");
-      }
       // Official rules: a mulligan hand is revealed to the opponent, who may
       // then draw 1 extra card. The log is our "reveal".
       const revealed = me.hand.map((c) => c.name).join(", ") || "an empty hand";
@@ -427,29 +410,35 @@ export function applyAction(
         text: `mulliganed — revealed ${revealed} — shuffled it back and drew 7. ${oppName} may draw 1 extra card.`,
       };
     }
-    case "setPrizes": {
-      if (me.prizes.length > 0) throw new BattleError("Your Prize cards are already set.");
-      me.prizes = me.deck.splice(0, 6);
-      return { text: `set out their ${me.prizes.length} Prize cards` };
+    case "discardHand": {
+      const n = me.hand.length;
+      if (n === 0) throw new BattleError("Your hand is already empty.");
+      me.discard.push(...me.hand);
+      me.hand = [];
+      return { text: `discarded their whole hand (${n} card${n === 1 ? "" : "s"})` };
     }
-    case "ready": {
-      if (!rules) throw new BattleError("This battle doesn't use ready-up.");
-      if (phase !== "setup") throw new BattleError("The battle already started.");
-      if (!me.active) throw new BattleError("Play a Basic Pokémon as your Active first.");
-      if (me.ready) throw new BattleError("You're already ready.");
-      me.ready = true;
-      if (me.prizes.length === 0) me.prizes = me.deck.splice(0, 6);
-      let text = "placed their Pokémon, set their Prize cards, and is ready";
-      if (opp.ready) {
-        state.phase = "play";
-        const first = state.firstUser ?? meId;
-        const firstSide = state.sides[first];
-        const firstName = state.names[first] ?? "The first player";
-        const drawn = firstSide.deck.shift();
-        if (drawn) firstSide.hand.push(drawn);
-        text += ` — both players are set! ${firstName} drew a card and starts turn 1 (no attacking on the very first turn).`;
-      }
-      return { text };
+    case "handToDeckAll": {
+      const n = me.hand.length;
+      if (n === 0) throw new BattleError("Your hand is already empty.");
+      me.deck.push(...me.hand);
+      me.hand = [];
+      me.deck = shuffle(me.deck);
+      return { text: `shuffled their hand (${n} card${n === 1 ? "" : "s"}) back into their deck` };
+    }
+    case "redrawSeven": {
+      // Hand AND prizes go back before re-dealing. Prizes are set when the
+      // battle is created, so without returning them a Basic buried in the
+      // prize pile could never be drawn no matter how many times you redrew.
+      const returned = me.hand.length + me.prizes.length;
+      me.deck.push(...me.hand, ...me.prizes);
+      me.hand = [];
+      me.prizes = [];
+      me.deck = shuffle(me.deck);
+      me.hand = me.deck.splice(0, 7);
+      me.prizes = me.deck.splice(0, 6);
+      return {
+        text: `shuffled ${returned} cards back, drew a new hand of ${me.hand.length} and set ${me.prizes.length} Prize cards`,
+      };
     }
     case "handToActive": {
       if (action.mode === "new") {
@@ -459,7 +448,7 @@ export function applyAction(
         checkBoardPlay(card);
         needTurn("play a Pokémon");
         takeHandCard(me, action.handIndex);
-        me.active = { face: card, attached: [], damage: 0, playedTurn: phase === "setup" ? 0 : state.turnCount };
+        me.active = { face: card, attached: [], damage: 0, playedTurn: state.turnCount };
         return { text: `played ${card.name} as their Active Pokémon${effectNote}` };
       }
       needPlayPhase();
@@ -491,7 +480,7 @@ export function applyAction(
         checkBoardPlay(card);
         needTurn("play a Pokémon");
         takeHandCard(me, action.handIndex);
-        me.bench.push({ face: card, attached: [], damage: 0, playedTurn: phase === "setup" ? 0 : state.turnCount });
+        me.bench.push({ face: card, attached: [], damage: 0, playedTurn: state.turnCount });
         return { text: `played ${card.name} to their Bench${effectNote}` };
       }
       needPlayPhase();
@@ -520,24 +509,7 @@ export function applyAction(
       needTurn("play a Trainer card");
       const card = me.hand[action.handIndex];
       if (!card) throw new BattleError("That card isn't in your hand anymore.");
-      if (rules && !override) {
-        if (card.cat && card.cat !== "trainer") {
-          throw new BattleError(
-            `${card.name} isn't a Trainer card — Pokémon go to the board, energy gets attached.`
-          );
-        }
-        if (card.sup) {
-          if (gameFirstTurn) {
-            throw new BattleError(
-              "The player going first can't play a Supporter on their first turn."
-            );
-          }
-          if (flags.supporter) {
-            throw new BattleError("Only one Supporter per turn — yours is used.");
-          }
-          flags.supporter = true;
-        }
-      }
+      if (card.sup) flags.supporter = true;
       takeHandCard(me, action.handIndex);
       // Face-up on the table so the opponent can see what was played —
       // swept into the discard pile when this turn ends.
@@ -724,12 +696,7 @@ export function applyAction(
       if (me.active) {
         needTurn("retreat");
         const retiring = me.active;
-        if (rules && !override && phase === "play") {
-          if (flags.retreated) {
-            throw new BattleError(
-              "You already retreated this turn — if a card effect switches again, use the card-effect option."
-            );
-          }
+        {
           if (hasStatus(retiring, "asleep") || hasStatus(retiring, "paralyzed")) {
             throw new BattleError(
               `${retiring.face.name} is ${(retiring.status ?? []).join(" and ")} — it can't retreat. (Card effect switches use ✨.)`
@@ -769,22 +736,14 @@ export function applyAction(
       if (!opp.active) throw new BattleError(`${oppName} has no Active Pokémon to attack — wait for them to promote one.`);
       const attack = me.active.face.atk?.[action.attackIndex];
       if (!attack) throw new BattleError("That attack isn't on this card.");
-      if (rules && !override) {
-        if (gameFirstTurn) {
-          throw new BattleError("No attacking on the very first turn of the game.");
-        }
-        if (hasStatus(me.active, "asleep")) {
-          throw new BattleError(`${me.active.face.name} is asleep — flip for wake-up between turns first. (✨ overrides.)`);
-        }
-        if (hasStatus(me.active, "paralyzed")) {
-          throw new BattleError(`${me.active.face.name} is paralyzed and can't attack this turn. (✨ overrides.)`);
-        }
-        const cost = attack.cost.filter((c) => c.toLowerCase() !== "free").length;
-        if (energyCount(me.active) < cost) {
-          throw new BattleError(
-            `${attack.name} needs ${cost} energy — ${me.active.face.name} has ${energyCount(me.active)} attached. (Special energy providing extra? Use ✨.)`
-          );
-        }
+      // Anything that would once have refused the attack is now a note in
+      // the log, so the table can see it and decide.
+      const warnings: string[] = [];
+      if (hasStatus(me.active, "asleep")) warnings.push("asleep");
+      if (hasStatus(me.active, "paralyzed")) warnings.push("paralyzed");
+      const cost = attack.cost.filter((c) => c.toLowerCase() !== "free").length;
+      if (energyCount(me.active) < cost) {
+        warnings.push(`${energyCount(me.active)} of ${cost} energy attached`);
       }
       const { base, variable } = parseDamage(attack.damage);
       const target = opp.active;
@@ -800,6 +759,7 @@ export function applyAction(
         mods.push("resistance −30");
       }
       let text = `attacked with ${attack.name}`;
+      if (warnings.length > 0) text += ` (${warnings.join(", ")})`;
       if (hasStatus(me.active, "confused")) {
         text += " (confused — remember the coin flip: tails = 30 damage to itself instead)";
       }
@@ -813,7 +773,7 @@ export function applyAction(
       if (attack.text) {
         text += `. Effect: ${attack.text.length > 220 ? attack.text.slice(0, 220) + "…" : attack.text}`;
       }
-      if (rules && target.face.hp && target.damage >= target.face.hp) {
+      if (target.face.hp && target.damage >= target.face.hp) {
         const ko = knockOut(oppId, "active", `${text} —`);
         if (ko.winnerId) return { text: ko.text, winnerId: ko.winnerId };
         text = ko.text;
@@ -861,23 +821,18 @@ export function applyAction(
         delta >= 0
           ? `put ${delta} damage on ${whose} ${stack.face.name} (now ${stack.damage}${stack.face.hp ? ` / ${stack.face.hp} HP` : ""})`
           : `healed ${-delta} from ${whose} ${stack.face.name} (now ${stack.damage})`;
-      // Referee: HP known and reached → automatic knockout + prize.
-      if (rules && stack.face.hp && stack.damage >= stack.face.hp) {
+      // HP known and reached → automatic knockout + prize.
+      if (stack.face.hp && stack.damage >= stack.face.hp) {
         const ko = knockOut(targetOwnerId, action.target, `${text} —`);
         return { text: ko.text, winnerId: ko.winnerId };
       }
       return { text };
     }
     case "knockout": {
-      // Manual KO (for cards without HP data, or effects). In referee mode
-      // it still awards the prize, same as an automatic knockout.
-      if (rules) {
-        const ko = knockOut(meId, action.target, "declared a Knock Out —");
-        return { text: ko.text, winnerId: ko.winnerId };
-      }
-      const stack = removeStack(me, action.target);
-      me.discard.push(...stackCards(stack));
-      return { text: `sent ${stack.face.name} (and everything attached) to their discard pile` };
+      // Manual KO (for cards without HP data, or effects) — awards the
+      // prize exactly like an automatic knockout.
+      const ko = knockOut(meId, action.target, "declared a Knock Out —");
+      return { text: ko.text, winnerId: ko.winnerId };
     }
     case "stackToHand": {
       const stack = removeStack(me, action.target);
@@ -923,7 +878,7 @@ export function applyAction(
       if (!prize) throw new BattleError("You have no Prize cards left.");
       me.hand.push(prize);
       let text = `took a Prize card (${me.prizes.length} left)`;
-      if (rules && me.prizes.length === 0 && (state.phase ?? "play") === "play") {
+      if (me.prizes.length === 0) {
         return { text: `${text} — that was the last Prize. The battle is over!`, winnerId: meId };
       }
       return { text };
@@ -939,23 +894,20 @@ export function applyAction(
       turnsTaken[meId] = myTurnsDone + 1;
       state.flags = {};
       const swept = sweepPlayed(me);
-      if (rules) {
-        const checkup = runCheckup();
-        if (checkup.winnerId) {
-          return { text: `ended their turn${swept}. ${checkup.text}`, winnerId: checkup.winnerId };
-        }
-        // Every turn begins with a mandatory draw; failing it loses the game.
-        const drawn = opp.deck.shift();
-        if (!drawn) {
-          return {
-            text: `ended their turn${swept}. ${checkup.text}${oppName} has no cards left to draw. Deck-out!`,
-            winnerId: meId,
-          };
-        }
-        opp.hand.push(drawn);
-        return { text: `ended their turn${swept}. ${checkup.text}${oppName} drew a card` };
+      const checkup = runCheckup();
+      if (checkup.winnerId) {
+        return { text: `ended their turn${swept}. ${checkup.text}`, winnerId: checkup.winnerId };
       }
-      return { text: `ended their turn${swept}` };
+      // Every turn begins with a draw; running out of cards loses the game.
+      const drawn = opp.deck.shift();
+      if (!drawn) {
+        return {
+          text: `ended their turn${swept}. ${checkup.text}${oppName} has no cards left to draw. Deck-out!`,
+          winnerId: meId,
+        };
+      }
+      opp.hand.push(drawn);
+      return { text: `ended their turn${swept}. ${checkup.text}${oppName} drew a card` };
     }
     case "claimTurn": {
       // Unjam: if the table got out of sync with reality (someone forgot to
