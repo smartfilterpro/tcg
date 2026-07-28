@@ -124,6 +124,22 @@ function StatTile({ label, value, sub }: { label: string; value: string; sub?: s
   );
 }
 
+/** Relative for anything recent, a date once it stops being interesting. */
+function formatLastLogin(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "unknown";
+  const mins = Math.floor((Date.now() - then) / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days} days ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
@@ -134,6 +150,7 @@ export default function AdminPage() {
   const [users, setUsers] = useState<Profile[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
   const [usage, setUsage] = useState<Record<string, UserUsage>>({});
+  const [lastSignIn, setLastSignIn] = useState<Record<string, string | null>>({});
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -160,6 +177,7 @@ export default function AdminPage() {
       setUsers(json.users);
       setInvites(json.invites);
       setUsage(json.usage ?? {});
+      setLastSignIn(json.lastSignIn ?? {});
     }
     setLoading(false);
   }
@@ -525,7 +543,8 @@ export default function AdminPage() {
               <div>
                 <div className="text-sm font-medium">{u.display_name || u.email}</div>
                 <div className="text-xs text-slate-400">
-                  {u.email} · joined {new Date(u.created_at).toLocaleDateString()}
+                  {u.email} · joined {new Date(u.created_at).toLocaleDateString()} · last login{" "}
+                  {formatLastLogin(lastSignIn[u.id])}
                 </div>
                 <div className="text-xs text-slate-500">
                   {usage[u.id] ? (

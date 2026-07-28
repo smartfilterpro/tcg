@@ -33,7 +33,6 @@ export default function BattlesPage() {
   const [busy, setBusy] = useState(false);
   const [createDeck, setCreateDeck] = useState("");
   const [allowShared, setAllowShared] = useState(false);
-  const [refereeMode, setRefereeMode] = useState(true);
   const [joinDeck, setJoinDeck] = useState("");
   const [joinCode, setJoinCode] = useState("");
 
@@ -84,7 +83,6 @@ export default function BattlesPage() {
         body: JSON.stringify({
           deckId: createDeck,
           allowShared: allowShared || usingSharedDeck,
-          rules: refereeMode,
         }),
       });
       const json = await res.json();
@@ -191,19 +189,7 @@ export default function BattlesPage() {
               <option value="">Choose your deck…</option>
               {deckOptions}
             </select>
-            <label className="flex items-start gap-2 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={refereeMode}
-                onChange={(e) => setRefereeMode(e.target.checked)}
-              />
-              <span>
-                Referee mode (recommended) — the app enforces turns, the draw each turn,
-                one energy &amp; one Supporter per turn, evolutions, knockouts, prizes, and
-                win conditions. Turn off for free-form play.
-              </span>
-            </label>
+
             <label className="flex items-start gap-2 text-xs text-slate-600">
               <input
                 type="checkbox"

@@ -59,11 +59,29 @@ export async function GET() {
       if (t >= monthStart.getTime()) u.costUsdMonth += cost;
     }
 
+    // Last sign-in lives on the auth user, not the profile row, so it comes
+    // from the auth admin API. Paged, and best-effort: a failure here costs
+    // one column, not the whole members page.
+    const lastSignIn: Record<string, string | null> = {};
+    try {
+      for (let page = 1; page <= 20; page++) {
+        const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+        if (error) break;
+        for (const authUser of data?.users ?? []) {
+          lastSignIn[authUser.id] = authUser.last_sign_in_at ?? null;
+        }
+        if (!data?.users || data.users.length < 200) break;
+      }
+    } catch {
+      /* leave the column empty */
+    }
+
     const profileEmails = new Set((profiles ?? []).map((p) => p.email));
     return NextResponse.json({
       users: profiles ?? [],
       invites: (invites ?? []).filter((i) => !profileEmails.has(i.email)),
       usage,
+      lastSignIn,
     });
   } catch (err) {
     return errorResponse(err);
