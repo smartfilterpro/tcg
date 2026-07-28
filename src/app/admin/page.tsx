@@ -41,6 +41,13 @@ interface Analytics {
     byFinish: Array<{ finish: string; samples: number; accuracy: number }>;
     confusions: Array<{ from: string; to: string; count: number }>;
   };
+  grading?: {
+    tracking: boolean;
+    total: number;
+    last30d: number;
+    avgGrade: number | null;
+    distribution: Array<{ label: string; count: number }>;
+  };
   priceRefresh?: {
     ranAt: string;
     checked: number;
@@ -691,6 +698,41 @@ export default function AdminPage() {
                     : `learned from ${analytics.finish?.samples ?? 0} scans`
                 }
               />
+            </div>
+          )}
+
+          <h3 className="mb-1 mt-4 text-sm font-semibold">🔬 Card grading</h3>
+          {analytics.grading?.tracking === false ? (
+            <p className="text-xs text-yellow-800">
+              Saved grades need a one-time database update — run{" "}
+              <code>supabase/migrations/024_grade_reports.sql</code>. From then on every grading
+              is kept, with its flattened card photos.
+            </p>
+          ) : (analytics.grading?.total ?? 0) === 0 ? (
+            <p className="text-xs text-slate-400">
+              No cards graded yet — stats appear once members use the grading page.
+            </p>
+          ) : (
+            <div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <StatTile label="Cards graded" value={String(analytics.grading?.total ?? 0)} sub="all-time" />
+                <StatTile label="Graded" value={String(analytics.grading?.last30d ?? 0)} sub="last 30 days" />
+                <StatTile
+                  label="Average estimate"
+                  value={
+                    analytics.grading?.avgGrade != null
+                      ? analytics.grading.avgGrade.toFixed(1)
+                      : "—"
+                  }
+                />
+              </div>
+              {(analytics.grading?.distribution ?? []).length > 0 && (
+                <p className="mt-2 text-xs text-slate-500">
+                  {(analytics.grading?.distribution ?? [])
+                    .map((d) => `${d.label}: ${d.count}`)
+                    .join(" · ")}
+                </p>
+              )}
             </div>
           )}
 

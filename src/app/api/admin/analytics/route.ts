@@ -188,8 +188,41 @@ export async function GET() {
 
     const priceRefresh = await lastPriceRefresh();
 
+    // Grading history (table exists after migration 024).
+    const gradeRes = await fetchAllRows(() =>
+      admin
+        .from("grade_reports")
+        .select("estimated_grade, created_at")
+        .order("created_at", { ascending: false })
+        .order("id")
+    );
+    const gradeRows = (gradeRes.error ? [] : gradeRes.data) as Array<{
+      estimated_grade: number | string | null;
+      created_at: string;
+    }>;
+    const gradeValues = gradeRows
+      .map((r) => (r.estimated_grade == null ? null : Number(r.estimated_grade)))
+      .filter((n): n is number => n != null && Number.isFinite(n));
+    const gradeBuckets = [
+      { label: "10", test: (g: number) => g >= 10 },
+      { label: "9–9.5", test: (g: number) => g >= 9 && g < 10 },
+      { label: "8–8.5", test: (g: number) => g >= 8 && g < 9 },
+      { label: "7–7.5", test: (g: number) => g >= 7 && g < 8 },
+      { label: "under 7", test: (g: number) => g < 7 },
+    ].map((b) => ({ label: b.label, count: gradeValues.filter(b.test).length }));
+
     return NextResponse.json({
       priceRefresh,
+      grading: {
+        tracking: !gradeRes.error,
+        total: gradeRows.length,
+        last30d: gradeRows.filter((r) => (r.created_at ?? "") >= cutoff30d).length,
+        avgGrade:
+          gradeValues.length > 0
+            ? gradeValues.reduce((s, g) => s + g, 0) / gradeValues.length
+            : null,
+        distribution: gradeBuckets.filter((b) => b.count > 0),
+      },
       scanTracking: !scanRes.error,
       finish: {
         tracking: !finishRes.error,
