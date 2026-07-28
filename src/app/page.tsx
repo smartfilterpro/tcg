@@ -71,6 +71,7 @@ function AiMeter() {
 }
 import {
   availableVariants,
+  canonicalRarity,
   defaultVariantFor,
   itemPrice,
   variantLabel,
@@ -201,7 +202,11 @@ export default function CollectionPage() {
       if (!c) continue;
       if (c.set_name) sets.add(c.set_name);
       for (const t of c.types ?? []) types.add(t);
-      if (c.rarity) rarities.add(c.rarity);
+      // Canonicalised, not raw: cards saved before rarities were normalised
+      // still carry the other database's capitalisation, and listing both
+      // showed the same rarity twice with the cards split between them.
+      const rarity = canonicalRarity(c.rarity);
+      if (rarity) rarities.add(rarity);
       if (c.supertype) supertypes.add(c.supertype);
       variants.add(item.variant ?? "normal");
     }
@@ -226,7 +231,7 @@ export default function CollectionPage() {
     }
     if (typeFilter) list = list.filter((i) => (i.card.types ?? []).includes(typeFilter));
     if (setFilter) list = list.filter((i) => i.card.set_name === setFilter);
-    if (rarityFilter) list = list.filter((i) => i.card.rarity === rarityFilter);
+    if (rarityFilter) list = list.filter((i) => canonicalRarity(i.card.rarity) === rarityFilter);
     if (supertypeFilter) list = list.filter((i) => i.card.supertype === supertypeFilter);
     if (variantFilter) list = list.filter((i) => (i.variant ?? "normal") === variantFilter);
     switch (sort) {

@@ -230,6 +230,27 @@ export function rowToSummary(row: CardSummaryRow): CardSummary {
   };
 }
 
+/** Words that stay upper-case when a rarity is title-cased. */
+const RARITY_ACRONYMS = new Set(["ace", "spec", "gx", "ex", "v", "vmax", "vstar", "lv"]);
+
+/** The card databases disagree on capitalisation: pokemontcg.io writes
+ *  "Double Rare" and "Illustration Rare", TCGdex writes "Double rare" and
+ *  "Illustration rare". Stored verbatim they became separate entries in the
+ *  rarity filter — two "Double Rare" options, each holding half the cards.
+ *  One spelling wins so they group together. */
+export function canonicalRarity(raw: string | null | undefined): string | null {
+  const s = (raw ?? "").trim().replace(/\s+/g, " ");
+  if (!s) return null;
+  return s
+    .split(" ")
+    .map((word) =>
+      RARITY_ACRONYMS.has(word.toLowerCase())
+        ? word.toUpperCase()
+        : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+    )
+    .join(" ");
+}
+
 export function summaryToRow(c: CardSummary): Omit<CardSummaryRow, "price_updated_at"> & { price_updated_at: string } {
   return {
     id: c.id,
@@ -239,7 +260,7 @@ export function summaryToRow(c: CardSummary): Omit<CardSummaryRow, "price_update
     types: c.types,
     hp: c.hp,
     number: c.number,
-    rarity: c.rarity,
+    rarity: canonicalRarity(c.rarity),
     set_id: c.setId,
     set_name: c.setName,
     set_series: c.setSeries,
