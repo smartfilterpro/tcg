@@ -244,19 +244,34 @@ export function cleanCardName(raw: string): string {
 /** The DB is inconsistent about collector numbers: some sets store "95",
  *  others "095", promos use letter prefixes ("SWSH095", "SM210", "TG12").
  *  Generate the plausible spellings so one search catches them all. */
-function numberVariants(n: string): string[] {
-  const out = new Set<string>();
+export function numberVariants(n: string): string[] {
+  const out: string[] = [];
+  const push = (v: string) => {
+    if (v && !out.includes(v)) out.push(v);
+  };
   const raw = esc(n).trim().replace(/\s+/g, "");
   if (!raw) return [];
-  out.add(raw.toUpperCase());
-  out.add(raw.replace(/^0+(?=\d)/, "").toUpperCase());
   const digits = raw.replace(/\D/g, "");
-  if (digits) {
+  const hasLetters = /[A-Za-z]/.test(raw);
+  if (digits && !hasLetters) {
+    // Order matters: the first spelling is the one a single-term retry uses,
+    // and plain numbers are stored unpadded upstream. Leading a query with
+    // "013" is what made searching a printed "013/223" come up empty while
+    // "13/223" worked.
     const stripped = digits.replace(/^0+(?=\d)/, "");
-    out.add(stripped); // "95"
-    out.add(stripped.padStart(3, "0")); // "095"
+    push(stripped); // "13" — how the database stores it
+    push(stripped.padStart(3, "0")); // "013" — how the card prints it
+    push(raw.toUpperCase());
+  } else {
+    push(raw.toUpperCase()); // "SWSH095" — promos really are stored padded
+    push(raw.replace(/^0+(?=\d)/, "").toUpperCase());
+    if (digits) {
+      const stripped = digits.replace(/^0+(?=\d)/, "");
+      push(stripped);
+      push(stripped.padStart(3, "0"));
+    }
   }
-  return [...out];
+  return out;
 }
 
 function numberClause(n: string): string | null {
@@ -264,6 +279,18 @@ function numberClause(n: string): string | null {
   if (variants.length === 0) return null;
   if (variants.length === 1) return `number:${variants[0]}`;
   return `(${variants.map((v) => `number:${v}`).join(" OR ")})`;
+}
+
+/** A single-word name goes in unquoted so the trailing wildcard actually
+ *  expands. Inside quotes the wildcard is not applied, which turned a search
+ *  for a full name like "Rayquaza" into an exact-name match — fewer results
+ *  than the truncated "Rayquaz", which found nothing and so fell through to
+ *  the broader token search. Names with spaces or punctuation still need the
+ *  quoted phrase; the token fallback covers those. */
+function nameClause(cleaned: string): string {
+  const safe = esc(cleaned);
+  if (/^[A-Za-z0-9À-ɏ]+$/.test(safe)) return `name:${safe}*`;
+  return `name:"${safe}*"`;
 }
 
 /** Digits-only, zero-stripped comparison key: "SWSH095" → "95". */
@@ -278,12 +305,15 @@ export async function searchCards(opts: {
   name?: string;
   nameTokens?: string;
   number?: string;
+  /** Exactly this collector number, with no spelling expansion — used to
+   *  retry one spelling at a time. */
+  numberExact?: string;
   printedTotal?: string;
   setName?: string;
   pageSize?: number;
 }): Promise<CardSummary[]> {
   const clauses: string[] = [];
-  if (opts.name) clauses.push(`name:"${esc(cleanCardName(opts.name))}*"`);
+  if (opts.name) clauses.push(nameClause(cleanCardName(opts.name)));
   if (opts.nameTokens) {
     const tokens = cleanCardName(opts.nameTokens)
       .toLowerCase()
@@ -291,7 +321,9 @@ export async function searchCards(opts: {
       .filter((t) => t.length >= 2);
     for (const t of tokens) clauses.push(`name:${esc(t)}*`);
   }
-  if (opts.number) {
+  if (opts.numberExact) {
+    clauses.push(`number:${esc(opts.numberExact)}`);
+  } else if (opts.number) {
     const clause = numberClause(opts.number);
     if (clause) clauses.push(clause);
   }

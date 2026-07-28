@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { searchCards, numberKey, cleanCardName } from "@/lib/pokemontcg";
+import { searchCards, numberKey, cleanCardName, numberVariants } from "@/lib/pokemontcg";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
+import { parseCardQuery } from "@/lib/cardQuery";
 
 /** The primary API has been flaky — an error there must not kill the search,
  *  because the TCGdex fallback can still answer. */
@@ -15,66 +16,6 @@ async function safeSearch(
   }
 }
 
-/** Parse a free-form query into name / collector-number / set-size parts.
- *  Supported shapes:
- *    "101/190", "095/086"  → number in a set of that size (zeros OK)
- *    "095/SVP"             → promo-set code after the slash
- *    "#101" or "101"       → number in any set
- *    "TG12/TG30", "SWSH095"→ alphanumeric promo/gallery numbers
- *    "Charizard 4/102"     → name + number + set size
- *    "Charizard"           → name only
- */
-function parseQuery(raw: string): {
-  name?: string;
-  number?: string;
-  printedTotal?: string;
-  setName?: string;
-} {
-  const q = raw.trim();
-
-  // "number/total" — optionally preceded by a name, e.g. "Charizard 4/102".
-  // The part after the slash is either a set size ("190") or a promo-set
-  // code ("SVP", "SWSH", "SM").
-  const slash = q.match(/^(.*?)[\s#]*([A-Za-z]{0,4}\d{1,3}[a-z]?)\s*\/\s*([A-Za-z0-9]{1,8})$/);
-  if (slash) {
-    const name = slash[1].trim();
-    const after = slash[3];
-    const digitsInAfter = after.replace(/\D/g, "");
-    return {
-      name: name || undefined,
-      number: slash[2],
-      printedTotal: digitsInAfter ? digitsInAfter : undefined,
-      setName: digitsInAfter ? undefined : after, // "SVP" → search promo sets by name
-    };
-  }
-
-  // "#101" — explicit number, any set
-  const hash = q.match(/^#\s*([A-Za-z]{0,4}\d{1,3}[a-z]?)$/);
-  if (hash) return { number: hash[1] };
-
-  // Bare number (or promo codes like "TG12", "SWSH095") — nothing else it could be
-  const bare = q.match(/^#?\s*([A-Za-z]{0,4}\d{1,3}[a-z]?)$/);
-  if (bare && /\d/.test(q) && !/^[A-Za-z]+\d$/.test(q)) {
-    // exclude names ending in a digit like "Porygon2" (letters+single digit)
-    return { number: bare[1] };
-  }
-
-  // "name number" WITHOUT a slash — e.g. "Gengar 073", "Pikachu SWSH061",
-  // "Mew #25". The number token needs 2+ digits, a letter prefix, or a "#"
-  // so names like "Porygon2" or "Blastoise 2" aren't misparsed.
-  const trailing = q.match(/^(.+?)\s+#?([A-Za-z]{0,4}\d{1,4}[a-z]?)$/);
-  if (trailing) {
-    const numTok = trailing[2];
-    const looksLikeNumber =
-      /\d{2,}/.test(numTok) || /^[A-Za-z]+\d+/.test(numTok) || q.includes("#");
-    if (looksLikeNumber && /\d/.test(numTok)) {
-      return { name: trailing[1].trim(), number: numTok };
-    }
-  }
-
-  return { name: q };
-}
-
 /** Live card search against pokemontcg.io — used by the "fix this card" picker. */
 export async function GET(req: Request) {
   try {
@@ -83,8 +24,31 @@ export async function GET(req: Request) {
     const q = url.searchParams.get("q")?.trim();
     if (!q) return NextResponse.json({ cards: [] });
 
-    const parsed = parseQuery(q);
+    const parsed = parseCardQuery(q);
     let cards = await safeSearch({ ...parsed, pageSize: 16 });
+
+    const wantedKey = parsed.number ? numberKey(parsed.number) : "";
+    const hasWantedNumber = (list: typeof cards) =>
+      !wantedKey || list.some((c) => numberKey(c.number) === wantedKey);
+
+    // The upstream API doesn't reliably honour a parenthesised OR of the
+    // different ways a collector number can be spelled, so a card printed
+    // "013/223" could miss while "13/223" hit. Retry each spelling on its
+    // own before relaxing anything else.
+    if (parsed.number && !hasWantedNumber(cards)) {
+      for (const variant of numberVariants(parsed.number)) {
+        const exact = await safeSearch({
+          name: parsed.name,
+          numberExact: variant,
+          printedTotal: parsed.printedTotal,
+          pageSize: 16,
+        });
+        if (hasWantedNumber(exact) && exact.length > 0) {
+          cards = exact;
+          break;
+        }
+      }
+    }
 
     // Number-based searches can be over-constrained (e.g. printedTotal counts
     // only the base set, not secret rares; promo-set codes vary) — relax
@@ -114,14 +78,24 @@ export async function GET(req: Request) {
       }
     }
 
+    // A full name can match exactly and return ONLY the plainly-named
+    // printings — which is why searching "Rayquaza" used to give fewer cards
+    // than the truncated "Rayquaz" (that found nothing, so it fell through to
+    // the broader token search). Widen whenever the result set is thin,
+    // keeping the exact matches first.
+    if (parsed.name && !parsed.number && cards.length > 0 && cards.length < 8) {
+      const wider = await safeSearch({ nameTokens: parsed.name, pageSize: 16 });
+      const seen = new Set(cards.map((c) => c.id));
+      cards = [...cards, ...wider.filter((c) => !seen.has(c.id))].slice(0, 20);
+    }
+
     // Consult TCGdex (usually has new sets/promos months earlier) when the
     // primary came up empty — or when it returned cards but NONE carry the
     // number that was searched for (typical promo case: a name search finds
     // old printings while the actual promo lives only in TCGdex).
     let source = "pokemontcg.io";
-    const key = parsed.number ? numberKey(parsed.number) : "";
-    const primaryHasNumber = !key || cards.some((c) => numberKey(c.number) === key);
-    if (cards.length === 0 || !primaryHasNumber) {
+    const key = wantedKey;
+    if (cards.length === 0 || !hasWantedNumber(cards)) {
       const alt = await searchTcgdex({
         name: parsed.name ? cleanCardName(parsed.name) : undefined,
         number: parsed.number,
