@@ -115,10 +115,7 @@ function SidePanel({
                   <strong>{m.cap}</strong>
                 </p>
                 {(!m.lr || !m.tb) && (
-                  <p className="text-slate-500">
-                    The {m.lr ? "top and bottom" : "left and right"} borders aren&apos;t consistent
-                    enough to measure on this card, so that direction is judged by eye.
-                  </p>
+                  <p className="text-slate-500">{(!m.lr ? m.lrNote : m.tbNote) ?? ""}</p>
                 )}
                 <p className="text-slate-400">
                   The blue bands should sit exactly on the printed border. If they don&apos;t, nudge
