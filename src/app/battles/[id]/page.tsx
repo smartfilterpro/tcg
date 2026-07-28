@@ -200,6 +200,21 @@ export default function BattleBoardPage() {
     }
   }
 
+  async function rematch() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/battles/${id}/rematch`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't start the rematch");
+      router.push(`/battles/${json.id}`);
+      return;
+    } catch (e) {
+      showNotice(e instanceof Error ? e.message : "Couldn't start the rematch");
+    }
+    setBusy(false);
+  }
+
   async function removeBattle() {
     if (!confirm("Remove this battle for both players?")) return;
     await fetch(`/api/battles/${id}`, { method: "DELETE" });
@@ -276,7 +291,10 @@ export default function BattleBoardPage() {
           }`}
         >
           🏆 {data.youWon ? "You won!" : `${data.winnerName ?? oppName} wins!`}
-          <div className="mt-2 flex justify-center gap-2 text-sm font-normal">
+          <div className="mt-2 flex flex-wrap justify-center gap-2 text-sm font-normal">
+            <button className="btn-primary" disabled={busy} onClick={rematch}>
+              {busy ? "Shuffling…" : "🔁 Rematch"}
+            </button>
             <a href="/battles" className="btn-secondary">
               Back to battles
             </a>
@@ -398,7 +416,19 @@ export default function BattleBoardPage() {
             </div>
           ))}
         </div>
-        <div className="mt-1 flex justify-end border-t border-slate-100 pt-1">
+        <div className="mt-1 flex items-center justify-between gap-2 border-t border-slate-100 pt-1">
+          {view.undo ? (
+            <button
+              className="chip max-w-[70%] shrink truncate bg-amber-50 text-amber-800"
+              disabled={busy}
+              onClick={() => act({ type: "undo" })}
+              title={`Take back your last move: ${view.undo}`}
+            >
+              ↩️ Undo <span className="font-normal opacity-70">{view.undo}</span>
+            </button>
+          ) : (
+            <span />
+          )}
           <a
             href={`/api/battles/${id}/log`}
             download

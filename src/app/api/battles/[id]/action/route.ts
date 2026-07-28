@@ -6,6 +6,7 @@ import {
   pushLog,
   pushLogRaw,
   redactState,
+  takeSnapshot,
   BattleError,
   type BattleAction,
   type BattleState,
@@ -40,7 +41,9 @@ export async function POST(req: Request, { params }: Params) {
       if (!battle || (battle.host_user !== user.id && battle.guest_user !== user.id)) {
         return NextResponse.json({ error: "Battle not found." }, { status: 404 });
       }
-      if (battle.status !== "active") {
+      // Undo is allowed on a finished battle — the move being taken back may
+      // be the one that ended it, which is exactly when you want it most.
+      if (battle.status !== "active" && !(battle.status === "finished" && action.type === "undo")) {
         return NextResponse.json(
           { error: battle.status === "waiting" ? "Your opponent hasn't joined yet." : "This battle is over." },
           { status: 409 }
@@ -53,23 +56,53 @@ export async function POST(req: Request, { params }: Params) {
         battle.host_user === user.id
           ? ((battle.guest_user as string | null) ?? BOT_ID)
           : (battle.host_user as string);
-      const state = battle.state as BattleState;
+      let state = battle.state as BattleState;
       const myName = state.names?.[user.id] ?? "Trainer";
 
       let status = battle.status as string;
       let winner: string | null = null;
-      if (action.type === "concede") {
-        status = "finished";
-        winner = oppId;
-        pushLogRaw(state, `${myName} conceded — ${state.names?.[oppId] ?? "their opponent"} wins! 🏆`);
-      } else {
-        const result = applyAction(state, user.id, oppId, action);
-        pushLog(state, myName, result.text);
-        if (result.winnerId) {
-          status = "finished";
-          winner = result.winnerId;
-          pushLogRaw(state, `🏆 ${state.names?.[result.winnerId] ?? "The winner"} wins the battle!`);
+      let winnerOut: string | null = (battle.winner_user as string | null) ?? null;
+
+      if (action.type === "undo") {
+        const point = state.prev;
+        if (!point) {
+          return NextResponse.json(
+            { error: "There's nothing to take back — undo only reaches one move." },
+            { status: 409 }
+          );
         }
+        if (point.by !== user.id) {
+          return NextResponse.json(
+            { error: "You can only take back your own last move." },
+            { status: 409 }
+          );
+        }
+        // Restore wholesale, then record the undo on the restored board so
+        // the log keeps the trail rather than pretending it never happened.
+        state = point.s;
+        state.prev = undefined;
+        pushLogRaw(state, `${myName} took back: ${point.label}`);
+        status = point.status;
+        winnerOut = point.winner;
+      } else {
+        const before = takeSnapshot(state, battle.status as string, winnerOut, user.id, "");
+
+        if (action.type === "concede") {
+          status = "finished";
+          winner = oppId;
+          pushLogRaw(state, `${myName} conceded — ${state.names?.[oppId] ?? "their opponent"} wins! 🏆`);
+          before.label = "conceding the battle";
+        } else {
+          const result = applyAction(state, user.id, oppId, action);
+          pushLog(state, myName, result.text);
+          before.label = result.text;
+          if (result.winnerId) {
+            status = "finished";
+            winner = result.winnerId;
+            pushLogRaw(state, `🏆 ${state.names?.[result.winnerId] ?? "The winner"} wins the battle!`);
+          }
+        }
+        state.prev = before;
       }
 
       // The practice opponent takes its whole turn here, inside the same
@@ -87,14 +120,14 @@ export async function POST(req: Request, { params }: Params) {
       // winner_user is a uuid column and the bot has no profile, so a bot win
       // is recorded as "finished with nobody in the winner column". The log
       // and the state still name it; only the database row stays typed.
-      const winnerId = winner === BOT_ID ? null : winner;
+      if (winner) winnerOut = winner === BOT_ID ? null : winner;
 
       const { data: updated, error: updateErr } = await admin
         .from("battles")
         .update({
           state,
           status,
-          winner_user: winnerId ?? battle.winner_user,
+          winner_user: winnerOut,
           version: (battle.version as number) + 1,
           updated_at: new Date().toISOString(),
         })
@@ -107,7 +140,7 @@ export async function POST(req: Request, { params }: Params) {
           status,
           version: (battle.version as number) + 1,
           winnerName: winner ? state.names?.[winner] ?? null : null,
-          youWon: status === "finished" ? winner === user.id : null,
+          youWon: status === "finished" ? winnerOut === user.id : null,
           opponentName: state.names?.[oppId] ?? "Trainer",
           myName,
           view: redactState(state, user.id, oppId),

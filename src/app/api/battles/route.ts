@@ -122,6 +122,7 @@ export async function POST(req: Request) {
       const state: BattleState = {
         sides: { [user.id]: buildSide(cards), [BOT_ID]: buildSide(botCards) },
         names: { [user.id]: myName, [BOT_ID]: BOT_NAME },
+        decks: { [user.id]: deck.id, [BOT_ID]: botDeck.deck.id },
         allowSharedDecks,
         firstUser: user.id,
         turnUser: user.id,
@@ -152,6 +153,7 @@ export async function POST(req: Request) {
     const state: BattleState = {
       sides: { [user.id]: buildSide(cards) },
       names: { [user.id]: myName },
+      decks: { [user.id]: deck.id },
       allowSharedDecks,
       turnUser: null,
       turnCount: 1,
