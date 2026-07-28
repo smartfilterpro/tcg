@@ -413,6 +413,206 @@ function quadAtThreshold(
   return { quad, ratio, bboxArea };
 }
 
+/** Mean colour of a short run of pixels — used to compare the two sides of
+ *  a possible edge. */
+function runMean(
+  img: RGBAImage,
+  from: number,
+  to: number,
+  fixed: number,
+  horizontal: boolean
+): [number, number, number] {
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let n = 0;
+  for (let i = from; i <= to; i++) {
+    const x = horizontal ? i : fixed;
+    const y = horizontal ? fixed : i;
+    if (x < 0 || y < 0 || x >= img.width || y >= img.height) continue;
+    const p = px(img, x, y);
+    r += p[0];
+    g += p[1];
+    b += p[2];
+    n++;
+  }
+  return n === 0 ? [0, 0, 0] : [r / n, g / n, b / n];
+}
+
+/** Walk in from one side of the photo and record where the first SUSTAINED
+ *  colour change happens on each scan line — the card's edge. Wood grain and
+ *  the like produce plenty of thin, local changes; requiring the difference
+ *  to hold over ~18px steps past them. */
+function scanEdgePoints(
+  img: RGBAImage,
+  dir: "left" | "right" | "top" | "bottom",
+  thr: number
+): Array<[number, number]> {
+  const horizontal = dir === "left" || dir === "right";
+  const along = horizontal ? img.height : img.width;
+  const across = horizontal ? img.width : img.height;
+  const forward = dir === "left" || dir === "top";
+  const points: Array<[number, number]> = [];
+  for (let a = Math.floor(along * 0.05); a < along * 0.95; a += 2) {
+    for (let step = 5; step < across * 0.55; step++) {
+      const d = forward ? step : across - 1 - step;
+      const outerFrom = forward ? d - 4 : d + 1;
+      const innerFrom = forward ? d + 1 : d - 4;
+      const near = runMean(img, outerFrom, outerFrom + 3, a, horizontal);
+      const far = runMean(img, innerFrom, innerFrom + 3, a, horizontal);
+      if (colorDist(near, far) <= thr) continue;
+      // Confirm it holds further in, so a grain line or a scratch on the
+      // table doesn't read as the card's edge.
+      const wideOuter = forward
+        ? runMean(img, d - 20, d - 4, a, horizontal)
+        : runMean(img, d + 4, d + 20, a, horizontal);
+      const wideInner = forward
+        ? runMean(img, d + 4, d + 20, a, horizontal)
+        : runMean(img, d - 20, d - 4, a, horizontal);
+      if (colorDist(wideOuter, wideInner) > thr) {
+        points.push([a, d]);
+        break;
+      }
+    }
+  }
+  return points;
+}
+
+/** Fit a line through boundary points that tolerates a large minority of
+ *  nonsense. Least squares is dragged badly by the stray points a textured
+ *  table produces; this keeps the line the most points actually agree on.
+ *  Deterministic — it walks a fixed lattice of pairs rather than sampling
+ *  randomly, so the same photo always gives the same answer. */
+function robustLine(
+  points: Array<[number, number]>,
+  maxSlope: number
+): { a: number; b: number; inliers: number } | null {
+  if (points.length < 12) return null;
+  const span = points[points.length - 1][0] - points[0][0];
+  if (span <= 0) return null;
+  const stride = Math.max(1, Math.floor(points.length / 32));
+  let best: { a: number; b: number; inliers: number } | null = null;
+  for (let i = 0; i < points.length; i += stride) {
+    for (let j = i + stride; j < points.length; j += stride) {
+      const [t1, v1] = points[i];
+      const [t2, v2] = points[j];
+      if (Math.abs(t1 - t2) < span * 0.3) continue;
+      const a = (v2 - v1) / (t2 - t1);
+      if (!Number.isFinite(a) || Math.abs(a) > maxSlope) continue;
+      const b = v1 - a * t1;
+      let inliers = 0;
+      for (const [t, v] of points) {
+        if (Math.abs(v - (a * t + b)) <= 3) inliers++;
+      }
+      if (!best || inliers > best.inliers) best = { a, b, inliers };
+    }
+  }
+  if (!best || best.inliers < Math.max(12, points.length * 0.25)) return null;
+  // Refit on the agreeing points for sub-pixel accuracy.
+  const kept = points.filter(([t, v]) => Math.abs(v - (best!.a * t + best!.b)) <= 3);
+  const refit = fitLine(kept);
+  return refit ? { ...refit, inliers: best.inliers } : best;
+}
+
+/** Find the card by its four edges rather than by separating it from the
+ *  background. Robust where a colour-threshold mask isn't: a wood table's
+ *  highlights are nowhere near its median colour, so masking pulls patches
+ *  of table in with the card, but the table has no long straight
+ *  high-contrast edges to confuse a line fit. */
+function scanQuad(img: RGBAImage, thr: number): Quad | null {
+  const MAX_SLOPE = 0.4; // ~22° of rotation
+  const left = robustLine(scanEdgePoints(img, "left", thr), MAX_SLOPE);
+  const right = robustLine(scanEdgePoints(img, "right", thr), MAX_SLOPE);
+  const top = robustLine(scanEdgePoints(img, "top", thr), MAX_SLOPE);
+  const bottom = robustLine(scanEdgePoints(img, "bottom", thr), MAX_SLOPE);
+  if (!left || !right || !top || !bottom) return null;
+
+  // The scan stops at the first sustained change, which is typically a pixel
+  // or two out from the card — often on the hairline shadow it casts. Slide
+  // each edge along its normal to where the colour step is strongest, which
+  // is the card's actual boundary. Left unrefined this leaves a rim of table
+  // inside the crop, and that rim lands in the corner close-ups.
+  const refined = [
+    refineLine(img, left, true, 1),
+    refineLine(img, right, true, -1),
+    refineLine(img, top, false, 1),
+    refineLine(img, bottom, false, -1),
+  ];
+  const tl = intersect(refined[0], refined[2]);
+  const tr = intersect(refined[1], refined[2]);
+  const br = intersect(refined[1], refined[3]);
+  const bl = intersect(refined[0], refined[3]);
+  if (!tl || !tr || !br || !bl) return null;
+  return [tl, tr, br, bl];
+}
+
+/** Slide one fitted edge along its normal to the offset with the strongest
+ *  colour step — sub-pixel edge localisation. `vertical` means the line is
+ *  x = a·y + b; `inside` is +1 when the card lies at increasing values. */
+function refineLine(
+  img: RGBAImage,
+  line: { a: number; b: number },
+  vertical: boolean,
+  inside: 1 | -1
+): { a: number; b: number } {
+  const along = vertical ? img.height : img.width;
+  // Bilinear, because the offset is searched in half-pixel steps and
+  // rounding would flatten the very peak we're hunting for.
+  const sample = (t: number, v: number): [number, number, number] | null => {
+    const fx = vertical ? v : t;
+    const fy = vertical ? t : v;
+    if (fx < 0 || fy < 0 || fx > img.width - 1 || fy > img.height - 1) return null;
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+    const x1 = Math.min(img.width - 1, x0 + 1);
+    const y1 = Math.min(img.height - 1, y0 + 1);
+    const ax = fx - x0;
+    const ay = fy - y0;
+    const c00 = px(img, x0, y0);
+    const c10 = px(img, x1, y0);
+    const c01 = px(img, x0, y1);
+    const c11 = px(img, x1, y1);
+    const out: [number, number, number] = [0, 0, 0];
+    for (let k = 0; k < 3; k++) {
+      const top = c00[k] * (1 - ax) + c10[k] * ax;
+      const bot = c01[k] * (1 - ax) + c11[k] * ax;
+      out[k] = top * (1 - ay) + bot * ay;
+    }
+    return out;
+  };
+  let best = { a: line.a, b: line.b };
+  let bestStep = -1;
+  // Angle is searched alongside offset, but only narrowly (~±0.7°): the fit
+  // can be a fraction of a degree out, which shows up as table creeping in
+  // along one end of an edge, yet a wide search would let the edge slide
+  // onto some strong feature inside the artwork.
+  for (let da = -0.012; da <= 0.0121; da += 0.003) {
+    const a = line.a + da;
+    for (let d = -10; d <= 10; d += 0.5) {
+      const b = line.b + d;
+      let sum = 0;
+      let n = 0;
+      for (let t = Math.floor(along * 0.15); t < along * 0.85; t += 3) {
+        const v = a * t + b;
+        // Narrow baseline: a wide one scores every position within its own
+        // span equally, so the "best" offset could sit several pixels off
+        // the card and leave a rim of table in the crop. A 3px baseline
+        // peaks on the boundary itself.
+        const outer = sample(t, v - 1.5);
+        const inner = sample(t, v + 1.5);
+        if (!outer || !inner) continue;
+        sum += colorDist(outer, inner);
+        n++;
+      }
+      if (n > 0 && sum / n > bestStep) {
+        bestStep = sum / n;
+        best = { a, b };
+      }
+    }
+  }
+  return best;
+}
+
 /** The weakest colour step across the four edges of a candidate quad.
  *
  *  A genuine card boundary shows a clear change from just inside the edge to
@@ -474,33 +674,44 @@ export function detectCardQuad(source: RGBAImage): Quad | null {
     }
   }
 
-  // A card's drop shadow differs from the table only softly, but enough to
-  // clear one threshold — and a blob swollen by shadow puts the corners off
-  // the card entirely. Try a stricter cut as well and keep whichever
-  // candidate is closest to a real card's 63:88 proportions.
+  // Two different ways of finding the card, because each fails on photos the
+  // other handles. Masking by colour distance copes with a rotated card on a
+  // plain background but falls apart on a textured one, where highlights sit
+  // nowhere near the background's median colour and drag patches of table in
+  // with the card. Edge scanning ignores that entirely but wants the card
+  // roughly square to the frame.
   const base = Math.max(30, otsuThreshold(dist, 442));
-  const loose = quadAtThreshold(img, dist, base);
-  const strict = quadAtThreshold(img, dist, base * 1.6);
-  const off = (r: number) => Math.abs(r - CARD_ASPECT);
-
-  // The strict cut only wins if it's a CLEAR improvement and still covers
-  // most of the card. Otherwise a full-art card — whose artwork can pass
-  // near the table's colour mid-card — fragments at the higher threshold
-  // and a stray piece gets mistaken for the card.
-  let best = loose;
-  if (
-    strict &&
-    (!loose ||
-      (off(strict.ratio) < off(loose.ratio) - 0.04 && strict.bboxArea > loose.bboxArea * 0.6))
-  ) {
-    best = strict;
+  const candidates: Quad[] = [];
+  for (const t of [base, base * 1.6]) {
+    const c = quadAtThreshold(img, dist, t);
+    if (c) candidates.push(c.quad);
   }
-  if (!best) return null;
+  for (const t of [48, 70]) {
+    const q = scanQuad(img, t);
+    if (q) candidates.push(q);
+  }
 
-  // Refuse rather than hand back a confident wrong outline: a quad that
-  // doesn't step at every edge isn't the card, and hand-placed corners beat
-  // a plausible-looking mistake.
-  if (minEdgeContrast(img, best.quad) < 30) return null;
+  // Score them all the same way: a real card outline has a strong colour
+  // step along every one of its four edges, and something close to 63:88
+  // proportions. Whichever candidate scores best wins; if none is
+  // convincing, say so rather than hand back a confident wrong outline.
+  let best: { quad: Quad; score: number } | null = null;
+  for (const quad of candidates) {
+    const side = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+    const wAvg = (side(quad[0], quad[1]) + side(quad[3], quad[2])) / 2;
+    const hAvg = (side(quad[0], quad[3]) + side(quad[1], quad[2])) / 2;
+    if (wAvg < w * 0.2 || hAvg < h * 0.2) continue;
+    const ratio = wAvg / hAvg;
+    if (ratio < 0.5 || ratio > 0.95) continue;
+    // Corners well outside the frame mean the fit ran away.
+    if (quad.some((p) => p.x < -w * 0.05 || p.x > w * 1.05 || p.y < -h * 0.05 || p.y > h * 1.05)) {
+      continue;
+    }
+    const contrast = minEdgeContrast(img, quad);
+    const score = contrast - Math.abs(ratio - CARD_ASPECT) * 120;
+    if (!best || score > best.score) best = { quad, score };
+  }
+  if (!best || best.score < 38) return null;
 
   return best.quad.map((p) => ({ x: p.x / scale, y: p.y / scale })) as Quad;
 }
