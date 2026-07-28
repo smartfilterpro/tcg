@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
 import type { GradeReport } from "@/lib/grading";
 import type { GradeValue } from "@/lib/gradeValue";
-import type { CenteringMeasurement, Quad } from "@/lib/cardGeometry";
+import { quadNearEdge, type CenteringMeasurement, type Quad } from "@/lib/cardGeometry";
 import {
   loadPhoto,
   initialQuad,
@@ -16,6 +16,7 @@ import {
 } from "@/lib/cardImage";
 import { uploadCardPhoto } from "@/lib/photos";
 import CardCropper from "@/components/CardCropper";
+import CenteringDiagram from "@/components/CenteringDiagram";
 import GradeReportView, { gradeColor } from "@/components/GradeReportView";
 import type { SavedGrade } from "@/app/api/grade/reports/route";
 
@@ -75,6 +76,7 @@ function SidePanel({
 
   const m = side.preview?.measurement ?? null;
   const metrics = side.preview?.metrics;
+  const nearEdge = quadNearEdge(side.quad, side.photo.width, side.photo.height);
   return (
     <div className="space-y-2">
       <div className="text-sm font-semibold">{label}</div>
@@ -86,23 +88,37 @@ function SidePanel({
         detected={side.detected}
       />
       {side.preview && (
-        <div className="flex gap-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={side.preview.cardDataUrl}
-            alt={`${label} flattened`}
-            className="h-24 w-auto rounded border border-slate-200"
+        <div className="flex gap-3 rounded-lg bg-slate-50 p-2">
+          <CenteringDiagram
+            compact
+            cardDataUrl={side.preview.cardDataUrl}
+            measurement={m}
+            label={`${label} flattened`}
           />
           <div className="min-w-0 text-[11px] leading-relaxed text-slate-600">
-            <p className="font-semibold text-slate-700">Flattened</p>
+            <p className="font-semibold text-slate-700">This is what gets graded</p>
             {m ? (
-              <p>
-                Centering {m.lr[0]}/{m.lr[1]} · {m.tb[0]}/{m.tb[1]}
-                <br />
-                allows up to a <strong>{m.cap}</strong>
-              </p>
+              <>
+                <p>
+                  Centering {m.lr[0]}/{m.lr[1]} · {m.tb[0]}/{m.tb[1]} — allows up to a{" "}
+                  <strong>{m.cap}</strong>
+                </p>
+                <p className="text-slate-400">
+                  The blue bands should sit exactly on the printed border. If they don&apos;t, nudge
+                  the corners.
+                </p>
+              </>
             ) : (
-              <p>No printed border to measure.</p>
+              <p>
+                No measurable printed border (full-art or borderless), so centering will be judged
+                by eye instead.
+              </p>
+            )}
+            {nearEdge && (
+              <p className="text-amber-600">
+                The card fills the frame — leave a little space around it so it can be found
+                reliably.
+              </p>
             )}
             {metrics?.blurry && (
               <p className="text-amber-600">Looks soft — a sharper photo grades better.</p>

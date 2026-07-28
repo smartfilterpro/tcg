@@ -420,6 +420,15 @@ export function detectCardQuad(source: RGBAImage): Quad | null {
   return quad;
 }
 
+/** True when the card runs right up to the edge of the photo. Background
+ *  estimation samples the frame's outer ring, so a card with no margin
+ *  around it poisons that estimate and auto-detection drifts. */
+export function quadNearEdge(quad: Quad, width: number, height: number, frac = 0.025): boolean {
+  const mx = width * frac;
+  const my = height * frac;
+  return quad.some((p) => p.x < mx || p.x > width - mx || p.y < my || p.y > height - my);
+}
+
 /** The whole-photo fallback: corners at the image edges, inset slightly.
  *  Used as the starting position for hand-placed corners. */
 export function defaultQuad(width: number, height: number): Quad {
@@ -681,10 +690,23 @@ export function measureCentering(card: RGBAImage): CenteringMeasurement | null {
     return null;
   }
 
-  const l = median(left.widths);
-  const r = median(right.widths);
-  const t = median(top.widths);
-  const b = median(bottom.widths);
+  // A real printed border ends at the same depth on every scan line. On a
+  // full-art or near-borderless card the "transition" is just artwork, and
+  // its depth jumps around. Agreement along each edge is what separates a
+  // measurement from a guess — without this check an illustration rare can
+  // return a confident, wrong ratio and cap the grade on nothing.
+  const sides = [left, right, top, bottom].map((s) => {
+    const med = median(s.widths);
+    const mad = median(s.widths.map((w) => Math.abs(w - med)));
+    return { med, mad };
+  });
+  const minBorder = card.width * 0.012;
+  for (const s of sides) {
+    if (s.med < minBorder) return null;
+    if (s.mad > Math.max(3, s.med * 0.2)) return null;
+  }
+
+  const [l, r, t, b] = sides.map((s) => s.med);
   if (l + r <= 0 || t + b <= 0) return null;
   if (l + r > card.width * 0.5 || t + b > card.height * 0.5) return null;
 
