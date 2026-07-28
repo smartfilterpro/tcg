@@ -910,6 +910,9 @@ export interface CenteringMeasurement {
   /** Null when that axis couldn't be measured reliably. */
   lr: AxisMeasure | null;
   tb: AxisMeasure | null;
+  /** When an axis is null, exactly which edge defeated it and why. */
+  lrNote: string | null;
+  tbNote: string | null;
   /** The worse majority percentage across the axes we could measure. */
   worst: number;
   /** Highest grade the measured centering allows. */
@@ -985,7 +988,7 @@ function measureAxis(
   dirB: "right" | "bottom",
   span: number,
   back: boolean
-): AxisMeasure | null {
+): { measure: AxisMeasure; note: null } | { measure: null; note: string } {
   // A printed border is at least a couple of percent of the card. Anything
   // thinner is the scan having stopped early on something inside the border
   // — the copyright line set into the bottom of a modern card does exactly
@@ -996,19 +999,43 @@ function measureAxis(
   const sides = [dirA, dirB].map((dir) => {
     const { widths } = scanBorder(card, border, thr, dir);
     const m = median(widths);
-    return { m, mad: median(widths.map((w) => Math.abs(w - m))), n: widths.length };
+    return { dir, m, mad: median(widths.map((w) => Math.abs(w - m))), n: widths.length };
   });
+
+  // Name the edge that actually failed, and why. Reporting "top and bottom"
+  // when only the bottom is unreadable is simply inaccurate, and the whole
+  // point of showing the measurement is that it can be checked by eye.
+  const failures: string[] = [];
   for (const s of sides) {
-    if (s.n < 20) return null;
-    if (s.m < minBorder) return null;
-    if (s.mad > Math.max(4, s.m * 0.25)) return null;
+    if (s.n < 20) {
+      failures.push(`no ${s.dir} border could be found`);
+    } else if (s.m < minBorder) {
+      failures.push(
+        `the ${s.dir} border reads too thin to be the printed border — something printed inside it, such as the copyright line, stops the scan early`
+      );
+    } else if (s.mad > Math.max(4, s.m * 0.25)) {
+      failures.push(`the ${s.dir} border varies too much along its length to be a printed border`);
+    }
   }
+  const axisName = dirA === "left" ? "left-to-right" : "top-to-bottom";
+  if (failures.length > 0) {
+    return {
+      measure: null,
+      note: `On this card ${failures.join(", and ")}. A ${axisName} ratio needs both edges, so this direction was judged by eye instead.`,
+    };
+  }
+
   const [a, b] = sides.map((s) => s.m);
-  if (a + b <= 0 || a + b > span * 0.5) return null;
+  if (a + b <= 0 || a + b > span * 0.5) {
+    return { measure: null, note: `The ${axisName} borders didn't measure sensibly on this card, so this direction was judged by eye instead.` };
+  }
   const aPct = Math.round((a / (a + b)) * 100);
   const pct: [number, number] = [aPct, 100 - aPct];
   const worst = Math.max(pct[0], pct[1]);
-  return { a, b, pct, cap: back ? centeringCapBack(worst) : centeringCap(worst) };
+  return {
+    measure: { a, b, pct, cap: back ? centeringCapBack(worst) : centeringCap(worst) },
+    note: null,
+  };
 }
 
 /** Measure centering from the flattened card. Each axis is judged on its own,
@@ -1049,13 +1076,25 @@ export function measureCentering(card: RGBAImage, back = false): CenteringMeasur
   // high made the scan sail straight past the border into the artwork.
   const thr = Math.min(90, Math.max(45, spread * 2));
 
-  const lr = measureAxis(card, border, thr, "left", "right", card.width, back);
-  const tb = measureAxis(card, border, thr, "top", "bottom", card.height, back);
+  const lrResult = measureAxis(card, border, thr, "left", "right", card.width, back);
+  const tbResult = measureAxis(card, border, thr, "top", "bottom", card.height, back);
+  const lr = lrResult.measure;
+  const tb = tbResult.measure;
   if (!lr && !tb) return null;
 
   const worst = Math.max(lr ? Math.max(...lr.pct) : 0, tb ? Math.max(...tb.pct) : 0);
   const cap = Math.min(lr ? lr.cap : 10, tb ? tb.cap : 10);
-  return { width: card.width, height: card.height, lr, tb, worst, cap, borderColor: border };
+  return {
+    width: card.width,
+    height: card.height,
+    lr,
+    tb,
+    lrNote: lrResult.note,
+    tbNote: tbResult.note,
+    worst,
+    cap,
+    borderColor: border,
+  };
 }
 
 /** Human-readable form for the report and the prompt. */

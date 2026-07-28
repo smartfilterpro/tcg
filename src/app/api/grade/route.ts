@@ -81,9 +81,9 @@ function measurementLine(m: CenteringMeasurement | null, side: "front" | "back")
   if (m.lr) axes.push(`${m.lr.pct[0]}/${m.lr.pct[1]} left-to-right`);
   if (m.tb) axes.push(`${m.tb.pct[0]}/${m.tb.pct[1]} top-to-bottom`);
   const missing = !m.lr
-    ? " Left-to-right could not be read on this card — judge that axis by eye and say so."
+    ? ` ${m.lrNote ?? "Left-to-right could not be read on this card."} Judge that axis by eye and say which edge defeated the measurement.`
     : !m.tb
-      ? " Top-to-bottom could not be read on this card — judge that axis by eye and say so."
+      ? ` ${m.tbNote ?? "Top-to-bottom could not be read on this card."} Judge that axis by eye and say which edge defeated the measurement.`
       : "";
   return (
     `- ${side}: ${axes.join(", ")}. ` +

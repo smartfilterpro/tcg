@@ -86,9 +86,8 @@ export default function CenteringDiagram({
           </p>
           {(!lr || !tb) && (
             <p className="text-[11px] text-slate-500">
-              The {lr ? "top and bottom" : "left and right"} borders on this card aren&apos;t
-              consistent enough to measure — often the case where printed text sits inside the
-              border — so that direction was judged by eye.
+              {(!lr ? measurement.lrNote : measurement.tbNote) ??
+                `The ${lr ? "top-to-bottom" : "left-to-right"} borders couldn't be read on this card, so that direction was judged by eye.`}
             </p>
           )}
         </div>
