@@ -405,7 +405,11 @@ export default function AdminPage() {
       });
       const json = await res.json();
       if (!res.ok) setReviewNotice({ ok: false, text: json.error || "Image search failed" });
-      else setReviewNotice({ ok: true, text: `Found and set an image for ${cardName}.` });
+      else
+        setReviewNotice({
+          ok: true,
+          text: `Found an image for ${cardName}${json.source ? ` from ${json.source}` : ""}.`,
+        });
     } catch {
       setReviewNotice({ ok: false, text: "Image search failed — try again." });
     }

@@ -105,6 +105,22 @@ export async function getTcgdexPriceById(prefixedId: string): Promise<number | n
   return card ? extractTcgdexPrice(card.pricing) : null;
 }
 
+/** Image URLs for a TCGdex-sourced card ("tcgdex-" id prefix).
+ *
+ *  Worth asking for even when the card was stored without a picture: search
+ *  results come back as briefs, and only the first few get their details
+ *  fetched, so plenty of cards are saved image-less while TCGdex has one all
+ *  along. Cheaper and far more reliable than sending an AI to search the web
+ *  for a picture the source database already holds. */
+export async function getTcgdexImageById(
+  prefixedId: string
+): Promise<{ small: string; large: string } | null> {
+  const id = prefixedId.replace(/^tcgdex-/, "");
+  const card = await get<TcgdexCard>(`${BASE}/cards/${encodeURIComponent(id)}`);
+  if (!card?.image) return null;
+  return { small: `${card.image}/low.webp`, large: `${card.image}/high.webp` };
+}
+
 /** Combat/battle data for a TCGdex-sourced card ("tcgdex-" id prefix) —
  *  same shape the primary database produces, so referee-mode attack
  *  buttons, HP, stages, and card text work for new-set cards too. */
