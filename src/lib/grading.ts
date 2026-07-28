@@ -79,6 +79,12 @@ LOWEST-category-dominates principle grading companies use: a card with 9s
 everywhere but a 5 surface is not a 8 — it's a 5.5-6. Provide a realistic
 range (e.g. "7-8"), and a single most-likely grade.
 
+Make that concrete so the overall never drifts above its own subgrades:
+the estimate may exceed the LOWEST subgrade by at most half a point, and
+only when that subgrade stands alone — if two or more categories sit at
+the lowest value, the estimate equals it. State which category is holding
+the grade down, and make sure that category really is your lowest.
+
 When centering was measured, the centering subgrade IS the cap the
 measurement implies (the message states it) unless the borders show a
 separate defect such as a miscut — and neither the centering subgrade nor

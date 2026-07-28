@@ -1067,7 +1067,16 @@ function measureAxis(
       failures.push(`no ${s.dir} border could be found`);
     } else if (s.m < minBorder) {
       failures.push(
-        `the ${s.dir} border reads too thin to be the printed border — something printed inside it, such as the copyright line, stops the scan early`
+        // Name something that is actually on THAT edge. Blaming the
+        // copyright line for a thin top border is nonsense — it sits at the
+        // bottom — and the grader repeats whatever reason it is given.
+        `the ${s.dir} border reads too thin to be the printed border — something printed inside it${
+          s.dir === "bottom"
+            ? ", such as the copyright line,"
+            : s.dir === "top"
+              ? ", such as the name or set banner,"
+              : ""
+        } stops the scan early`
       );
     } else if (s.mad > Math.max(4, s.m * 0.25)) {
       failures.push(`the ${s.dir} border varies too much along its length to be a printed border`);
