@@ -16,7 +16,7 @@ import {
 } from "@/lib/cardImage";
 import { uploadCardPhoto } from "@/lib/photos";
 import CardCropper from "@/components/CardCropper";
-import CenteringDiagram from "@/components/CenteringDiagram";
+import GradeReportView, { gradeColor } from "@/components/GradeReportView";
 import type { SavedGrade } from "@/app/api/grade/reports/route";
 
 const GRADE_STEPS = [
@@ -28,37 +28,11 @@ const GRADE_STEPS = [
   "Writing up the grading report…",
 ];
 
-function gradeColor(g: number): string {
-  if (g >= 9) return "bg-green-600";
-  if (g >= 7) return "bg-green-500";
-  if (g >= 5) return "bg-yellow-500";
-  if (g >= 3) return "bg-orange-500";
-  return "bg-red-500";
-}
-
-function money(n: number): string {
-  return `$${n.toFixed(2)}`;
-}
-
 interface SideState {
   photo: LoadedPhoto;
   quad: Quad;
   detected: boolean;
   preview: SidePreview | null;
-}
-
-function SubgradeTile({ label, score, notes }: { label: string; score: number; notes: string }) {
-  return (
-    <div className="rounded-lg bg-slate-50 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</span>
-        <span className={`rounded-full px-2 py-0.5 text-sm font-bold text-white ${gradeColor(score)}`}>
-          {score}
-        </span>
-      </div>
-      <p className="mt-1.5 text-xs leading-relaxed text-slate-700">{notes}</p>
-    </div>
-  );
 }
 
 /** One photo: empty slot, or the cropper plus its live flattened preview. */
@@ -130,7 +104,9 @@ function SidePanel({
             ) : (
               <p>No printed border to measure.</p>
             )}
-            {metrics?.blurry && <p className="text-amber-600">Looks soft — a sharper photo grades better.</p>}
+            {metrics?.blurry && (
+              <p className="text-amber-600">Looks soft — a sharper photo grades better.</p>
+            )}
             {metrics?.glary && <p className="text-amber-600">Glare detected — try even, indirect light.</p>}
           </div>
         </div>
@@ -152,50 +128,60 @@ function SidePanel({
   );
 }
 
-function ValuePanel({ value }: { value: GradeValue }) {
+/** A saved grade, reopened. Scrolls the whole overlay rather than a fixed
+ *  panel, which is what keeps it on screen when a phone keyboard or zoom
+ *  shifts the viewport. */
+function SavedGradeModal({
+  grade,
+  onClose,
+  onDelete,
+}: {
+  grade: SavedGrade;
+  onClose: () => void;
+  onDelete: () => void;
+}) {
   return (
-    <div className="rounded-lg border border-slate-200 p-3">
-      <h3 className="mb-2 text-sm font-semibold">💰 Is it worth grading?</h3>
-      {value.cardName && (
-        <p className="mb-2 text-xs text-slate-500">
-          Priced as {value.cardName}
-          {value.raw != null ? ` · raw about ${money(value.raw)}` : " · no raw price on file"}
-        </p>
-      )}
-      {value.rows.length > 0 && (
-        <div className="-mx-1 overflow-x-auto">
-          <table className="w-full min-w-[320px] text-xs">
-            <thead>
-              <tr className="text-left text-slate-500">
-                <th className="px-1 py-1 font-medium">If it grades</th>
-                <th className="px-1 py-1 font-medium">Sells for</th>
-                <th className="px-1 py-1 font-medium">vs. selling raw</th>
-              </tr>
-            </thead>
-            <tbody>
-              {value.rows.map((r) => (
-                <tr key={`${r.grade}-${r.tier}`} className={r.likely ? "font-semibold" : ""}>
-                  <td className="px-1 py-1">
-                    {r.tier}
-                    {r.likely && <span className="ml-1 text-[10px] text-slate-400">(estimated)</span>}
-                  </td>
-                  <td className="px-1 py-1">{money(r.value)}</td>
-                  <td className={`px-1 py-1 ${r.net >= 0 ? "text-green-700" : "text-red-600"}`}>
-                    {r.net >= 0 ? "+" : "−"}
-                    {money(Math.abs(r.net))}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-4" onClick={onClose}>
+      <div
+        className="mx-auto my-4 max-w-2xl rounded-xl bg-white p-4 shadow-xl sm:p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="truncate text-lg font-bold">{grade.cardName ?? "Saved grade"}</h2>
+            <p className="text-xs text-slate-400">
+              Graded {new Date(grade.createdAt).toLocaleString()}
+            </p>
+          </div>
+          <button className="shrink-0 text-xl leading-none text-slate-400 hover:text-slate-700" onClick={onClose}>
+            ✕
+          </button>
         </div>
-      )}
-      <p className="mt-2 text-xs leading-relaxed text-slate-700">{value.verdict}</p>
-      <p className="mt-1 text-[10px] text-slate-400">
-        Net figures subtract the {money(value.fee)} grading fee
-        {value.raw != null ? " and the raw value you'd give up" : ""}. Graded prices come from the
-        last price refresh and move around — treat them as a guide, not a quote.
-      </p>
+
+        <GradeReportView
+          report={grade.report}
+          value={grade.value}
+          measurement={grade.measurement}
+          cardImage={grade.frontUrl}
+          backImage={grade.backUrl}
+          meta={`saved ${new Date(grade.createdAt).toLocaleDateString()}`}
+          footer={
+            <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+              <button className="btn-secondary text-sm" onClick={onClose}>
+                Close
+              </button>
+              <button
+                className="text-sm text-red-600 hover:underline"
+                onClick={() => {
+                  if (confirm("Delete this saved grade?")) onDelete();
+                }}
+              >
+                Delete this grade
+              </button>
+            </div>
+          }
+        />
+      </div>
     </div>
   );
 }
@@ -214,7 +200,7 @@ export default function GradePage() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [history, setHistory] = useState<SavedGrade[] | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [openGrade, setOpenGrade] = useState<SavedGrade | null>(null);
   const urlsRef = useRef<string[]>([]);
 
   useEffect(() => {
@@ -255,13 +241,13 @@ export default function GradePage() {
     }
   }
 
-  // Re-measure shortly after the corners stop moving: instant feedback
-  // without recomputing the warp on every pointer event.
   function updateQuad(which: "front" | "back", quad: Quad) {
     const setter = which === "front" ? setFront : setBack;
     setter((s) => (s ? { ...s, quad } : s));
   }
 
+  // Re-measure shortly after the corners stop moving: instant feedback
+  // without recomputing the warp on every pointer event.
   useEffect(() => {
     if (!front) return;
     const t = setTimeout(
@@ -381,8 +367,11 @@ export default function GradePage() {
     setSaveState("idle");
   }
 
-  const cornerNote = (label: string) =>
-    report?.corners.details?.find((d) => d.label.toLowerCase().includes(label.toLowerCase()))?.note;
+  async function deleteGrade(id: string) {
+    await fetch(`/api/grade/reports?id=${id}`, { method: "DELETE" });
+    setOpenGrade(null);
+    loadHistory();
+  }
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -391,7 +380,8 @@ export default function GradePage() {
         <p className="text-sm text-slate-500">
           Place the card&apos;s corners, and PokéDeck flattens out the camera angle, measures the
           borders in software, and has {AI_NAME} judge the corners, edges and surface from
-          close-ups — then tells you whether grading it would actually pay.
+          close-ups — then tells you whether grading it would actually pay. Every grade is kept, so
+          you can come back to it.
         </p>
       </div>
 
@@ -447,139 +437,76 @@ export default function GradePage() {
       )}
 
       {report && (
-        <div className="card-panel space-y-4 p-4">
-          <div className="flex items-center gap-4">
-            <div
-              className={`flex h-20 w-20 shrink-0 flex-col items-center justify-center rounded-xl text-white ${gradeColor(report.estimated_grade)}`}
-            >
-              <span className="text-3xl font-black leading-none">{report.estimated_grade}</span>
-              <span className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide">estimate</span>
-            </div>
-            <div className="min-w-0">
-              <div className="text-lg font-bold">{report.grade_label}</div>
-              {report.card_identified && (
-                <div className="truncate text-sm text-slate-500">{report.card_identified}</div>
-              )}
-              <div className="text-xs text-slate-400">
-                Likely range {report.grade_range} · {report.confidence} confidence
-                {gradeSeconds != null ? ` · graded in ${gradeSeconds}s` : ""}
-              </div>
-            </div>
-          </div>
-
-          {/* The measured centering, drawn on the flattened card */}
-          {shown && (
-            <div className="rounded-lg border border-slate-200 p-3">
-              <h3 className="mb-2 text-sm font-semibold">📐 Centering, measured</h3>
-              <CenteringDiagram
-                cardDataUrl={shown.front.cardDataUrl}
-                measurement={shown.front.measurement}
-                label="Flattened front"
-              />
-              <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                Measured from the flattened card, so the camera angle can&apos;t skew it. The shaded
-                bands are the printed borders the ratio came from.
-              </p>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <SubgradeTile
-              label={`Centering · ${report.centering.estimate}`}
-              score={report.centering.score}
-              notes={report.centering.notes}
-            />
-            <SubgradeTile label="Corners" score={report.corners.score} notes={report.corners.notes} />
-            <SubgradeTile label="Edges" score={report.edges.score} notes={report.edges.notes} />
-            <SubgradeTile label="Surface" score={report.surface.score} notes={report.surface.notes} />
-          </div>
-
-          {/* Corner close-ups beside what the grader said about each one */}
-          {shown && (
-            <div>
-              <h3 className="mb-2 text-sm font-semibold">🔍 Corners, close up</h3>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {shown.front.corners.map((c) => (
-                  <div key={c.key} className="rounded-lg bg-slate-50 p-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={c.dataUrl} alt={`Front ${c.label}`} className="w-full rounded" />
-                    <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                      {c.label}
-                    </p>
-                    <p className="text-[11px] leading-snug text-slate-700">
-                      {cornerNote(c.label) ?? "—"}
-                    </p>
+        <div className="card-panel p-4">
+          <GradeReportView
+            report={report}
+            value={value}
+            measurement={shown?.front.measurement ?? null}
+            cardImage={shown?.front.cardDataUrl ?? null}
+            corners={shown?.front.corners}
+            meta={gradeSeconds != null ? `graded in ${gradeSeconds}s` : undefined}
+            footer={
+              <>
+                <p className="border-t border-slate-100 pt-3 text-[11px] text-slate-400">
+                  This is an AI estimate for fun and planning — not an official grade. PSA, BGS, or
+                  CGC may grade differently after physical inspection.
+                </p>
+                {saveState === "saved" && (
+                  <p className="text-xs text-green-700">✓ Saved — it&apos;s in your grading history below.</p>
+                )}
+                {saveState === "saving" && <p className="text-xs text-slate-400">Saving…</p>}
+                {saveState === "failed" && (
+                  <div className="rounded-lg bg-yellow-50 p-3 text-xs text-yellow-800">
+                    <p>Couldn&apos;t save this grade — {saveError}</p>
+                    <button
+                      className="btn-secondary mt-2 px-2 py-1 text-xs"
+                      onClick={() =>
+                        shown && report && saveGrade(report, value, shown.front.measurement, shown)
+                      }
+                    >
+                      💾 Try saving again
+                    </button>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div>
-            <h3 className="mb-1 text-sm font-semibold">📋 Grader&apos;s report</h3>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{report.summary}</p>
-          </div>
-
-          {value && <ValuePanel value={value} />}
-
-          {(report.photo_quality.front !== "good" ||
-            report.photo_quality.back !== "good" ||
-            report.photo_quality.notes) && (
-            <div className="rounded-lg bg-yellow-50 p-3 text-xs text-yellow-800">
-              📸 Photo quality — front: {report.photo_quality.front}, back: {report.photo_quality.back}.{" "}
-              {report.photo_quality.notes}
-            </div>
-          )}
-
-          {report.caveats.length > 0 && (
-            <div>
-              <h3 className="mb-1 text-sm font-semibold">⚠️ What photos can&apos;t show</h3>
-              <ul className="list-inside list-disc space-y-0.5 text-xs text-slate-600">
-                {report.caveats.map((c, i) => (
-                  <li key={i}>{c}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <p className="border-t border-slate-100 pt-3 text-[11px] text-slate-400">
-            This is an AI estimate for fun and planning — not an official grade. PSA, BGS, or CGC may
-            grade differently after physical inspection.{" "}
-            {saveState === "saved" && "Saved to your grading history."}
-            {saveState === "saving" && "Saving…"}
-            {saveState === "failed" && `Not saved — ${saveError}`}
-          </p>
-
-          <button className="btn-secondary w-full text-sm" onClick={reset}>
-            Grade another card
-          </button>
+                )}
+                <button className="btn-secondary w-full text-sm" onClick={reset}>
+                  Grade another card
+                </button>
+              </>
+            }
+          />
         </div>
       )}
 
       {history && history.length > 0 && (
         <div className="card-panel p-4">
-          <button
-            className="flex w-full items-center justify-between text-sm font-semibold"
-            onClick={() => setHistoryOpen((o) => !o)}
-          >
-            <span>🗂️ Grading history ({history.length})</span>
-            <span className="text-slate-400">{historyOpen ? "▲" : "▼"}</span>
-          </button>
-          {historyOpen && (
-            <ul className="mt-3 space-y-2">
-              {history.map((g) => (
-                <li key={g.id} className="flex items-center gap-3 rounded-lg bg-slate-50 p-2">
-                  {g.frontUrl && (
+          <h2 className="mb-1 text-sm font-semibold">🗂️ Grading history</h2>
+          <p className="mb-3 text-[11px] text-slate-400">
+            Tap any card to reopen its full report.
+          </p>
+          <ul className="space-y-2">
+            {history.map((g) => (
+              <li key={g.id}>
+                <button
+                  className="flex w-full items-center gap-3 rounded-lg bg-slate-50 p-2 text-left hover:bg-slate-100"
+                  onClick={() => setOpenGrade(g)}
+                >
+                  {g.frontUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={g.frontUrl} alt="" className="h-14 w-auto rounded" />
+                  ) : (
+                    <span className="flex h-14 w-10 items-center justify-center rounded bg-slate-200 text-slate-400">
+                      🎴
+                    </span>
                   )}
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{g.cardName ?? "Unidentified card"}</p>
-                    <p className="text-[11px] text-slate-500">
-                      {new Date(g.createdAt).toLocaleDateString()} ·{" "}
-                      {g.report?.centering?.estimate ?? ""}
-                    </p>
-                  </div>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">
+                      {g.cardName ?? "Unidentified card"}
+                    </span>
+                    <span className="block text-[11px] text-slate-500">
+                      {new Date(g.createdAt).toLocaleDateString()}
+                      {g.report?.centering?.estimate ? ` · ${g.report.centering.estimate}` : ""}
+                    </span>
+                  </span>
                   {g.estimatedGrade != null && (
                     <span
                       className={`rounded-full px-2 py-0.5 text-sm font-bold text-white ${gradeColor(g.estimatedGrade)}`}
@@ -587,21 +514,19 @@ export default function GradePage() {
                       {g.estimatedGrade}
                     </span>
                   )}
-                  <button
-                    className="text-xs text-slate-400 hover:text-red-600"
-                    aria-label="Delete saved grade"
-                    onClick={async () => {
-                      await fetch(`/api/grade/reports?id=${g.id}`, { method: "DELETE" });
-                      loadHistory();
-                    }}
-                  >
-                    ✕
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
+      )}
+
+      {openGrade && (
+        <SavedGradeModal
+          grade={openGrade}
+          onClose={() => setOpenGrade(null)}
+          onDelete={() => deleteGrade(openGrade.id)}
+        />
       )}
     </div>
   );

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import type { GradeReport } from "@/lib/grading";
+import type { CenteringMeasurement } from "@/lib/cardGeometry";
+import type { GradeValue } from "@/lib/gradeValue";
 
 export interface SavedGrade {
   id: string;
@@ -11,8 +13,8 @@ export interface SavedGrade {
   backUrl: string | null;
   createdAt: string;
   report: GradeReport;
-  measurement: unknown;
-  value: unknown;
+  measurement: CenteringMeasurement | null;
+  value: GradeValue | null;
 }
 
 const MIGRATION_HINT =
@@ -43,8 +45,8 @@ export async function GET() {
       backUrl: (r.back_url as string | null) ?? null,
       createdAt: r.created_at as string,
       report: r.report as GradeReport,
-      measurement: r.measurement,
-      value: r.value,
+      measurement: (r.measurement as CenteringMeasurement | null) ?? null,
+      value: (r.value as GradeValue | null) ?? null,
     }));
     return NextResponse.json({ migrated: true, grades });
   } catch (err) {
