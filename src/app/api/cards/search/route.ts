@@ -3,6 +3,8 @@ import { searchCards, numberKey, cleanCardName, numberVariants } from "@/lib/pok
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
 import { parseCardQuery } from "@/lib/cardQuery";
+import { normalizeForSearch } from "@/lib/text";
+import type { CardSummary } from "@/lib/types";
 
 /** The primary API has been flaky — an error there must not kill the search,
  *  because the TCGdex fallback can still answer. */
@@ -25,11 +27,60 @@ export async function GET(req: Request) {
     if (!q) return NextResponse.json({ cards: [] });
 
     const parsed = parseCardQuery(q);
-    let cards = await safeSearch({ ...parsed, pageSize: 16 });
-
     const wantedKey = parsed.number ? numberKey(parsed.number) : "";
-    const hasWantedNumber = (list: typeof cards) =>
+    const hasWantedNumber = (list: CardSummary[]) =>
       !wantedKey || list.some((c) => numberKey(c.number) === wantedKey);
+
+    // A single query shape can't cover how people type. A prefix match
+    // misses "Surfing Pikachu" when you search "pikachu"; a contains match
+    // is broad but the API may refuse a leading wildcard; token matching
+    // gets past apostrophes and punctuation. Rather than keep guessing which
+    // one the upstream matcher honours — the reason a full name returned
+    // less than a partial one — run them together and merge, so a longer
+    // query can never come back with fewer cards than a shorter one.
+    let cards: CardSummary[] = [];
+    if (parsed.name) {
+      const shapes = await Promise.all([
+        safeSearch({ ...parsed, pageSize: 60 }),
+        safeSearch({
+          nameContains: parsed.name,
+          number: parsed.number,
+          printedTotal: parsed.printedTotal,
+          pageSize: 60,
+        }),
+        safeSearch({
+          nameTokens: parsed.name,
+          number: parsed.number,
+          printedTotal: parsed.printedTotal,
+          pageSize: 60,
+        }),
+      ]);
+      const seen = new Set<string>();
+      for (const shape of shapes) {
+        for (const c of shape) {
+          if (seen.has(c.id)) continue;
+          seen.add(c.id);
+          cards.push(c);
+        }
+      }
+      // Closest match first: the exact name, then names starting with what
+      // was typed, then names merely containing it — newest printing first
+      // within each band.
+      const wanted = normalizeForSearch(cleanCardName(parsed.name));
+      const rank = (c: CardSummary) => {
+        const n = normalizeForSearch(c.name);
+        if (n === wanted) return 0;
+        if (n.startsWith(wanted)) return 1;
+        if (n.includes(wanted)) return 2;
+        return 3;
+      };
+      cards.sort(
+        (a, b) => rank(a) - rank(b) || (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "")
+      );
+      cards = cards.slice(0, 40);
+    } else {
+      cards = await safeSearch({ ...parsed, pageSize: 16 });
+    }
 
     // The upstream API doesn't reliably honour a parenthesised OR of the
     // different ways a collector number can be spelled, so a card printed
@@ -78,15 +129,41 @@ export async function GET(req: Request) {
       }
     }
 
-    // A full name can match exactly and return ONLY the plainly-named
-    // printings — which is why searching "Rayquaza" used to give fewer cards
-    // than the truncated "Rayquaz" (that found nothing, so it fell through to
-    // the broader token search). Widen whenever the result set is thin,
-    // keeping the exact matches first.
-    if (parsed.name && !parsed.number && cards.length > 0 && cards.length < 8) {
-      const wider = await safeSearch({ nameTokens: parsed.name, pageSize: 16 });
+    // A single query shape can't cover how people type. A prefix match
+    // misses "Surfing Pikachu" when you search "pikachu"; a contains match
+    // is broad but the API may refuse a leading wildcard; token matching
+    // handles apostrophes and punctuation. Rather than guess which one the
+    // upstream matcher honours — the reason a full name kept returning less
+    // than a partial one — run them together and merge. A longer query can
+    // then never return fewer cards than a shorter one.
+    if (parsed.name) {
+      const shapes = await Promise.all([
+        safeSearch({ name: parsed.name, number: parsed.number, pageSize: 60 }),
+        safeSearch({ nameContains: parsed.name, number: parsed.number, pageSize: 60 }),
+        safeSearch({ nameTokens: parsed.name, number: parsed.number, pageSize: 60 }),
+      ]);
       const seen = new Set(cards.map((c) => c.id));
-      cards = [...cards, ...wider.filter((c) => !seen.has(c.id))].slice(0, 20);
+      for (const shape of shapes) {
+        for (const c of shape) {
+          if (seen.has(c.id)) continue;
+          seen.add(c.id);
+          cards.push(c);
+        }
+      }
+      // Closest match first: the exact name, then names starting with what
+      // was typed, then everything else, newest printing first within each.
+      const wanted = normalizeForSearch(cleanCardName(parsed.name));
+      const rank = (c: (typeof cards)[number]) => {
+        const n = normalizeForSearch(c.name);
+        if (n === wanted) return 0;
+        if (n.startsWith(wanted)) return 1;
+        if (n.includes(wanted)) return 2;
+        return 3;
+      };
+      cards.sort(
+        (a, b) => rank(a) - rank(b) || (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "")
+      );
+      cards = cards.slice(0, 40);
     }
 
     // Consult TCGdex (usually has new sets/promos months earlier) when the
@@ -107,7 +184,7 @@ export async function GET(req: Request) {
         if (alt.length > 0) source = "tcgdex";
       } else if (altNumberMatches.length > 0) {
         // Put the number-exact fallback results first, keep primary as alternatives
-        cards = [...altNumberMatches, ...cards].slice(0, 20);
+        cards = [...altNumberMatches, ...cards].slice(0, 40);
         source = "mixed";
       }
     }
