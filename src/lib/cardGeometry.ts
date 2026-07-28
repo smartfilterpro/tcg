@@ -1012,14 +1012,16 @@ function scanBorder(
   const startFrac = 0.008;
   const maxFrac = 0.3;
   const widths: number[] = [];
+  const at = (d: number, a: number): [number, number, number] => {
+    const pos = dir === "left" || dir === "top" ? d : across - 1 - d;
+    return horizontal ? px(card, pos, a) : px(card, a, pos);
+  };
   let tried = 0;
   for (let a = Math.floor(along * 0.18); a < along * 0.82; a += 2) {
     tried++;
     let run = 0;
     for (let d = Math.floor(across * startFrac); d < across * maxFrac; d++) {
-      const pos = dir === "left" || dir === "top" ? d : across - 1 - d;
-      const [r, g, b] = horizontal ? px(card, pos, a) : px(card, a, pos);
-      if (colorDist([r, g, b], border) > thr) {
+      if (colorDist(at(d, a), border) > thr) {
         run++;
         if (run >= 3) {
           widths.push(d - 2);
@@ -1067,16 +1069,13 @@ function measureAxis(
       failures.push(`no ${s.dir} border could be found`);
     } else if (s.m < minBorder) {
       failures.push(
-        // Name something that is actually on THAT edge. Blaming the
-        // copyright line for a thin top border is nonsense — it sits at the
-        // bottom — and the grader repeats whatever reason it is given.
-        `the ${s.dir} border reads too thin to be the printed border — something printed inside it${
+        `the ${s.dir} border reads too thin to be the printed border — printing inside it${
           s.dir === "bottom"
-            ? ", such as the copyright line,"
+            ? " (the copyright line)"
             : s.dir === "top"
-              ? ", such as the name or set banner,"
+              ? " (the name or set banner)"
               : ""
-        } stops the scan early`
+        } stops the scan short of the real edge`
       );
     } else if (s.mad > Math.max(4, s.m * 0.25)) {
       failures.push(`the ${s.dir} border varies too much along its length to be a printed border`);
@@ -1084,9 +1083,17 @@ function measureAxis(
   }
   const axisName = dirA === "left" ? "left-to-right" : "top-to-bottom";
   if (failures.length > 0) {
+    // Say plainly that this is a limit of the method, not a fault in the
+    // card. Top-to-bottom fails on most modern cards for the same structural
+    // reason every time, and a note that reads like a defect invites the
+    // owner to go looking for one.
+    const known =
+      axisName === "top-to-bottom"
+        ? " That is common on modern cards, where the top and bottom borders carry printed text, and it says nothing about the card itself."
+        : "";
     return {
       measure: null,
-      note: `On this card ${failures.join(", and ")}. A ${axisName} ratio needs both edges, so this direction was judged by eye instead.`,
+      note: `On this card ${failures.join(", and ")}. A ${axisName} ratio needs both edges, so rather than measure off a line of text this direction was judged by eye.${known}`,
     };
   }
 

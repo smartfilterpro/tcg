@@ -11,6 +11,8 @@ import {
   type BattleState,
 } from "@/lib/battle";
 import { battleErrorResponse } from "../../lib";
+import { BOT_ID } from "@/lib/battleBot";
+import { runBotTurn } from "@/lib/battleBotTurn";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -45,8 +47,12 @@ export async function POST(req: Request, { params }: Params) {
         );
       }
 
+      // A practice battle has no guest row; the opponent is the bot.
+      const vsBot = battle.guest_user == null;
       const oppId =
-        battle.host_user === user.id ? (battle.guest_user as string) : (battle.host_user as string);
+        battle.host_user === user.id
+          ? ((battle.guest_user as string | null) ?? BOT_ID)
+          : (battle.host_user as string);
       const state = battle.state as BattleState;
       const myName = state.names?.[user.id] ?? "Trainer";
 
@@ -66,12 +72,29 @@ export async function POST(req: Request, { params }: Params) {
         }
       }
 
+      // The practice opponent takes its whole turn here, inside the same
+      // version-guarded write, so the board the player gets back already has
+      // the reply in it — no second round trip and nothing to poll for.
+      if (vsBot && status === "active" && state.turnUser === BOT_ID) {
+        const botWinner = runBotTurn(state, user.id);
+        if (botWinner) {
+          status = "finished";
+          winner = botWinner;
+          pushLogRaw(state, `🏆 ${state.names?.[botWinner] ?? "The winner"} wins the battle!`);
+        }
+      }
+
+      // winner_user is a uuid column and the bot has no profile, so a bot win
+      // is recorded as "finished with nobody in the winner column". The log
+      // and the state still name it; only the database row stays typed.
+      const winnerId = winner === BOT_ID ? null : winner;
+
       const { data: updated, error: updateErr } = await admin
         .from("battles")
         .update({
           state,
           status,
-          winner_user: winner ?? battle.winner_user,
+          winner_user: winnerId ?? battle.winner_user,
           version: (battle.version as number) + 1,
           updated_at: new Date().toISOString(),
         })

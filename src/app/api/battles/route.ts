@@ -3,6 +3,10 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/auth";
 import { buildSide, pushLogRaw, type BattleState } from "@/lib/battle";
+import { BOT_ID } from "@/lib/battleBot";
+
+/** Shown as the practice opponent's name in the log and on the board. */
+const BOT_NAME = "Trainer AI";
 import {
   battleErrorResponse,
   displayName,
@@ -18,7 +22,8 @@ export const maxDuration = 120;
 /** GET: my battles (host or guest), newest activity first. */
 export async function GET() {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
+    const isAdmin = profile?.role === "admin";
     const admin = createAdminClient();
     const { data, error } = await admin
       .from("battles")
@@ -27,7 +32,9 @@ export async function GET() {
       .order("updated_at", { ascending: false })
       .limit(25);
     if (error) {
-      if (isMissingBattlesTable(error)) return NextResponse.json({ battles: [], migrated: false });
+      if (isMissingBattlesTable(error)) {
+        return NextResponse.json({ battles: [], migrated: false, isAdmin });
+      }
       throw error;
     }
 
@@ -54,17 +61,21 @@ export async function GET() {
 
     const battles = (data ?? []).map((b) => {
       const oppId = b.host_user === user.id ? (b.guest_user as string | null) : (b.host_user as string);
+      // A practice battle is live with nobody in the second seat — that seat
+      // belongs to the bot, which has no profile row to name.
+      const vsBot = !b.guest_user && b.status !== "waiting";
       return {
         id: b.id as string,
         code: b.code as string,
         status: b.status as string,
         youAreHost: b.host_user === user.id,
-        opponentName: oppId ? nameById.get(oppId) ?? "Trainer" : null,
+        vsBot,
+        opponentName: vsBot ? BOT_NAME : oppId ? nameById.get(oppId) ?? "Trainer" : null,
         youWon: b.status === "finished" ? b.winner_user === user.id : null,
         updatedAt: b.updated_at as string,
       };
     });
-    return NextResponse.json({ battles, migrated: true });
+    return NextResponse.json({ battles, migrated: true, isAdmin });
   } catch (err) {
     return battleErrorResponse(err);
   }
@@ -75,10 +86,14 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const { user, profile } = await requireUser();
-    const { deckId, allowShared } = (await req.json()) as {
+    const { deckId, allowShared, vsBot, botDeckId } = (await req.json()) as {
       deckId?: string;
       allowShared?: boolean;
+      vsBot?: boolean;
+      botDeckId?: string;
     };
+    // Practice battles are admin-only while the opponent is being tried out.
+    const practice = vsBot === true && profile?.role === "admin";
     if (!deckId || typeof deckId !== "string") {
       return NextResponse.json({ error: "Pick a deck to battle with." }, { status: 400 });
     }
@@ -95,6 +110,44 @@ export async function POST(req: Request) {
     const admin = createAdminClient();
     const cards = await expandDeck(admin, deck, "h", { userId: user.id });
     const myName = displayName(profile, user.email);
+
+    if (practice) {
+      const botDeck = await loadBattleDeck(supabase, user.id, botDeckId || deckId, true);
+      if ("error" in botDeck) {
+        return NextResponse.json({ error: botDeck.error }, { status: 404 });
+      }
+      const botCards = await expandDeck(admin, botDeck.deck, "b", { userId: user.id });
+      // The human always goes first: no coin flip to explain, and it keeps
+      // the opening turn's rules the same every time you test.
+      const state: BattleState = {
+        sides: { [user.id]: buildSide(cards), [BOT_ID]: buildSide(botCards) },
+        names: { [user.id]: myName, [BOT_ID]: BOT_NAME },
+        allowSharedDecks,
+        firstUser: user.id,
+        turnUser: user.id,
+        turnCount: 1,
+        log: [],
+      };
+      pushLogRaw(
+        state,
+        `${myName} started a practice battle: “${deck.name}” against ${BOT_NAME} playing “${botDeck.deck.name}”. You go first.`
+      );
+      pushLogRaw(
+        state,
+        "Prize cards are set. Play a Basic Pokémon as your Active, bench any others, then End turn."
+      );
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const code = makeBattleCode();
+        const { data: created, error } = await admin
+          .from("battles")
+          .insert({ code, host_user: user.id, status: "active", state })
+          .select("id, code")
+          .single();
+        if (!error) return NextResponse.json({ id: created.id, code: created.code });
+        if (error.code !== "23505") throw error;
+      }
+      return NextResponse.json({ error: "Couldn't create the battle — try again." }, { status: 500 });
+    }
 
     const state: BattleState = {
       sides: { [user.id]: buildSide(cards) },
