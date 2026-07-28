@@ -657,6 +657,35 @@ function minEdgeContrast(img: RGBAImage, quad: Quad): number {
   return weakest === Infinity ? 0 : weakest;
 }
 
+/** Is this quad shaped like a card seen through a phone camera?
+ *
+ *  A rectangle photographed with mild perspective keeps its opposite edges
+ *  roughly parallel and its corners near square. The strongest colour step
+ *  in a photo is often NOT the card's border — on a neon full-art card the
+ *  artwork steps harder than the edge does — so a lopsided quad drawn inside
+ *  the picture could out-score the card itself. It cannot fake the shape:
+ *  the one that beat the real outline had a top edge at -30 degrees and a
+ *  bottom edge at 2. */
+function isCardShaped(quad: Quad): boolean {
+  const angle = (a: Point, b: Point) => (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+  /** Smallest difference between two directions, treating opposite as equal. */
+  const gap = (p: number, q: number) => {
+    let d = Math.abs(((p - q) % 180) + 180) % 180;
+    if (d > 90) d = 180 - d;
+    return d;
+  };
+  const top = angle(quad[0], quad[1]);
+  const bottom = angle(quad[3], quad[2]);
+  const left = angle(quad[0], quad[3]);
+  const right = angle(quad[1], quad[2]);
+  if (gap(top, bottom) > 14) return false;
+  if (gap(left, right) > 14) return false;
+  // Corners near square: the sides should run across the ends, not with them.
+  if (Math.abs(gap(top, left) - 90) > 20) return false;
+  if (Math.abs(gap(bottom, right) - 90) > 20) return false;
+  return true;
+}
+
 /** Locate the card's four corners in a photo. Returns null when it can't be
  *  found confidently (low contrast against the background, card cropped off
  *  the frame) — callers fall back to hand-placed corners rather than
@@ -707,6 +736,10 @@ export function detectCardQuad(source: RGBAImage): Quad | null {
     if (quad.some((p) => p.x < -w * 0.05 || p.x > w * 1.05 || p.y < -h * 0.05 || p.y > h * 1.05)) {
       continue;
     }
+    // A card seen through a camera stays a rectangle. This is what rules out
+    // a lopsided quad drawn inside the artwork, which edge contrast alone
+    // cannot: neon artwork steps harder than the card's own border.
+    if (!isCardShaped(quad)) continue;
     const contrast = minEdgeContrast(img, quad);
     const score = contrast - Math.abs(ratio - CARD_ASPECT) * 120;
     if (!best || score > best.score) best = { quad, score };
