@@ -390,12 +390,24 @@ export default function BattleBoardPage() {
 
       {/* ===== Log + notices ===== */}
       {notice && <div className="rounded-lg bg-red-50 p-2 text-center text-xs text-red-700">{notice}</div>}
-      <div ref={logRef} className="card-panel h-24 overflow-y-auto p-2 text-xs text-slate-600">
-        {view.log.map((l, i) => (
-          <div key={i} className="py-0.5">
-            {l.text}
-          </div>
-        ))}
+      <div className="card-panel p-2">
+        <div ref={logRef} className="h-24 overflow-y-auto text-xs text-slate-600">
+          {view.log.map((l, i) => (
+            <div key={i} className="py-0.5">
+              {l.text}
+            </div>
+          ))}
+        </div>
+        <div className="mt-1 flex justify-end border-t border-slate-100 pt-1">
+          <a
+            href={`/api/battles/${id}/log`}
+            download
+            className="text-[11px] text-slate-400 hover:text-poke-blue hover:underline"
+            title="Download the whole game log as a text file — including the early turns that have scrolled out of view here"
+          >
+            ⬇ Export log
+          </a>
+        </div>
       </div>
 
       {/* ===== My side ===== */}
@@ -584,6 +596,14 @@ export default function BattleBoardPage() {
                 onClick={() => act({ type: "handToDeckAll" })}
               >
                 🂠 Hand into deck
+              </button>
+              <button
+                className="chip bg-slate-100 text-slate-600"
+                disabled={busy || me.hand.length === 0}
+                onClick={() => act({ type: "handToDeckAll", where: "bottom" })}
+                title="Shuffle your hand and put it on the bottom of your deck, leaving the rest of the deck in order (Vivillon's Grand Wing, Roxanne-style effects)"
+              >
+                ⬇️ Hand to bottom
               </button>
               <button
                 className="chip bg-slate-100 text-slate-600"

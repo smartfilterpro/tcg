@@ -120,7 +120,7 @@ export type BattleAction = { override?: boolean } & (
   | { type: "shuffleDeck"; keepTop?: number }
   | { type: "mulligan" }
   | { type: "discardHand" }
-  | { type: "handToDeckAll" }
+  | { type: "handToDeckAll"; where?: "shuffle" | "bottom" | "top" }
   | { type: "redrawSeven" }
   | { type: "handToActive"; handIndex: number; mode: "new" | "evolve" | "attach" }
   | { type: "handToBench"; handIndex: number; benchIndex?: number; mode: "new" | "evolve" | "attach" }
@@ -162,7 +162,10 @@ export interface ActionResult {
 export class BattleError extends Error {}
 
 const MAX_BENCH = 5;
-const MAX_LOG = 200;
+// Enough that a whole game survives to be exported. A full six-prize game
+// with manual plays runs a couple of hundred entries, and the old 200 was
+// quietly dropping the opening of any long game.
+const MAX_LOG = 600;
 
 export function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -420,10 +423,26 @@ export function applyAction(
     case "handToDeckAll": {
       const n = me.hand.length;
       if (n === 0) throw new BattleError("Your hand is already empty.");
-      me.deck.push(...me.hand);
+      // Index 0 is the top of the deck, so "bottom" is a plain push. The
+      // hand is still shuffled first — cards like Vivillon's Grand Wing say
+      // "shuffles their hand and puts it on the bottom", which hides the
+      // order you were holding without disturbing the deck underneath.
+      const where = action.where ?? "shuffle";
+      if (where === "top") {
+        me.deck.unshift(...shuffle(me.hand));
+      } else {
+        me.deck.push(...(where === "bottom" ? shuffle(me.hand) : me.hand));
+      }
       me.hand = [];
-      me.deck = shuffle(me.deck);
-      return { text: `shuffled their hand (${n} card${n === 1 ? "" : "s"}) back into their deck` };
+      if (where === "shuffle") me.deck = shuffle(me.deck);
+      const cards = `${n} card${n === 1 ? "" : "s"}`;
+      const text =
+        where === "bottom"
+          ? `shuffled their hand and put it on the bottom of their deck (${cards})`
+          : where === "top"
+            ? `put their hand on top of their deck (${cards})`
+            : `shuffled their hand (${cards}) back into their deck`;
+      return { text };
     }
     case "redrawSeven": {
       // Hand AND prizes go back before re-dealing. Prizes are set when the
