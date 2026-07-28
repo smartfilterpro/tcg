@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
 import { matchesSearch } from "@/lib/text";
 import type { CollectionItem, Deck, DeckCardEntry, DeckSuggestion } from "@/lib/types";
+import type { CardDetail } from "@/app/api/cards/details/route";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -627,6 +628,37 @@ export default function DecksPage() {
   // name → image url, fallback for entries that never matched a card id
   // (e.g. "Basic Fighting Energy" while the card record says "Fighting Energy")
   const [nameImages, setNameImages] = useState<Record<string, string | null>>({});
+  // The card whose text is open, and the text we've fetched so far.
+  const [reading, setReading] = useState<DeckCardEntry | null>(null);
+  const [details, setDetails] = useState<Record<string, CardDetail>>({});
+  const [readingBusy, setReadingBusy] = useState(false);
+
+  /** Key a card's text by its id when it has one, and by name otherwise —
+   *  the same split the images lookup uses for deck entries that never
+   *  matched a card record. */
+  const detailKey = (c: DeckCardEntry) => c.card_id ?? `name:${c.name}`;
+
+  async function openCard(card: DeckCardEntry) {
+    setReading(card);
+    if (details[detailKey(card)]) return;
+    setReadingBusy(true);
+    try {
+      const params = new URLSearchParams();
+      if (card.card_id) params.set("ids", card.card_id);
+      else params.set("names", card.name);
+      const res = await fetch(`/api/cards/details?${params.toString()}`);
+      const json = await res.json();
+      if (res.ok) {
+        const found: CardDetail | undefined = card.card_id
+          ? json.byId?.[card.card_id]
+          : json.byName?.[card.name];
+        if (found) setDetails((prev) => ({ ...prev, [detailKey(card)]: found }));
+      }
+    } catch {
+      // Leave it unresolved; the sheet says so rather than pretending.
+    }
+    setReadingBusy(false);
+  }
 
   async function ensureImages(cards: DeckCardEntry[]) {
     const wanted = [
@@ -1035,6 +1067,8 @@ export default function DecksPage() {
           </div>
         </div>
       )}
+
+      <CardReader />
     </div>
   );
 
@@ -1051,7 +1085,13 @@ export default function DecksPage() {
                 </h4>
                 <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
                   {groups[cat].map((c, i) => (
-                    <div key={i} title={c.reason ?? c.name}>
+                    <button
+                      key={i}
+                      type="button"
+                      className="text-left"
+                      title={c.reason ?? `Read what ${c.name} does`}
+                      onClick={() => openCard(c)}
+                    >
                       <div className="relative">
                         {(c.card_id && cardImages[c.card_id]) || nameImages[c.name] ? (
                           <div className="aspect-[63/88] w-full overflow-hidden rounded">
@@ -1075,12 +1115,120 @@ export default function DecksPage() {
                       <div className="mt-0.5 truncate text-center text-[10px] text-slate-500">
                         {c.name}
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
             )
         )}
+      </div>
+    );
+  }
+
+  /** Reading a card from a deck list. Scrolls the whole overlay rather than
+   *  a fixed panel, which is what keeps it on screen on a phone. */
+  function CardReader() {
+    if (!reading) return null;
+    const d = details[detailKey(reading)];
+    const image = (reading.card_id ? cardImages[reading.card_id] : null) ?? nameImages[reading.name] ?? d?.image;
+    const kind = [d?.stage, d?.trainerType, d?.supertype].find(Boolean) ?? reading.category;
+    const nothing = d && d.attacks.length === 0 && d.abilities.length === 0 && d.rules.length === 0;
+    return (
+      <div
+        className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-4"
+        onClick={() => setReading(null)}
+      >
+        <div
+          className="mx-auto my-4 max-w-lg rounded-xl bg-white p-4 shadow-xl sm:p-5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="mb-3 flex items-start gap-3">
+            {image && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={image} alt={reading.name} className="w-24 shrink-0 rounded-lg shadow-sm" />
+            )}
+            <div className="min-w-0 flex-1">
+              <h2 className="break-words text-lg font-bold">{d?.name ?? reading.name}</h2>
+              <p className="text-xs text-slate-500">
+                {[kind, d?.hp ? `${d.hp} HP` : null, (d?.types ?? []).join("/") || null]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+              {d?.setName && (
+                <p className="text-[11px] text-slate-400">
+                  {d.setName}
+                  {d.number ? ` · #${d.number}` : ""}
+                  {d.rarity ? ` · ${d.rarity}` : ""}
+                </p>
+              )}
+              <p className="mt-0.5 text-[11px] text-slate-400">×{reading.quantity} in this deck</p>
+            </div>
+            <button
+              className="shrink-0 text-xl leading-none text-slate-400 hover:text-slate-700"
+              onClick={() => setReading(null)}
+            >
+              ✕
+            </button>
+          </div>
+
+          {reading.reason && (
+            <p className="mb-3 rounded-lg bg-poke-blue/5 p-2 text-xs text-slate-600">
+              <b>Why it&apos;s here:</b> {reading.reason}
+            </p>
+          )}
+
+          {readingBusy && !d && <p className="text-sm text-slate-400">Looking up the card…</p>}
+
+          {d && (
+            <div className="space-y-3">
+              {d.abilities.map((a) => (
+                <div key={a.name}>
+                  <p className="text-sm font-semibold">
+                    <span className="mr-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-red-700">
+                      Ability
+                    </span>
+                    {a.name}
+                  </p>
+                  <p className="text-sm leading-relaxed text-slate-700">{a.text}</p>
+                </div>
+              ))}
+              {d.attacks.map((a, i) => (
+                <div key={i}>
+                  <p className="flex items-baseline justify-between gap-2 text-sm font-semibold">
+                    <span>
+                      {a.cost.filter((c) => c.toLowerCase() !== "free").length > 0 && (
+                        <span className="mr-1 text-slate-400">
+                          {"⚡".repeat(a.cost.filter((c) => c.toLowerCase() !== "free").length)}
+                        </span>
+                      )}
+                      {a.name}
+                    </span>
+                    <span className="shrink-0 text-slate-500">{a.damage || "—"}</span>
+                  </p>
+                  {a.text && <p className="text-sm leading-relaxed text-slate-700">{a.text}</p>}
+                </div>
+              ))}
+              {d.rules.map((r, i) => (
+                <p key={i} className="text-sm leading-relaxed text-slate-700">
+                  {r}
+                </p>
+              ))}
+              {nothing && (
+                <p className="text-sm text-slate-500">
+                  No printed text on file for this one yet. Basic Energy has none; for anything
+                  else it fills in the first time the card is used in a battle or picked up by the
+                  nightly refresh.
+                </p>
+              )}
+            </div>
+          )}
+
+          {!readingBusy && !d && (
+            <p className="text-sm text-slate-500">
+              Couldn&apos;t find this card in the database, so there&apos;s no text to show.
+            </p>
+          )}
+        </div>
       </div>
     );
   }
