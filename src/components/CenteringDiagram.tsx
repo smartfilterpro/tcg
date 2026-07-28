@@ -13,17 +13,25 @@ export default function CenteringDiagram({
   cardDataUrl,
   measurement,
   label,
+  compact = false,
 }: {
   cardDataUrl: string;
   measurement: CenteringMeasurement | null;
   label?: string;
+  /** Image and bands only — for the live preview, where the surrounding
+   *  panel already carries the numbers. */
+  compact?: boolean;
 }) {
   const band = "absolute bg-sky-400/35 backdrop-brightness-95";
   const tick = "absolute text-[10px] font-semibold text-white drop-shadow";
 
   return (
     <div>
-      <div className="relative mx-auto max-w-[260px] overflow-hidden rounded-lg bg-slate-900 shadow-sm">
+      <div
+        className={`relative overflow-hidden rounded-lg bg-slate-900 shadow-sm ${
+          compact ? "w-[86px]" : "mx-auto max-w-[260px]"
+        }`}
+      >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={cardDataUrl} alt={label ?? "Flattened card"} className="block w-full" />
         {measurement && (
@@ -55,7 +63,7 @@ export default function CenteringDiagram({
         )}
       </div>
 
-      {measurement ? (
+      {compact ? null : measurement ? (
         <div className="mt-2 space-y-1 text-center">
           <p className="text-sm font-semibold">
             {measurement.lr[0]}/{measurement.lr[1]} left-to-right ·{" "}
