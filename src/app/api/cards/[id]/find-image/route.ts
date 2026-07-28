@@ -4,10 +4,17 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage, checkAiBudget } from "@/lib/usage";
+import { getTcgdexImageById } from "@/lib/tcgdex";
+import { getCardById } from "@/lib/pokemontcg";
 
 export const maxDuration = 120;
 
 type Params = { params: Promise<{ id: string }> };
+
+interface Candidate {
+  url: string;
+  source: string;
+}
 
 const IMAGE_URL_RE = /https?:\/\/[^\s"'<>)\]]+\.(?:png|jpe?g|webp)(?:\?[^\s"'<>)\]]*)?/gi;
 
@@ -64,6 +71,143 @@ export async function POST(req: Request, { params }: Params) {
       );
     }
 
+    // Every rejection is recorded. "None could be downloaded" on its own is
+    // not something anyone can act on — or reasonably believe.
+    const attempts: string[] = [];
+    const note = (url: string, why: string) => {
+      let host = url;
+      try {
+        host = new URL(url).host;
+      } catch {
+        /* keep the raw string */
+      }
+      attempts.push(`${host}: ${why}`);
+    };
+
+    /** Download, validate, store our own copy, and point the card at it.
+     *  Returns null if every candidate was rejected. We always keep a copy
+     *  rather than saving someone else's link: hotlinked images rot and many
+     *  CDNs block cross-site embedding. */
+    async function tryCandidates(
+      candidates: Candidate[]
+    ): Promise<{ url: string; source: string } | null> {
+      for (const { url, source } of candidates) {
+        try {
+          const imgRes = await fetch(url, {
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+              Accept: "image/*",
+            },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!imgRes.ok) {
+            note(url, `HTTP ${imgRes.status}`);
+            continue;
+          }
+          const contentType = imgRes.headers.get("content-type") ?? "";
+          if (!contentType.startsWith("image/")) {
+            note(url, `served ${contentType || "no content-type"}, not an image`);
+            continue;
+          }
+          const buffer = Buffer.from(await imgRes.arrayBuffer());
+          if (buffer.length < 5_000) {
+            note(url, `only ${buffer.length} bytes — too small to be a card scan`);
+            continue;
+          }
+          if (buffer.length > 8_000_000) {
+            note(url, `${Math.round(buffer.length / 1_000_000)}MB — too large`);
+            continue;
+          }
+
+          const admin = createAdminClient();
+          const ext = contentType.includes("png")
+            ? "png"
+            : contentType.includes("webp")
+              ? "webp"
+              : "jpg";
+          const path = `${user.id}/web-${id.replace(/[^a-zA-Z0-9-]/g, "_")}-${Date.now()}.${ext}`;
+          const { error: uploadErr } = await admin.storage
+            .from("card-photos")
+            .upload(path, buffer, { contentType, upsert: true });
+          if (uploadErr) {
+            note(url, `couldn't be saved to storage (${uploadErr.message})`);
+            continue;
+          }
+          const publicUrl = admin.storage.from("card-photos").getPublicUrl(path).data.publicUrl;
+
+          // Admin-found images lock, like every other admin image decision.
+          // Retry without the lock flag on failure (pre-migration-007 DBs).
+          let { error: updateErr } = await supabase
+            .from("cards")
+            .update({
+              image_small: publicUrl,
+              image_large: publicUrl,
+              ...(asAdmin ? { image_locked: true } : {}),
+            })
+            .eq("id", id);
+          if (updateErr && asAdmin) {
+            ({ error: updateErr } = await supabase
+              .from("cards")
+              .update({ image_small: publicUrl, image_large: publicUrl })
+              .eq("id", id));
+          }
+          if (updateErr) throw updateErr;
+
+          // Keep as a candidate for admin review (best-effort) — but not when
+          // the ADMIN ran the search: that's a final decision, and a candidate
+          // row would pin the card in the review list forever.
+          if (!asAdmin) {
+            await supabase
+              .from("card_image_candidates")
+              .upsert(
+                { card_id: id, url: publicUrl, uploaded_by: user.id },
+                { onConflict: "card_id,url", ignoreDuplicates: true }
+              )
+              .then(() => {});
+          }
+
+          return { url: publicUrl, source };
+        } catch (err) {
+          note(url, err instanceof Error ? err.message.slice(0, 80) : "download failed");
+        }
+      }
+      return null;
+    }
+
+    // 1) Ask the database this card came from. These cards were saved from a
+    // search, and search results arrive as briefs — only the first few have
+    // their details fetched, so a card can sit here with no picture while its
+    // own source has had one all along. Free, and guaranteed to be the right
+    // printing.
+    const fromSource: Candidate[] = [];
+    try {
+      if (id.startsWith("tcgdex-")) {
+        const img = await getTcgdexImageById(id);
+        if (img) {
+          fromSource.push({ url: img.large, source: "TCGdex" });
+          fromSource.push({ url: img.small, source: "TCGdex" });
+        }
+      } else if (!id.startsWith("custom-")) {
+        const primary = await getCardById(id);
+        if (primary?.imageLarge)
+          fromSource.push({ url: primary.imageLarge, source: "pokemontcg.io" });
+        if (primary?.imageSmall)
+          fromSource.push({ url: primary.imageSmall, source: "pokemontcg.io" });
+      }
+    } catch (err) {
+      attempts.push(
+        `source database: ${err instanceof Error ? err.message.slice(0, 80) : "unreachable"}`
+      );
+    }
+    if (fromSource.length === 0) attempts.push("source database: has no image for this card");
+
+    const direct = await tryCandidates(fromSource);
+    if (direct) return NextResponse.json({ imageUrl: direct.url, source: direct.source });
+
+    // 2) Nothing usable from the source, so search the web — which is the
+    // point of the button. This runs whether the database had no image at
+    // all or had one that wouldn't download.
     const client = anthropic();
     const response = await client.messages.create({
       model: MODEL,
@@ -84,80 +228,29 @@ export async function POST(req: Request, { params }: Params) {
       .filter((b) => b.type === "text")
       .map((b) => (b.type === "text" ? b.text : ""))
       .join("\n");
-    const urls = [...new Set(text.match(IMAGE_URL_RE) ?? [])].slice(0, 5);
-    if (urls.length === 0) {
+    const searched: Candidate[] = [...new Set(text.match(IMAGE_URL_RE) ?? [])]
+      .slice(0, 5)
+      .map((url) => ({ url, source: "web search" }));
+
+    if (searched.length === 0) {
       return NextResponse.json(
-        { error: "Couldn't find an image for this exact card online — try adding your own photo." },
+        {
+          error: `The web search turned up no direct image file for this exact printing (${attempts.join("; ")}). Upload your own photo instead.`,
+          attempts,
+        },
         { status: 404 }
       );
     }
 
-    // Download the best candidate we can validate, then store OUR OWN copy —
-    // hotlinked images rot and many CDNs block cross-site embedding.
-    for (const url of urls) {
-      try {
-        const imgRes = await fetch(url, {
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
-            Accept: "image/*",
-          },
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!imgRes.ok) continue;
-        const contentType = imgRes.headers.get("content-type") ?? "";
-        if (!contentType.startsWith("image/")) continue;
-        const buffer = Buffer.from(await imgRes.arrayBuffer());
-        if (buffer.length < 5_000 || buffer.length > 8_000_000) continue; // skip icons & monsters
+    const found = await tryCandidates(searched);
+    if (found) return NextResponse.json({ imageUrl: found.url, source: found.source });
 
-        const admin = createAdminClient();
-        const ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
-        const path = `${user.id}/web-${id.replace(/[^a-zA-Z0-9-]/g, "_")}-${Date.now()}.${ext}`;
-        const { error: uploadErr } = await admin.storage
-          .from("card-photos")
-          .upload(path, buffer, { contentType, upsert: true });
-        if (uploadErr) continue;
-        const publicUrl = admin.storage.from("card-photos").getPublicUrl(path).data.publicUrl;
-
-        // Admin-found images lock, like every other admin image decision.
-        // Retry without the lock flag on failure (pre-migration-007 DBs).
-        let { error: updateErr } = await supabase
-          .from("cards")
-          .update({
-            image_small: publicUrl,
-            image_large: publicUrl,
-            ...(asAdmin ? { image_locked: true } : {}),
-          })
-          .eq("id", id);
-        if (updateErr && asAdmin) {
-          ({ error: updateErr } = await supabase
-            .from("cards")
-            .update({ image_small: publicUrl, image_large: publicUrl })
-            .eq("id", id));
-        }
-        if (updateErr) throw updateErr;
-
-        // Keep as a candidate for admin review (best-effort) — but not when
-        // the ADMIN ran the search: that's a final decision, and a candidate
-        // row would pin the card in the review list forever.
-        if (!asAdmin) {
-          await supabase
-            .from("card_image_candidates")
-            .upsert(
-              { card_id: id, url: publicUrl, uploaded_by: user.id },
-              { onConflict: "card_id,url", ignoreDuplicates: true }
-            )
-            .then(() => {});
-        }
-
-        return NextResponse.json({ imageUrl: publicUrl });
-      } catch {
-        continue; // try the next candidate
-      }
-    }
-
+    const tried = fromSource.length + searched.length;
     return NextResponse.json(
-      { error: "Found candidates but none could be downloaded — try adding your own photo." },
+      {
+        error: `Tried ${tried} image ${tried === 1 ? "source" : "sources"} and none worked — ${attempts.join("; ")}. Upload your own photo instead.`,
+        attempts,
+      },
       { status: 404 }
     );
   } catch (err) {
