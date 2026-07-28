@@ -289,8 +289,23 @@ function numberClause(n: string): string | null {
  *  quoted phrase; the token fallback covers those. */
 function nameClause(cleaned: string): string {
   const safe = esc(cleaned);
-  if (/^[A-Za-z0-9À-ɏ]+$/.test(safe)) return `name:${safe}*`;
+  if (SIMPLE_WORD.test(safe)) return `name:${safe}*`;
   return `name:"${safe}*"`;
+}
+
+const SIMPLE_WORD = /^[A-Za-z0-9À-ɏ]+$/;
+
+/** A contains-match, which a prefix can't do: "pikachu" finds "Surfing
+ *  Pikachu" and "sandwich" finds "Herbed Sandwich". Multi-word queries use
+ *  their longest word, since a wildcard inside a quoted phrase isn't
+ *  expanded. */
+function nameContainsClause(cleaned: string): string | null {
+  const word = cleaned
+    .split(/\s+/)
+    .filter((w) => SIMPLE_WORD.test(w))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!word || word.length < 3) return null;
+  return `name:*${esc(word)}*`;
 }
 
 /** Digits-only, zero-stripped comparison key: "SWSH095" → "95". */
@@ -304,6 +319,8 @@ export function numberKey(n: string | null | undefined): string {
 export async function searchCards(opts: {
   name?: string;
   nameTokens?: string;
+  /** Match the name anywhere, not just at the start. */
+  nameContains?: string;
   number?: string;
   /** Exactly this collector number, with no spelling expansion — used to
    *  retry one spelling at a time. */
@@ -314,6 +331,11 @@ export async function searchCards(opts: {
 }): Promise<CardSummary[]> {
   const clauses: string[] = [];
   if (opts.name) clauses.push(nameClause(cleanCardName(opts.name)));
+  if (opts.nameContains) {
+    const clause = nameContainsClause(cleanCardName(opts.nameContains));
+    if (clause) clauses.push(clause);
+    else return [];
+  }
   if (opts.nameTokens) {
     const tokens = cleanCardName(opts.nameTokens)
       .toLowerCase()
