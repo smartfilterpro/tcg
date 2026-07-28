@@ -98,7 +98,9 @@ function SidePanel({
           />
           <div className="min-w-0 text-[11px] leading-relaxed text-slate-600">
             <p className="font-semibold text-slate-700">This is what gets graded</p>
-            {bleed > 0.1 && (
+            {/* Correct crops measure a few percent; a genuinely misplaced
+                outline runs 30% and up. */}
+            {bleed > 0.25 && (
               <p className="font-medium text-amber-600">
                 The outline is catching the table around the card — pull the corners in until only
                 the card is left.
