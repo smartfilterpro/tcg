@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/auth";
 import { redactState, type BattleState } from "@/lib/battle";
 import { battleErrorResponse } from "../lib";
+import { BOT_ID } from "@/lib/battleBot";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -31,7 +32,12 @@ export async function GET(_req: Request, { params }: Params) {
       });
     }
 
-    const oppId = battle.host_user === user.id ? (battle.guest_user as string) : (battle.host_user as string);
+    // A practice battle has no guest row; the opponent lives in state under
+    // the bot's id.
+    const oppId =
+      battle.host_user === user.id
+        ? ((battle.guest_user as string | null) ?? BOT_ID)
+        : (battle.host_user as string);
     return NextResponse.json({
       status: battle.status,
       code: battle.code,

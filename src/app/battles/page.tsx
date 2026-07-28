@@ -9,6 +9,7 @@ interface BattleListItem {
   code: string;
   status: "waiting" | "active" | "finished";
   youAreHost: boolean;
+  vsBot: boolean;
   opponentName: string | null;
   youWon: boolean | null;
   updatedAt: string;
@@ -35,6 +36,9 @@ export default function BattlesPage() {
   const [allowShared, setAllowShared] = useState(false);
   const [joinDeck, setJoinDeck] = useState("");
   const [joinCode, setJoinCode] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [practiceDeck, setPracticeDeck] = useState("");
+  const [botDeck, setBotDeck] = useState("");
 
   async function load() {
     try {
@@ -50,6 +54,7 @@ export default function BattlesPage() {
       setDecks(dJson.decks ?? []);
       setBattles(bJson.battles ?? []);
       setMigrated(bJson.migrated !== false);
+      setIsAdmin(bJson.isAdmin === true);
       // Shared decks are a bonus — don't fail the page if friends data errors.
       if (fRes.ok) {
         const fJson = await fRes.json();
@@ -91,6 +96,32 @@ export default function BattlesPage() {
       return;
     } catch (e2) {
       setError(e2 instanceof Error ? e2.message : "Couldn't create the battle");
+    }
+    setBusy(false);
+  }
+
+  async function createPractice(e: React.FormEvent) {
+    e.preventDefault();
+    if (!practiceDeck || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/battles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deckId: practiceDeck,
+          vsBot: true,
+          botDeckId: botDeck || practiceDeck,
+          allowShared: true,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't start the practice battle");
+      router.push(`/battles/${json.id}`);
+      return;
+    } catch (e2) {
+      setError(e2 instanceof Error ? e2.message : "Couldn't start the practice battle");
     }
     setBusy(false);
   }
@@ -236,6 +267,49 @@ export default function BattlesPage() {
         </div>
       )}
 
+      {isAdmin && (decks.length > 0 || sharedDecks.length > 0) && (
+        <form onSubmit={createPractice} className="card-panel space-y-3 p-4">
+          <div className="flex items-center gap-2">
+            <h2 className="font-semibold">🤖 Practice vs Trainer AI</h2>
+            <span className="chip bg-poke-gold/30 text-yellow-900">Admin · testing</span>
+          </div>
+          <p className="text-xs text-slate-500">
+            Play a deck against the practice opponent — no code, no waiting. It plays a
+            straightforward game: benches Basics, attaches one Energy a turn, evolves what it can,
+            and attacks with the hardest hit it can pay for. Card effects aren&apos;t resolved, so
+            treat it as a way to see how your deck sets up rather than a real match.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-xs font-medium text-slate-600">
+              Your deck
+              <select
+                className="input mt-1"
+                value={practiceDeck}
+                onChange={(e) => setPracticeDeck(e.target.value)}
+                required
+              >
+                <option value="">Choose your deck…</option>
+                {deckOptions}
+              </select>
+            </label>
+            <label className="block text-xs font-medium text-slate-600">
+              Trainer AI plays
+              <select
+                className="input mt-1"
+                value={botDeck}
+                onChange={(e) => setBotDeck(e.target.value)}
+              >
+                <option value="">Same deck as yours</option>
+                {deckOptions}
+              </select>
+            </label>
+          </div>
+          <button className="btn-primary w-full" disabled={busy || !practiceDeck}>
+            {busy ? "Shuffling…" : "Start practice battle"}
+          </button>
+        </form>
+      )}
+
       <div className="card-panel p-4">
         <h2 className="mb-2 font-semibold">My battles</h2>
         {battles.length === 0 ? (
@@ -248,7 +322,7 @@ export default function BattlesPage() {
                   <div className="truncate text-sm font-medium">
                     {b.status === "waiting"
                       ? `Waiting for an opponent — code ${b.code}`
-                      : `vs ${b.opponentName ?? "Trainer"}`}
+                      : `${b.vsBot ? "🤖 " : ""}vs ${b.opponentName ?? "Trainer"}`}
                   </div>
                   <div className="text-xs text-slate-400">
                     {new Date(b.updatedAt).toLocaleString()}
