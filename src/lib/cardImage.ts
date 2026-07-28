@@ -5,8 +5,10 @@
 // actually sees.
 
 import {
+  backgroundBleed,
   detectCardQuad,
   defaultQuad,
+  estimateBackground,
   measureCentering,
   photoMetrics,
   rectifyCard,
@@ -28,11 +30,10 @@ export interface LoadedPhoto {
 
 /** Decode a photo to pixels. imageOrientation is pinned explicitly: the
  *  default has differed between browsers and browser versions, and an
- *  iPhone photo that arrives rotated would put the card's corners
- *  somewhere else entirely. */
-/** 2400px keeps the corner close-ups at roughly native resolution while
- *  holding the decoded pixels (which stay in memory so corners can be
- *  re-dragged) to about 30MB a side. */
+ *  iPhone photo that arrives rotated would put the card's corners somewhere
+ *  else entirely. 2400px keeps the corner close-ups at roughly native
+ *  resolution while holding the decoded pixels (which stay in memory so the
+ *  corners can be re-dragged) to about 30MB a side. */
 export async function loadPhoto(file: File, maxDim = 2400): Promise<LoadedPhoto> {
   const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
   const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
@@ -89,6 +90,8 @@ export interface SidePreview {
   cardDataUrl: string;
   measurement: CenteringMeasurement | null;
   metrics: PhotoMetrics;
+  /** Fraction of the flattened card's edge that is really table. */
+  bleed: number;
 }
 
 /** Flatten and measure without encoding the corner close-ups — cheap enough
@@ -101,6 +104,7 @@ export function previewSide(photo: LoadedPhoto, quad: Quad): SidePreview | null 
     cardDataUrl: toCanvas(card).toDataURL("image/jpeg", 0.85),
     measurement: measureCentering(card),
     metrics: photoMetrics(card),
+    bleed: backgroundBleed(card, estimateBackground(photo.img)),
   };
 }
 

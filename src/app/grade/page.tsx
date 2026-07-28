@@ -77,6 +77,7 @@ function SidePanel({
   const m = side.preview?.measurement ?? null;
   const metrics = side.preview?.metrics;
   const nearEdge = quadNearEdge(side.quad, side.photo.width, side.photo.height);
+  const bleed = side.preview?.bleed ?? 0;
   return (
     <div className="space-y-2">
       <div className="text-sm font-semibold">{label}</div>
@@ -97,6 +98,12 @@ function SidePanel({
           />
           <div className="min-w-0 text-[11px] leading-relaxed text-slate-600">
             <p className="font-semibold text-slate-700">This is what gets graded</p>
+            {bleed > 0.1 && (
+              <p className="font-medium text-amber-600">
+                The outline is catching the table around the card — pull the corners in until only
+                the card is left.
+              </p>
+            )}
             {m ? (
               <>
                 <p>

@@ -172,7 +172,11 @@ function majorityFilter(mask: Uint8Array, w: number, h: number): Uint8Array {
 
 /** Keep only the biggest blob, so a dark shadow in one corner of the frame
  *  can't drag a "corner" away from the card. */
-function largestComponent(mask: Uint8Array, w: number, h: number): { mask: Uint8Array; area: number } {
+function largestComponent(
+  mask: Uint8Array,
+  w: number,
+  h: number
+): { mask: Uint8Array; area: number; bboxArea: number } {
   const seen = new Uint8Array(mask.length);
   const queue = new Int32Array(mask.length);
   let bestArea = 0;
@@ -200,23 +204,32 @@ function largestComponent(mask: Uint8Array, w: number, h: number): { mask: Uint8
     }
   }
   const out = new Uint8Array(mask.length);
-  if (bestSeed < 0) return { mask: out, area: 0 };
+  if (bestSeed < 0) return { mask: out, area: 0, bboxArea: 0 };
   const seen2 = new Uint8Array(mask.length);
   let head = 0;
   let tail = 0;
   queue[tail++] = bestSeed;
   seen2[bestSeed] = 1;
+  let minX = w;
+  let maxX = -1;
+  let minY = h;
+  let maxY = -1;
   while (head < tail) {
     const p = queue[head++];
     out[p] = 1;
     const x = p % w;
     const y = (p / w) | 0;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
     if (x > 0 && mask[p - 1] && !seen2[p - 1]) (seen2[p - 1] = 1), (queue[tail++] = p - 1);
     if (x < w - 1 && mask[p + 1] && !seen2[p + 1]) (seen2[p + 1] = 1), (queue[tail++] = p + 1);
     if (y > 0 && mask[p - w] && !seen2[p - w]) (seen2[p - w] = 1), (queue[tail++] = p - w);
     if (y < h - 1 && mask[p + w] && !seen2[p + w]) (seen2[p + w] = 1), (queue[tail++] = p + w);
   }
-  return { mask: out, area: bestArea };
+  const bboxArea = maxX < 0 ? 0 : (maxX - minX + 1) * (maxY - minY + 1);
+  return { mask: out, area: bestArea, bboxArea };
 }
 
 // ===== detection =====
@@ -336,30 +349,23 @@ function refineQuad(blob: Uint8Array, w: number, h: number, coarse: Quad): Quad 
   return [nTL, nTR, nBR, nBL];
 }
 
-/** Locate the card's four corners in a photo. Returns null when it can't be
- *  found confidently (low contrast against the background, card cropped off
- *  the frame) — callers fall back to hand-placed corners rather than
- *  measuring something wrong. */
-export function detectCardQuad(source: RGBAImage): Quad | null {
-  const { img, scale } = downscale(source, 720);
+/** Build a candidate quad for one background/foreground threshold. */
+function quadAtThreshold(
+  img: RGBAImage,
+  dist: Float32Array,
+  thr: number
+): { quad: Quad; ratio: number; bboxArea: number } | null {
   const w = img.width;
   const h = img.height;
-  const bg = ringColor(img, 0.04);
-
-  const dist = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      dist[y * w + x] = colorDist(px(img, x, y), bg);
-    }
-  }
-
-  const thr = Math.max(30, otsuThreshold(dist, 442));
   const raw = new Uint8Array(w * h);
   for (let i = 0; i < dist.length; i++) raw[i] = dist[i] > thr ? 1 : 0;
   const mask = majorityFilter(majorityFilter(raw, w, h), w, h);
 
-  const { mask: blob, area } = largestComponent(mask, w, h);
-  if (area < w * h * 0.12) return null;
+  const { mask: blob, bboxArea } = largestComponent(mask, w, h);
+  // Guard on the bounding box rather than filled area: a strict threshold
+  // can leave only the card's printed border as a ring — small in area but
+  // exactly the right size and shape.
+  if (bboxArea < w * h * 0.12) return null;
 
   // For a rectangle rotated less than ~45°, the extremes of (x+y) and (x-y)
   // land on its four corners.
@@ -388,36 +394,153 @@ export function detectCardQuad(source: RGBAImage): Quad | null {
   const coarse: Quad = [atScale(tl), atScale(tr), atScale(br), atScale(bl)];
   // Sharpen the corners against the fitted edges; fall back to the coarse
   // extremes if the refit doesn't converge.
-  const refined = refineQuad(blob, w, h, coarse) ?? coarse;
-  let quad: Quad = [
-    { x: refined[0].x / scale, y: refined[0].y / scale },
-    { x: refined[1].x / scale, y: refined[1].y / scale },
-    { x: refined[2].x / scale, y: refined[2].y / scale },
-    { x: refined[3].x / scale, y: refined[3].y / scale },
-  ];
+  let quad = refineQuad(blob, w, h, coarse) ?? coarse;
 
   const side = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
-  const topW = side(quad[0], quad[1]);
-  const botW = side(quad[3], quad[2]);
-  const leftH = side(quad[0], quad[3]);
-  const rightH = side(quad[1], quad[2]);
-  const wAvg = (topW + botW) / 2;
-  const hAvg = (leftH + rightH) / 2;
+  const wAvg = (side(quad[0], quad[1]) + side(quad[3], quad[2])) / 2;
+  const hAvg = (side(quad[0], quad[3]) + side(quad[1], quad[2])) / 2;
   if (wAvg < 1 || hAvg < 1) return null;
 
   // A card photographed sideways: rotate the ordering so the output is
   // always portrait.
-  if (wAvg / hAvg > 1.15) {
-    quad = [quad[3], quad[0], quad[1], quad[2]];
-  }
+  if (wAvg / hAvg > 1.15) quad = [quad[3], quad[0], quad[1], quad[2]];
 
   const ratio =
     (side(quad[0], quad[1]) + side(quad[3], quad[2])) /
     (side(quad[0], quad[3]) + side(quad[1], quad[2]));
   // 0.716 is a card; allow generous slack for perspective before giving up.
   if (ratio < 0.5 || ratio > 0.95) return null;
+  return { quad, ratio, bboxArea };
+}
 
-  return quad;
+/** The weakest colour step across the four edges of a candidate quad.
+ *
+ *  A genuine card boundary shows a clear change from just inside the edge to
+ *  just outside it. A quad that has instead latched onto part of the card —
+ *  which happens when some of the artwork is close to the table's colour and
+ *  the mask breaks up — has at least one edge with card on both sides, and
+ *  that edge gives itself away with almost no step. */
+function minEdgeContrast(img: RGBAImage, quad: Quad): number {
+  const H = cardToSource(quad);
+  if (!H) return 0;
+  const at = (u: number, v: number): [number, number, number] | null => {
+    const d = H[6] * u + H[7] * v + 1;
+    const x = Math.round((H[0] * u + H[1] * v + H[2]) / d);
+    const y = Math.round((H[3] * u + H[4] * v + H[5]) / d);
+    if (x < 0 || y < 0 || x >= img.width || y >= img.height) return null;
+    return px(img, x, y);
+  };
+  const OUT = 0.035;
+  const IN = 0.035;
+  const edges: Array<(t: number) => [[number, number], [number, number]]> = [
+    (t) => [[t, -OUT], [t, IN]], // top
+    (t) => [[t, 1 + OUT], [t, 1 - IN]], // bottom
+    (t) => [[-OUT, t], [IN, t]], // left
+    (t) => [[1 + OUT, t], [1 - IN, t]], // right
+  ];
+  let weakest = Infinity;
+  for (const edge of edges) {
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < 24; i++) {
+      const t = 0.15 + (0.7 * i) / 23;
+      const [o, k] = edge(t);
+      const outside = at(o[0], o[1]);
+      const inside = at(k[0], k[1]);
+      if (!outside || !inside) continue;
+      sum += colorDist(outside, inside);
+      n++;
+    }
+    if (n === 0) return 0;
+    weakest = Math.min(weakest, sum / n);
+  }
+  return weakest === Infinity ? 0 : weakest;
+}
+
+/** Locate the card's four corners in a photo. Returns null when it can't be
+ *  found confidently (low contrast against the background, card cropped off
+ *  the frame) — callers fall back to hand-placed corners rather than
+ *  measuring something wrong. */
+export function detectCardQuad(source: RGBAImage): Quad | null {
+  const { img, scale } = downscale(source, 720);
+  const w = img.width;
+  const h = img.height;
+  const bg = ringColor(img, 0.04);
+
+  const dist = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      dist[y * w + x] = colorDist(px(img, x, y), bg);
+    }
+  }
+
+  // A card's drop shadow differs from the table only softly, but enough to
+  // clear one threshold — and a blob swollen by shadow puts the corners off
+  // the card entirely. Try a stricter cut as well and keep whichever
+  // candidate is closest to a real card's 63:88 proportions.
+  const base = Math.max(30, otsuThreshold(dist, 442));
+  const loose = quadAtThreshold(img, dist, base);
+  const strict = quadAtThreshold(img, dist, base * 1.6);
+  const off = (r: number) => Math.abs(r - CARD_ASPECT);
+
+  // The strict cut only wins if it's a CLEAR improvement and still covers
+  // most of the card. Otherwise a full-art card — whose artwork can pass
+  // near the table's colour mid-card — fragments at the higher threshold
+  // and a stray piece gets mistaken for the card.
+  let best = loose;
+  if (
+    strict &&
+    (!loose ||
+      (off(strict.ratio) < off(loose.ratio) - 0.04 && strict.bboxArea > loose.bboxArea * 0.6))
+  ) {
+    best = strict;
+  }
+  if (!best) return null;
+
+  // Refuse rather than hand back a confident wrong outline: a quad that
+  // doesn't step at every edge isn't the card, and hand-placed corners beat
+  // a plausible-looking mistake.
+  if (minEdgeContrast(img, best.quad) < 30) return null;
+
+  return best.quad.map((p) => ({ x: p.x / scale, y: p.y / scale })) as Quad;
+}
+
+/** The colour the card is sitting on, estimated from the photo's outer
+ *  frame. */
+export function estimateBackground(source: RGBAImage): [number, number, number] {
+  const { img } = downscale(source, 480);
+  return ringColor(img, 0.04);
+}
+
+/** How much of the flattened card's outer edge is actually background —
+ *  i.e. how far the corners overshoot the card. This is the one alignment
+ *  check that works on a full-art card, where there's no printed border to
+ *  compare against and the centering measurement stays silent. */
+export function backgroundBleed(
+  card: RGBAImage,
+  bg: [number, number, number],
+  tolerance = 42
+): number {
+  let hits = 0;
+  let total = 0;
+  const depth = Math.max(2, Math.round(card.width * 0.012));
+  const check = (x: number, y: number) => {
+    total++;
+    if (colorDist(px(card, x, y), bg) < tolerance) hits++;
+  };
+  for (let y = 0; y < card.height; y += 3) {
+    for (let d = 0; d < depth; d++) {
+      check(d, y);
+      check(card.width - 1 - d, y);
+    }
+  }
+  for (let x = 0; x < card.width; x += 3) {
+    for (let d = 0; d < depth; d++) {
+      check(x, d);
+      check(x, card.height - 1 - d);
+    }
+  }
+  return total === 0 ? 0 : hits / total;
 }
 
 /** True when the card runs right up to the edge of the photo. Background
