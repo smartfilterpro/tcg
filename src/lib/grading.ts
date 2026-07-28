@@ -14,6 +14,23 @@ Apply this rubric identically to every card — never inflate to please the
 user, never deflate to seem rigorous. When photo quality limits what you can
 see, say so and widen the range instead of guessing.
 
+WHAT YOU ARE BEING SHOWN — the photos are processed before they reach you:
+- The card has been located in the original photo and warped flat, so each
+  full-card image is the CARD ONLY: no table, no fingers, no background, and
+  the camera angle has been removed. Never comment on background, framing or
+  crop, and never treat the image edge as a card defect.
+- You also get close-ups of all four corners of each side, cut from the
+  full-resolution photo. Judge corners and edge whitening from THOSE, not
+  from the whole-card image, and refer to corners by the labels given.
+- CENTERING IS MEASURED IN SOFTWARE, not by you. When a measurement is
+  supplied, the border widths were counted in pixels on the flattened card
+  and converted to a ratio. USE THE SUPPLIED NUMBERS. Do not re-estimate
+  centering by eye, do not contradict the measurement, and do not let the
+  image's appearance override it — your job is to score and explain the
+  measured ratio. Only when the message says centering could NOT be measured
+  (full-art or borderless cards) do you estimate it, and then you must say
+  in your notes that it was estimated by eye.
+
 THE STANDARD (modeled on PSA's grading scale):
 - 10 Gem Mint: virtually flawless. Centering ~55/45 or better on the front
   (~75/25 or better on the back), four sharp corners, clean edges, full
@@ -42,12 +59,11 @@ HOW TO EVALUATE (in this order, every time):
    grading (focus, glare, resolution, whole card visible, straight-on
    angle). Poor photos MUST lower confidence and widen the grade range —
    never compensate by assuming the best.
-2. CENTERING: estimate left/right and top/bottom border ratios on the
-   front (and back if borders are visible). State the estimate you used
-   (e.g. "~60/40 L-R, ~55/45 T-B").
-3. CORNERS: examine all four front corners (and back if visible) for
-   sharpness, fraying, whitening, dings. Name specific corners
-   (top-left, etc.) when flawed.
+2. CENTERING: use the supplied measurement (see above). State the ratio you
+   were given, and say what it caps the grade at.
+3. CORNERS: work through the four corner close-ups for each side one at a
+   time, and give a per-corner verdict for every close-up you were shown,
+   using its label. Look for fraying, whitening, softness, dings.
 4. EDGES: whitening, chipping, roughness along each edge — the back's
    edges usually reveal the most (especially on dark-backed cards).
 5. SURFACE: scratches, print lines, print spots, holo scratches (tilt
@@ -62,6 +78,11 @@ SCORING: give each category (centering, corners, edges, surface) its own
 LOWEST-category-dominates principle grading companies use: a card with 9s
 everywhere but a 5 surface is not a 8 — it's a 5.5-6. Provide a realistic
 range (e.g. "7-8"), and a single most-likely grade.
+
+When centering was measured, the centering subgrade IS the cap the
+measurement implies (the message states it) unless the borders show a
+separate defect such as a miscut — and neither the centering subgrade nor
+the overall grade may exceed that cap.
 
 WHAT PHOTOS CANNOT SHOW — always include as caveats when relevant:
 - exact measurements (trimming detection needs calipers)
@@ -88,6 +109,14 @@ export const GRADE_SCHEMA = {
       type: ["string", "null"],
       description: "Card name + set/number if identifiable, else null.",
     },
+    card_name: {
+      type: ["string", "null"],
+      description: "Just the card's name, e.g. 'Charizard' — used to look up its market value.",
+    },
+    card_number: {
+      type: ["string", "null"],
+      description: "Collector number as printed, e.g. '4/102', else null.",
+    },
     photo_quality: {
       type: "object",
       properties: {
@@ -113,8 +142,22 @@ export const GRADE_SCHEMA = {
       properties: {
         score: { type: "number" },
         notes: { type: "string", description: "Name specific corners with flaws." },
+        details: {
+          type: "array",
+          description:
+            "One entry per corner close-up you were shown, using the same label (e.g. 'front top-left').",
+          items: {
+            type: "object",
+            properties: {
+              label: { type: "string" },
+              note: { type: "string", description: "What that specific corner looks like." },
+            },
+            required: ["label", "note"],
+            additionalProperties: false,
+          },
+        },
       },
-      required: ["score", "notes"],
+      required: ["score", "notes", "details"],
       additionalProperties: false,
     },
     edges: {
@@ -153,6 +196,8 @@ export const GRADE_SCHEMA = {
   required: [
     "is_card",
     "card_identified",
+    "card_name",
+    "card_number",
     "photo_quality",
     "centering",
     "corners",
@@ -171,9 +216,11 @@ export const GRADE_SCHEMA = {
 export interface GradeReport {
   is_card: boolean;
   card_identified: string | null;
+  card_name: string | null;
+  card_number: string | null;
   photo_quality: { front: "good" | "fair" | "poor"; back: "good" | "fair" | "poor"; notes: string };
   centering: { estimate: string; score: number; notes: string };
-  corners: { score: number; notes: string };
+  corners: { score: number; notes: string; details: Array<{ label: string; note: string }> };
   edges: { score: number; notes: string };
   surface: { score: number; notes: string };
   estimated_grade: number;
