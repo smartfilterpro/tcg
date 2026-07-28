@@ -894,24 +894,27 @@ export const CORNER_REGIONS: Array<{ key: "TL" | "TR" | "BR" | "BL"; label: stri
 
 // ===== centering measurement =====
 
+export interface AxisMeasure {
+  /** Border widths in rectified pixels: left/top then right/bottom. */
+  a: number;
+  b: number;
+  /** e.g. [55, 45]. */
+  pct: [number, number];
+  /** Highest grade this axis alone allows. */
+  cap: number;
+}
+
 export interface CenteringMeasurement {
-  /** Border widths in rectified pixels. */
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
   width: number;
   height: number;
-  /** e.g. [55, 45] meaning 55/45 left-to-right. */
-  lr: [number, number];
-  tb: [number, number];
-  /** The worse of the two majority percentages — what sets the cap. */
+  /** Null when that axis couldn't be measured reliably. */
+  lr: AxisMeasure | null;
+  tb: AxisMeasure | null;
+  /** The worse majority percentage across the axes we could measure. */
   worst: number;
-  /** Highest grade this centering alone allows. */
+  /** Highest grade the measured centering allows. */
   cap: number;
   borderColor: [number, number, number];
-  /** How much of the scan agreed; low means treat the number with suspicion. */
-  agreement: number;
 }
 
 /** Highest grade the measured centering permits, on PSA's published
@@ -937,9 +940,7 @@ export function centeringCapBack(worstPct: number): number {
 
 /** Walk inward from one edge of the rectified card until the printed border
  *  colour gives way to the frame/artwork, and take the median across many
- *  scan lines. Returns null if the card has no measurable border (full-art
- *  and borderless cards) — better to say "can't measure" than invent a
- *  ratio. */
+ *  scan lines. */
 function scanBorder(
   card: RGBAImage,
   border: [number, number, number],
@@ -973,7 +974,49 @@ function scanBorder(
   return { widths, tried };
 }
 
-export function measureCentering(card: RGBAImage): CenteringMeasurement | null {
+/** One axis, measured only if both of its edges agree with themselves.
+ *  A real printed border ends at the same depth on every scan line; artwork
+ *  wanders, and so does a border with copyright text set into it. */
+function measureAxis(
+  card: RGBAImage,
+  border: [number, number, number],
+  thr: number,
+  dirA: "left" | "top",
+  dirB: "right" | "bottom",
+  span: number,
+  back: boolean
+): AxisMeasure | null {
+  // A printed border is at least a couple of percent of the card. Anything
+  // thinner is the scan having stopped early on something inside the border
+  // — the copyright line set into the bottom of a modern card does exactly
+  // this, reading a third of the real width. The cost is that a card miscut
+  // almost to its edge reports unmeasurable rather than a wrong ratio, which
+  // is the right way round.
+  const minBorder = span * 0.018;
+  const sides = [dirA, dirB].map((dir) => {
+    const { widths } = scanBorder(card, border, thr, dir);
+    const m = median(widths);
+    return { m, mad: median(widths.map((w) => Math.abs(w - m))), n: widths.length };
+  });
+  for (const s of sides) {
+    if (s.n < 20) return null;
+    if (s.m < minBorder) return null;
+    if (s.mad > Math.max(4, s.m * 0.25)) return null;
+  }
+  const [a, b] = sides.map((s) => s.m);
+  if (a + b <= 0 || a + b > span * 0.5) return null;
+  const aPct = Math.round((a / (a + b)) * 100);
+  const pct: [number, number] = [aPct, 100 - aPct];
+  const worst = Math.max(pct[0], pct[1]);
+  return { a, b, pct, cap: back ? centeringCapBack(worst) : centeringCap(worst) };
+}
+
+/** Measure centering from the flattened card. Each axis is judged on its own,
+ *  so a card whose left and right borders are clean still reports a
+ *  left-to-right ratio even when the bottom border has the copyright line
+ *  set into it and can't be read. Returns null only when neither axis can be
+ *  trusted (full-art and borderless cards). */
+export function measureCentering(card: RGBAImage, back = false): CenteringMeasurement | null {
   // The printed border's colour, sampled from a thin ring just inside the
   // card edge (skipping the very edge, which can carry a sliver of
   // background if the corners were placed a hair wide).
@@ -995,80 +1038,35 @@ export function measureCentering(card: RGBAImage): CenteringMeasurement | null {
   if (rs.length === 0) return null;
   const border: [number, number, number] = [median(rs), median(gs), median(bs)];
 
-  // How uniform is that ring? A real printed border is very consistent; a
-  // full-art card's edge is not, and we refuse to measure those.
   const devs: number[] = [];
   for (let i = 0; i < rs.length; i += 7) {
     devs.push(colorDist([rs[i], gs[i], bs[i]], border));
   }
   const spread = median(devs);
-  if (spread > 40) return null;
-  const thr = Math.min(150, Math.max(45, spread * 4));
+  if (spread > 45) return null;
+  // Scale the threshold with the border's own noise, but not without limit:
+  // a holo border sparkles, and letting its spread drive the threshold too
+  // high made the scan sail straight past the border into the artwork.
+  const thr = Math.min(90, Math.max(45, spread * 2));
 
-  const left = scanBorder(card, border, thr, "left");
-  const right = scanBorder(card, border, thr, "right");
-  const top = scanBorder(card, border, thr, "top");
-  const bottom = scanBorder(card, border, thr, "bottom");
+  const lr = measureAxis(card, border, thr, "left", "right", card.width, back);
+  const tb = measureAxis(card, border, thr, "top", "bottom", card.height, back);
+  if (!lr && !tb) return null;
 
-  const hits = left.widths.length + right.widths.length + top.widths.length + bottom.widths.length;
-  const tried = left.tried + right.tried + top.tried + bottom.tried;
-  if (tried === 0) return null;
-  const agreement = hits / tried;
-  if (
-    agreement < 0.5 ||
-    left.widths.length < 10 ||
-    right.widths.length < 10 ||
-    top.widths.length < 10 ||
-    bottom.widths.length < 10
-  ) {
-    return null;
-  }
-
-  // A real printed border ends at the same depth on every scan line. On a
-  // full-art or near-borderless card the "transition" is just artwork, and
-  // its depth jumps around. Agreement along each edge is what separates a
-  // measurement from a guess — without this check an illustration rare can
-  // return a confident, wrong ratio and cap the grade on nothing.
-  const sides = [left, right, top, bottom].map((s) => {
-    const med = median(s.widths);
-    const mad = median(s.widths.map((w) => Math.abs(w - med)));
-    return { med, mad };
-  });
-  const minBorder = card.width * 0.012;
-  for (const s of sides) {
-    if (s.med < minBorder) return null;
-    if (s.mad > Math.max(3, s.med * 0.2)) return null;
-  }
-
-  const [l, r, t, b] = sides.map((s) => s.med);
-  if (l + r <= 0 || t + b <= 0) return null;
-  if (l + r > card.width * 0.5 || t + b > card.height * 0.5) return null;
-
-  const lPct = Math.round((l / (l + r)) * 100);
-  const tPct = Math.round((t / (t + b)) * 100);
-  const lr: [number, number] = [lPct, 100 - lPct];
-  const tb: [number, number] = [tPct, 100 - tPct];
-  const worst = Math.max(lr[0], lr[1], tb[0], tb[1]);
-
-  return {
-    left: l,
-    right: r,
-    top: t,
-    bottom: b,
-    width: card.width,
-    height: card.height,
-    lr,
-    tb,
-    worst,
-    cap: centeringCap(worst),
-    borderColor: border,
-    agreement,
-  };
+  const worst = Math.max(lr ? Math.max(...lr.pct) : 0, tb ? Math.max(...tb.pct) : 0);
+  const cap = Math.min(lr ? lr.cap : 10, tb ? tb.cap : 10);
+  return { width: card.width, height: card.height, lr, tb, worst, cap, borderColor: border };
 }
 
 /** Human-readable form for the report and the prompt. */
 export function centeringText(m: CenteringMeasurement): string {
-  return `${m.lr[0]}/${m.lr[1]} left-to-right, ${m.tb[0]}/${m.tb[1]} top-to-bottom`;
+  const parts: string[] = [];
+  if (m.lr) parts.push(`${m.lr.pct[0]}/${m.lr.pct[1]} left-to-right`);
+  if (m.tb) parts.push(`${m.tb.pct[0]}/${m.tb.pct[1]} top-to-bottom`);
+  if (parts.length === 1) {
+    parts.push(m.lr ? "top-to-bottom not measurable" : "left-to-right not measurable");
+  }
+  return parts.join(", ");
 }
 
 // ===== photo quality =====

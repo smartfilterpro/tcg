@@ -109,9 +109,17 @@ function SidePanel({
             {m ? (
               <>
                 <p>
-                  Centering {m.lr[0]}/{m.lr[1]} · {m.tb[0]}/{m.tb[1]} — allows up to a{" "}
+                  Centering{" "}
+                  {m.lr ? `${m.lr.pct[0]}/${m.lr.pct[1]} across` : "— across"} ·{" "}
+                  {m.tb ? `${m.tb.pct[0]}/${m.tb.pct[1]} down` : "— down"} — allows up to a{" "}
                   <strong>{m.cap}</strong>
                 </p>
+                {(!m.lr || !m.tb) && (
+                  <p className="text-slate-500">
+                    The {m.lr ? "top and bottom" : "left and right"} borders aren&apos;t consistent
+                    enough to measure on this card, so that direction is judged by eye.
+                  </p>
+                )}
                 <p className="text-slate-400">
                   The blue bands should sit exactly on the printed border. If they don&apos;t, nudge
                   the corners.
@@ -119,8 +127,8 @@ function SidePanel({
               </>
             ) : (
               <p>
-                No measurable printed border (full-art or borderless), so centering will be judged
-                by eye instead.
+                No border this scan can read reliably — common on full-art and borderless cards, so
+                centering will be judged by eye instead.
               </p>
             )}
             {nearEdge && (
