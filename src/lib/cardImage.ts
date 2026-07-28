@@ -10,6 +10,7 @@ import {
   defaultQuad,
   estimateBackground,
   measureCentering,
+  quadLooksLikeCard,
   photoMetrics,
   rectifyCard,
   rectifyRegion,
@@ -86,6 +87,16 @@ async function encode(
   return { base64: dataUrl.split(",")[1], dataUrl, blob };
 }
 
+/** Measure only when the outline is actually shaped like a card. An outline
+ *  that has collapsed onto part of the card still produces a confident
+ *  ratio — the back of a card cropped square once reported 70/30 and capped
+ *  the grade at 7 — and that number goes on to clamp the grade, so a wrong
+ *  crop must produce no measurement rather than a wrong one. */
+function measurableCentering(quad: Quad, card: RGBAImage) {
+  if (!quadLooksLikeCard(quad)) return null;
+  return measureCentering(card);
+}
+
 export interface SidePreview {
   cardDataUrl: string;
   measurement: CenteringMeasurement | null;
@@ -102,7 +113,7 @@ export function previewSide(photo: LoadedPhoto, quad: Quad): SidePreview | null 
   if (!card) return null;
   return {
     cardDataUrl: toCanvas(card).toDataURL("image/jpeg", 0.85),
-    measurement: measureCentering(card),
+    measurement: measurableCentering(quad, card),
     metrics: photoMetrics(card),
     bleed: backgroundBleed(card, estimateBackground(photo.img)),
   };
@@ -131,7 +142,7 @@ export interface PreparedSide {
 export async function prepareSide(photo: LoadedPhoto, quad: Quad): Promise<PreparedSide | null> {
   const card = rectifyCard(photo.img, quad, 800);
   if (!card) return null;
-  const measurement = measureCentering(card);
+  const measurement = measurableCentering(quad, card);
   const metrics = photoMetrics(card);
   // Quality 0.92: high enough that JPEG ringing isn't mistaken for print
   // lines on the surface.

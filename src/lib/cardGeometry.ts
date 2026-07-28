@@ -787,6 +787,29 @@ export function backgroundBleed(
   return total === 0 ? 0 : hits / total;
 }
 
+/** How far the placed outline is from a card's 63:88 proportions.
+ *
+ *  A card is always noticeably taller than it is wide, so an outline that
+ *  isn't tells you the corners are wrong — whether auto-detection collapsed
+ *  onto part of the card or a handle got dragged somewhere odd. Worth its own
+ *  check because a crop that sits INSIDE the card leaves no background in the
+ *  picture for the bleed test to notice, yet still yields a confident and
+ *  completely wrong centering ratio. */
+export function quadLooksLikeCard(quad: Quad): boolean {
+  // Headroom for real perspective: a card shot at 30 degrees off square
+  // still measures within about 0.11 of its true proportions, while an
+  // outline that has collapsed onto part of a card runs 0.27 and up.
+  return quadAspectOff(quad) <= 0.18;
+}
+
+export function quadAspectOff(quad: Quad): number {
+  const side = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+  const w = (side(quad[0], quad[1]) + side(quad[3], quad[2])) / 2;
+  const h = (side(quad[0], quad[3]) + side(quad[1], quad[2])) / 2;
+  if (w <= 0 || h <= 0) return 1;
+  return Math.abs(w / h - CARD_ASPECT);
+}
+
 /** True when the card runs right up to the edge of the photo. Background
  *  estimation samples the frame's outer ring, so a card with no margin
  *  around it poisons that estimate and auto-detection drifts. */

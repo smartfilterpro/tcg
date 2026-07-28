@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
 import type { GradeReport } from "@/lib/grading";
 import type { GradeValue } from "@/lib/gradeValue";
-import { quadNearEdge, type CenteringMeasurement, type Quad } from "@/lib/cardGeometry";
+import { quadLooksLikeCard, quadNearEdge, type CenteringMeasurement, type Quad } from "@/lib/cardGeometry";
 import {
   loadPhoto,
   initialQuad,
@@ -78,6 +78,7 @@ function SidePanel({
   const metrics = side.preview?.metrics;
   const nearEdge = quadNearEdge(side.quad, side.photo.width, side.photo.height);
   const bleed = side.preview?.bleed ?? 0;
+  const wrongShape = !quadLooksLikeCard(side.quad);
   return (
     <div className="space-y-2">
       <div className="text-sm font-semibold">{label}</div>
@@ -98,6 +99,12 @@ function SidePanel({
           />
           <div className="min-w-0 text-[11px] leading-relaxed text-slate-600">
             <p className="font-semibold text-slate-700">This is what gets graded</p>
+            {wrongShape && (
+              <p className="font-medium text-amber-600">
+                That outline isn&apos;t card-shaped — a card is noticeably taller than it is wide.
+                Drag each handle onto a corner of the card, or tap Auto-detect again.
+              </p>
+            )}
             {/* Correct crops measure a few percent; a genuinely misplaced
                 outline runs 30% and up. */}
             {bleed > 0.25 && (
