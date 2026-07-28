@@ -70,16 +70,24 @@ function normalizeSide(side: SideInput | undefined): {
 
 function measurementLine(m: CenteringMeasurement | null, side: "front" | "back"): string {
   if (!m) {
-    return `- ${side}: NOT MEASURABLE (no consistent printed border — full-art or borderless). Estimate this one by eye and say so.`;
+    return `- ${side}: NOT MEASURABLE (no border this scan could read reliably). Estimate this one by eye and say so.`;
   }
   const cap = side === "front" ? m.cap : centeringCapBack(m.worst);
   const allowance =
     side === "front"
       ? "front allowances: 55/45 for a 10, 60/40 for a 9, 65/35 for an 8, 70/30 for a 7, 80/20 for a 6"
       : "back allowances are looser: roughly 75/25 for a 10 and 90/10 for a 9";
+  const axes: string[] = [];
+  if (m.lr) axes.push(`${m.lr.pct[0]}/${m.lr.pct[1]} left-to-right`);
+  if (m.tb) axes.push(`${m.tb.pct[0]}/${m.tb.pct[1]} top-to-bottom`);
+  const missing = !m.lr
+    ? " Left-to-right could not be read on this card — judge that axis by eye and say so."
+    : !m.tb
+      ? " Top-to-bottom could not be read on this card — judge that axis by eye and say so."
+      : "";
   return (
-    `- ${side}: ${m.lr[0]}/${m.lr[1]} left-to-right, ${m.tb[0]}/${m.tb[1]} top-to-bottom. ` +
-    `Worst axis ${m.worst}/${100 - m.worst}, so centering caps this side at ${cap} (${allowance}).`
+    `- ${side}: ${axes.join(", ")}. ` +
+    `Worst measured axis ${m.worst}/${100 - m.worst}, so measured centering caps this side at ${cap} (${allowance}).${missing}`
   );
 }
 
