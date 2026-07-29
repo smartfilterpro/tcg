@@ -9,6 +9,8 @@ import type {
   BattleView,
   StatusCondition,
 } from "@/lib/battle";
+import { FanMark } from "@/components/Logo";
+import { APP_NAME } from "@/lib/branding";
 
 const STATUS_LIST: Array<{ key: StatusCondition; emoji: string; label: string }> = [
   { key: "poisoned", emoji: "☠️", label: "Poison" },
@@ -109,8 +111,12 @@ function FaceDownPile({
       disabled={!onClick}
       className="flex flex-col items-center gap-0.5"
     >
-      <span className="flex aspect-[63/88] w-11 items-center justify-center rounded-md border border-slate-400 bg-gradient-to-b from-poke-red from-50% to-white to-50% text-sm font-bold text-slate-800 shadow-sm">
-        {count}
+      {/* A face-down card back. The mark sits behind the count rather than
+          beside it, so the pile keeps the same footprint and the number stays
+          the thing you read. */}
+      <span className="relative flex aspect-[63/88] w-11 items-center justify-center overflow-hidden rounded-md border border-brand-ink/50 bg-brand-ink text-sm font-bold text-white shadow-sm">
+        <FanMark size={28} reversed className="absolute opacity-30" />
+        <span className="relative">{count}</span>
       </span>
       <span className="text-[10px] text-slate-500">{label}</span>
     </button>
@@ -233,8 +239,8 @@ export default function BattleBoardPage() {
       try {
         if (navigator.share) {
           await navigator.share({
-            title: "PokéDeck battle",
-            text: `⚔️ Battle me in PokéDeck! Join code: ${data.code}`,
+            title: `${APP_NAME} battle`,
+            text: `⚔️ Battle me in ${APP_NAME}! Join code: ${data.code}`,
             url: inviteUrl,
           });
           return;

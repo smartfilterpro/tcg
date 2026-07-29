@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { estimateCostUsd } from "@/lib/usage";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { creditSummary } from "@/lib/credits";
 
 /** GET: the current user's Trainer AI usage for this month, as a share of
  *  their allowance — deliberately no dollar amounts (that's admin-only).
@@ -54,6 +55,27 @@ export async function GET() {
     const normalized = daily.map((v) => v / peak);
 
     const isAdmin = profile?.role === "admin";
+
+    // Credits: the account the app now meters against. The credit cycle is
+    // per-user (signup anniversary; Stripe billing period once that lands),
+    // so it deliberately does NOT share monthStart above — the old percent
+    // fields stay only until the Phase 5 meter replaces the panel.
+    let credits: {
+      balance: number;
+      plan: string;
+      pooled: boolean;
+      cycleStart: string;
+      monthlyGrant: number;
+      spentByReason: Record<string, number>;
+    } | null = null;
+    if (!isAdmin) {
+      try {
+        credits = await creditSummary(user, profile);
+      } catch {
+        // Pre-migration-026: the meter shows the legacy view and nothing breaks.
+      }
+    }
+
     const budget =
       profile?.ai_budget_usd == null ? null : Number(profile.ai_budget_usd);
     const percentUsed =
@@ -63,8 +85,17 @@ export async function GET() {
           ? 100
           : Math.min(100, (spentMonth / budget) * 100);
 
-    const resetsOn = new Date(monthStart);
-    resetsOn.setUTCMonth(resetsOn.getUTCMonth() + 1);
+    const resetsOn = credits
+      ? (() => {
+          const next = new Date(credits.cycleStart);
+          next.setUTCMonth(next.getUTCMonth() + 1);
+          return next;
+        })()
+      : (() => {
+          const next = new Date(monthStart);
+          next.setUTCMonth(next.getUTCMonth() + 1);
+          return next;
+        })();
 
     return NextResponse.json({
       admin: isAdmin,
@@ -72,6 +103,7 @@ export async function GET() {
       calls,
       resetsOn: resetsOn.toISOString(),
       daily: normalized,
+      credits,
     });
   } catch (err) {
     if (err instanceof AuthError) {

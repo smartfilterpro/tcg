@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
-import { logAiUsage, checkAiBudget } from "@/lib/usage";
+import { logAiUsage } from "@/lib/usage";
+import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import { GRADING_SYSTEM, GRADE_SCHEMA, type GradeReport } from "@/lib/grading";
 import { centeringCapBack, type CenteringMeasurement } from "@/lib/cardGeometry";
@@ -174,7 +175,7 @@ export async function POST(req: Request) {
       typeof body.fee === "number" && body.fee >= 0 && body.fee <= 500 ? body.fee : DEFAULT_FEE_USD;
 
     const supabase = await createClient();
-    const budget = await checkAiBudget(supabase, user, profile);
+    const budget = await checkCredits(user, profile);
     if (!budget.ok) {
       return NextResponse.json({ error: budget.message }, { status: 429 });
     }

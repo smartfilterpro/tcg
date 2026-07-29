@@ -3,6 +3,8 @@ import Link from "next/link";
 import { Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { getUserAndProfile } from "@/lib/auth";
+import { AI_NAME, APP_NAME, FAN_DISCLAIMER } from "@/lib/branding";
+import { FanMark, Wordmark } from "@/components/Logo";
 
 // The display face for the wordmark and headings. next/font rather than a
 // <link> as the design bundle used: it self-hosts the file, so there's no
@@ -15,8 +17,8 @@ const display = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "PokéDeck — scan, collect, battle",
-  description: "Scan your Pokémon cards, track your collection, and build decks with Trainer AI.",
+  title: `${APP_NAME} — scan, collect, battle`,
+  description: `Scan your trading cards, track your collection, and build decks with ${AI_NAME}.`,
 };
 
 export const viewport: Viewport = {
@@ -32,11 +34,16 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     <html lang="en" className={display.variable}>
       <body className="min-h-screen">
         {auth && (
-          <header className="sticky top-0 z-40 bg-poke-dark text-white shadow">
+          <header className="sticky top-0 z-40 bg-brand-ink text-white shadow">
             <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-3 py-3 sm:px-4">
-              <Link href="/" className="flex shrink-0 items-center gap-2 font-bold">
-                <span className="inline-block h-5 w-5 rounded-full border-2 border-white bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
-                <span className="hidden sm:inline">PokéDeck</span>
+              {/* The mark alone on narrow screens, exactly as the Poké Ball
+                  behaved — the wordmark is what used to hide at sm, not the
+                  mark, so the nav keeps the same room it had. */}
+              <Link href="/" className="flex shrink-0 items-center gap-2 font-bold" aria-label={APP_NAME}>
+                <FanMark size={22} reversed />
+                <span className="hidden sm:inline">
+                  <Wordmark reversed />
+                </span>
               </Link>
               {/* Scrolls sideways on narrow screens instead of pushing items off-screen */}
               <nav className="no-scrollbar flex min-w-0 items-center gap-0.5 overflow-x-auto text-sm">
@@ -133,10 +140,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         )}
         <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>
         <footer className="mx-auto max-w-5xl px-4 pb-8 pt-2 text-center text-xs text-slate-400">
-          PokéDeck ·{" "}
-          <Link href="/terms" className="hover:underline">
-            Terms of Service
-          </Link>
+          <div>
+            {APP_NAME} ·{" "}
+            <Link href="/terms" className="hover:underline">
+              Terms of Service
+            </Link>
+          </div>
+          <p className="mx-auto mt-1.5 max-w-lg leading-snug">{FAN_DISCLAIMER}</p>
         </footer>
       </body>
     </html>

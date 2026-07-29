@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
-import { logAiUsage, checkAiBudget } from "@/lib/usage";
+import { logAiUsage } from "@/lib/usage";
+import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import type { DeckCardEntry } from "@/lib/types";
 
 export const maxDuration = 120;
 
-const SYSTEM = `You are Trainer AI, the coaching assistant inside PokéDeck, a
+const SYSTEM = `You are Trainer AI, the coaching assistant inside TrainerDeck, a
 personal Pokémon TCG collection app. You are an expert Pokémon TCG coach.
 
 SCOPE — you help with exactly these topics, and nothing else:
@@ -42,7 +43,7 @@ export async function POST(req: Request) {
     }
 
     const supabase = await createClient();
-    const budget = await checkAiBudget(supabase, user, profile);
+    const budget = await checkCredits(user, profile);
     if (!budget.ok) {
       return NextResponse.json({ error: budget.message }, { status: 429 });
     }

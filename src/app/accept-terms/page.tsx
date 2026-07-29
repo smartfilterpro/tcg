@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { FanMarkTile } from "@/components/Logo";
+import { APP_NAME } from "@/lib/branding";
 
 /** Signed-in members who haven't accepted the Terms are funneled here by the
  *  middleware — nothing else in the app is reachable until they agree. */
@@ -33,11 +35,11 @@ export default function AcceptTermsPage() {
     <div className="mx-auto mt-16 max-w-sm">
       <div className="card-panel p-8">
         <div className="mb-4 text-center">
-          <div className="mx-auto mb-3 h-12 w-12 rounded-full border-4 border-poke-dark bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
+          <FanMarkTile size={48} className="mx-auto mb-3" title={APP_NAME} />
           <h1 className="text-xl font-bold">Terms of Service</h1>
         </div>
         <p className="text-sm leading-relaxed text-slate-600">
-          Before using PokéDeck you need to agree to the{" "}
+          Before using {APP_NAME} you need to agree to the{" "}
           <Link href="/terms" target="_blank" className="font-medium text-poke-blue hover:underline">
             Terms of Service
           </Link>{" "}

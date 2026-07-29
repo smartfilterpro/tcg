@@ -5,6 +5,7 @@ import { AI_NAME } from "@/lib/branding";
 import { matchesSearch } from "@/lib/text";
 import type { CollectionItem, Deck, DeckCardEntry, DeckSuggestion } from "@/lib/types";
 import type { CardDetail } from "@/app/api/cards/details/route";
+import { FanMark } from "@/components/Logo";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -922,7 +923,7 @@ export default function DecksPage() {
         </div>
         {building && (
           <div className="mt-2 flex items-center gap-2">
-            <span className="animate-spin-slow inline-block h-4 w-4 shrink-0 rounded-full border-2 border-poke-dark bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
+            <FanMark size={16} className="animate-spin-slow shrink-0" />
             <p className="animate-pulse text-sm text-slate-500">{BUILD_STEPS[buildStep]}</p>
           </div>
         )}

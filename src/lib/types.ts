@@ -173,6 +173,16 @@ export interface Profile {
   suspended?: boolean;
   /** When the member accepted the Terms of Service (null = must accept at next login). */
   tos_accepted_at?: string | null;
+  /** Billing (migrations 026/027). All optional — older databases lack them,
+   *  and every reader falls back to the free plan. */
+  plan?: "free" | "pro" | "family";
+  trade_board_enabled?: boolean;
+  stripe_customer?: string | null;
+  stripe_subscription?: string | null;
+  /** Set while a cancellation is pending: paid access runs to this date. */
+  plan_expires_at?: string | null;
+  /** Stripe billing-period start; credit cycles anchor here once present. */
+  billing_anchor?: string | null;
   created_at: string;
 }
 

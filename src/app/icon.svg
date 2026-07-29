@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The Fan on its tile. At favicon sizes the three planes compress into
+       each other, so the mark never appears bare below 32px — the tile gives
+       it the outline the planes stop providing. Geometry matches FanMarkTile
+       in src/components/Logo.tsx. -->
+  <rect width="64" height="64" rx="14" fill="#16171B"/>
+  <g transform="translate(10.88 10.88) scale(0.66)">
+    <rect x="20.5" y="11.5" width="23" height="37" rx="3.5" fill="#FBFAF8" transform="rotate(-26 32 49.5)"/>
+    <rect x="20.5" y="11.5" width="23" height="37" rx="3.5" fill="#A9AAAF" transform="rotate(26 32 49.5)"/>
+    <rect x="21.5" y="17.5" width="21" height="32" rx="3.5" fill="#2C5CFF"/>
+  </g>
+</svg>
