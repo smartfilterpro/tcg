@@ -145,6 +145,26 @@ DECK QUALITY CRAFT — apply these principles:
 - If the collection can't support a competitive 60, build the best casual
   deck possible and say so honestly in the strategy.
 
+VARIETY — READ THIS BEFORE PICKING A WIN CONDITION:
+You may be given a list of decks already built for this player. Treat it as
+a list of answers already given.
+- If the REQUEST names a specific Pokémon, type, archetype or strategy, obey
+  the request. It always wins over variety — a player asking for another
+  Charizard build wants another Charizard build.
+- Otherwise, build around a main attacker line that is NOT the core of any
+  deck they already have. A different attacker, and where the collection
+  allows it a different type and a different style of deck (a fast low-cost
+  aggressive deck, a Stage 2 setup deck, a spread/bench-damage deck, a
+  control/disruption deck, a single-prize deck).
+- Reusing a few staple Trainers across decks is fine and expected — those
+  are not what makes a deck the same deck. The Pokémon line is.
+- Do NOT build a deliberately weak deck just to be different. If the
+  collection genuinely supports only one competitive archetype and you are
+  repeating it, say so plainly in the first line of the strategy — name the
+  cards that would open up a second archetype — and build the strongest
+  variation you can rather than a bad deck of another type.
+- Give it a name that isn't a near-copy of one they already have.
+
 UPGRADE SUGGESTIONS (missing_suggestions):
 The collection JSON is the COMPLETE truth of what the player owns — check it
 before every suggestion, and also check YOUR OWN deck list: never suggest a
@@ -179,7 +199,8 @@ export async function POST(req: Request) {
 
     // Gather everything the job needs BEFORE returning (request-scoped
     // resources like cookies aren't reliable in the detached task).
-    const [{ data: items, error }, { data: playProfile }] = await Promise.all([
+    const [{ data: items, error }, { data: playProfile }, { data: existingDecks }] =
+      await Promise.all([
       // Paged: Supabase caps responses at 1000 rows, which silently hid the
       // rest of a big collection from the builder.
       fetchAllRows(() =>
@@ -191,6 +212,16 @@ export async function POST(req: Request) {
           .order("id")
       ),
       supabase.from("play_profiles").select("style_notes").eq("user_id", user.id).maybeSingle(),
+      // What this player already has. Without it every build starts from the
+      // same blank slate against the same collection and lands on the same
+      // strongest line — "build me the best deck" has one answer, and the
+      // model has no way to know it has already given it.
+      supabase
+        .from("decks")
+        .select("name, cards, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(8),
     ]);
     if (error) throw error;
 
@@ -240,6 +271,21 @@ export async function POST(req: Request) {
     }
 
     const styleNotes = playProfile?.style_notes?.trim();
+
+    // A deck's identity is its Pokémon, and specifically the lines it runs
+    // multiples of — the 1-ofs are filler and say nothing about what the
+    // deck is. Trainers and Energy are near-identical across archetypes, so
+    // including them would only blur what makes each deck different.
+    const priorDecks = (existingDecks ?? [])
+      .map((d) => {
+        const core = ((d.cards as DeckCardEntry[] | null) ?? [])
+          .filter((c) => c.category === "pokemon" && (c.quantity ?? 0) >= 2)
+          .sort((a, b) => (b.quantity ?? 0) - (a.quantity ?? 0))
+          .slice(0, 5)
+          .map((c) => c.name);
+        return core.length > 0 ? `“${d.name as string}” — built around ${core.join(", ")}` : null;
+      })
+      .filter((s): s is string => s != null);
     cleanupJobs();
     const jobId = crypto.randomUUID();
     jobs.set(jobId, { userId: user.id, status: "running", created: Date.now() });
@@ -319,6 +365,11 @@ export async function POST(req: Request) {
             ? `FORMAT: ${fmt === "standard" ? "Standard" : "Expanded"} — ${excluded} ineligible cards were already removed from the list below. Entries without legality data remain: exclude any YOU know are not legal in this format, and only suggest format-legal upgrade cards.`
             : null,
           `PLAYER'S COLLECTION (JSON):\n${JSON.stringify(leanCollection)}`,
+          priorDecks.length > 0
+            ? `DECKS THIS PLAYER ALREADY HAS (newest first):\n${priorDecks
+                .map((d, i) => `${i + 1}. ${d}`)
+                .join("\n")}\n\nBuild something they don't already own — see VARIETY.`
+            : null,
           `REQUEST: ${prompt?.trim() || "Build me the best deck you can from my collection."}`,
         ]
           .filter(Boolean)
