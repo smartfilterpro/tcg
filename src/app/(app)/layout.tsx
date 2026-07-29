@@ -64,6 +64,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
                 >
                   Friends
                 </Link>
+                <Link
+                  href="/trades"
+                  className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
+                >
+                  Trades
+                </Link>
                 {auth.profile?.role === "admin" && (
                   <Link
                     href="/admin"

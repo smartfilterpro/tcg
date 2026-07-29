@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
-import CreditsMeter from "@/components/CreditsMeter";
+import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
 import { uploadCardPhoto } from "@/lib/photos";
 import { matchesSearch } from "@/lib/text";
 
@@ -466,11 +466,11 @@ export default function CollectionPage() {
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">My Collection</h1>
-          <p className="text-sm text-slate-500">
-            {totals.cards} cards · {totals.unique} unique ·{" "}
-            <span className="font-semibold text-green-700">
-              ~${totals.value.toFixed(2)} value
+          <h1 className="text-[26px] font-bold tracking-[-.025em]">My Collection</h1>
+          <p className="mt-0.5 text-sm text-slate-500">
+            {totals.cards.toLocaleString()} cards · {totals.unique.toLocaleString()} unique ·{" "}
+            <span className="font-bold text-brand-positive">
+              ~${totals.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} value
             </span>
           </p>
         </div>
@@ -488,54 +488,48 @@ export default function CollectionPage() {
       </div>
 
       <CreditsMeter />
+      <BulkScanNudge cards={totals.cards} />
 
-      <div className="card-panel mb-4 space-y-2 p-3">
-        {/* Full-width search on its own row; filters in a tidy grid below */}
+      {/* Artboard 02: one wrapping row — search pill, then chip-style selects. */}
+      <div className="mb-3.5 flex flex-wrap gap-2">
         <input
-          className="input w-full"
+          className="min-w-[220px] flex-[1_1_260px] rounded-full border border-brand-line-strong bg-white px-4 py-2.5 text-sm outline-none placeholder:text-brand-ink5 focus:border-brand-accent focus:ring-[3px] focus:ring-brand-accent/15"
           type="search"
           placeholder="🔍 Search your cards by name…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          <select className="input w-full min-w-0" value={supertypeFilter} onChange={(e) => setSupertypeFilter(e.target.value)}>
-            <option value="">All card types</option>
-            {facets.supertypes.map((s) => (
-              <option key={s} value={s}>{s}</option>
+        {[
+          { value: supertypeFilter, set: setSupertypeFilter, all: "All card types", opts: facets.supertypes.map((v) => ({ v, label: v })) },
+          { value: typeFilter, set: setTypeFilter, all: "All energy types", opts: facets.types.map((v) => ({ v, label: v })) },
+          { value: setFilter, set: setSetFilter, all: "All sets", opts: facets.sets.map((v) => ({ v, label: v })) },
+          { value: rarityFilter, set: setRarityFilter, all: "All rarities", opts: facets.rarities.map((v) => ({ v, label: v })) },
+          { value: variantFilter, set: setVariantFilter, all: "All finishes", opts: facets.variants.map((v) => ({ v, label: variantLabel(v) })) },
+        ].map((f) => (
+          <select
+            key={f.all}
+            className={`max-w-[46vw] cursor-pointer rounded-full border bg-white px-3.5 py-2.5 text-[13.5px] outline-none ${
+              f.value ? "border-brand-accent text-brand-accent" : "border-brand-line-strong text-brand-ink2"
+            }`}
+            value={f.value}
+            onChange={(e) => f.set(e.target.value)}
+          >
+            <option value="">{f.all}</option>
+            {f.opts.map((o) => (
+              <option key={o.v} value={o.v}>{o.label}</option>
             ))}
           </select>
-          <select className="input w-full min-w-0" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-            <option value="">All energy types</option>
-            {facets.types.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
-          <select className="input w-full min-w-0" value={setFilter} onChange={(e) => setSetFilter(e.target.value)}>
-            <option value="">All sets</option>
-            {facets.sets.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-          <select className="input w-full min-w-0" value={rarityFilter} onChange={(e) => setRarityFilter(e.target.value)}>
-            <option value="">All rarities</option>
-            {facets.rarities.map((r) => (
-              <option key={r} value={r}>{r}</option>
-            ))}
-          </select>
-          <select className="input w-full min-w-0" value={variantFilter} onChange={(e) => setVariantFilter(e.target.value)}>
-            <option value="">All finishes</option>
-            {facets.variants.map((v) => (
-              <option key={v} value={v}>{variantLabel(v)}</option>
-            ))}
-          </select>
-          <select className="input w-full min-w-0" value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
-            <option value="newest">Newest first</option>
-            <option value="name">Name A–Z</option>
-            <option value="price">Highest value</option>
-            <option value="set">By set</option>
-          </select>
-        </div>
+        ))}
+        <select
+          className="max-w-[46vw] cursor-pointer rounded-full border border-brand-line-strong bg-white px-3.5 py-2.5 text-[13.5px] text-brand-ink2 outline-none"
+          value={sort}
+          onChange={(e) => setSort(e.target.value as SortKey)}
+        >
+          <option value="newest">Newest first</option>
+          <option value="name">Name A–Z</option>
+          <option value="price">Highest value</option>
+          <option value="set">By set</option>
+        </select>
       </div>
 
       <div className="mb-2 flex items-center justify-between gap-2 text-xs text-slate-400">
@@ -550,7 +544,7 @@ export default function CollectionPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
         {grouped.map((group) => {
           const item = group.items[0];
           return (
@@ -560,7 +554,7 @@ export default function CollectionPage() {
             onClick={() => openDetail(item)}
           >
             {group.quantity > 1 && (
-              <span className="absolute right-2 top-2 z-10 rounded-full bg-poke-dark px-2 py-0.5 text-xs font-bold text-white">
+              <span className="absolute right-2 top-2 z-10 rounded-full bg-brand-ink px-[7px] py-0.5 font-mono text-[11px] font-medium text-white">
                 ×{group.quantity}
               </span>
             )}
@@ -598,18 +592,15 @@ export default function CollectionPage() {
             <div className="truncate text-xs text-slate-500">
               {item.card.set_name} · #{item.card.number}
             </div>
-            <div className="mt-1 flex items-center justify-between text-xs">
-              <span className="truncate text-slate-400">{group.card.rarity ?? ""}</span>
-              {group.maxPrice != null && (
-                <span className="shrink-0 font-semibold text-green-700">
-                  {/* A range when the finishes are worth different amounts —
-                      one number would be wrong for every finish but one. */}
-                  ${group.minPrice!.toFixed(2)}
-                  {group.maxPrice !== group.minPrice ? `–$${group.maxPrice.toFixed(2)}` : ""}
-                  {group.overridden ? "*" : ""}
-                </span>
-              )}
-            </div>
+            {group.maxPrice != null && (
+              <div className="mt-1 font-mono text-[11.5px] font-medium text-brand-positive">
+                {/* A range when the finishes differ — one number would be
+                    wrong for every finish but one. */}
+                ${group.minPrice!.toFixed(2)}
+                {group.maxPrice !== group.minPrice ? `–$${group.maxPrice.toFixed(2)}` : ""}
+                {group.overridden ? "*" : ""}
+              </div>
+            )}
           </button>
           );
         })}

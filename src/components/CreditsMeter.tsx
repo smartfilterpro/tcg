@@ -297,3 +297,33 @@ export default function CreditsMeter() {
     </>
   );
 }
+
+/** Artboard 02's inline upgrade prompt: free plan only, once there's a
+ *  collection worth the pitch. Dark panel, highlight badge, one CTA. */
+export function BulkScanNudge({ cards }: { cards: number }) {
+  const [plan, setPlan] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/usage/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j && !j.admin && setPlan(j.credits?.plan ?? null))
+      .catch(() => {});
+  }, []);
+  if (plan !== "free" || cards < 20) return null;
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-[18px] rounded-2xl bg-brand-ink px-5 py-[18px] text-brand-canvas">
+      <span className="rounded-full bg-brand-highlight px-2.5 py-1 font-mono text-[10.5px] font-medium tracking-[.06em] text-brand-ink">
+        FREE PLAN
+      </span>
+      <span className="min-w-[280px] flex-1 text-[14.5px] leading-[1.5]">
+        You&apos;ve added {cards.toLocaleString()} cards. <b>Bulk scan reads 20 at a time</b> — a
+        whole pile in one photo.
+      </span>
+      <a
+        href="/scan"
+        className="rounded-full bg-brand-canvas px-5 py-2.5 text-sm font-medium text-brand-ink"
+      >
+        Try a bulk scan · {ACTION_ESTIMATES.scan} cr
+      </a>
+    </div>
+  );
+}
