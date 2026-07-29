@@ -167,11 +167,16 @@ export type BattleAction = { override?: boolean } & (
   | { type: "handToBench"; handIndex: number; benchIndex?: number; mode: "new" | "evolve" | "attach" }
   | { type: "handToDiscard"; handIndex: number }
   | { type: "playCard"; handIndex: number }
-  | { type: "deckTake"; uid: string; to?: "hand" | "top"; noShuffle?: boolean }
+  | {
+      type: "deckTake";
+      uid: string;
+      to?: "hand" | "top" | "active" | "bench";
+      noShuffle?: boolean;
+    }
   | { type: "millDeck"; n: number }
   | { type: "discardToHand"; discardIndex: number }
   | { type: "handToDeck"; handIndex: number; where: "top" | "bottom" | "shuffle" }
-  | { type: "stackToDeck"; target: "active" | number }
+  | { type: "stackToDeck"; target: "active" | number; side?: "me" | "opp" }
   | { type: "devolve"; target: "active" | number; to: "hand" | "discard" }
   | { type: "playStadium"; handIndex: number }
   | { type: "discardStadium" }
@@ -185,7 +190,7 @@ export type BattleAction = { override?: boolean } & (
   | { type: "setStatus"; side: "me" | "opp"; target: "active" | number; status: StatusCondition; on: boolean }
   | { type: "damage"; side: "me" | "opp"; target: "active" | number; delta: number }
   | { type: "knockout"; target: "active" | number }
-  | { type: "stackToHand"; target: "active" | number }
+  | { type: "stackToHand"; target: "active" | number; side?: "me" | "opp" }
   | { type: "detach"; target: "active" | number; attachedIndex: number; to: "discard" | "hand"; side?: "me" | "opp" }
   | { type: "takePrize" }
   | { type: "flipCoin" }
@@ -629,6 +634,26 @@ export function applyAction(
             : `moved a card from their deck to the top — WITHOUT shuffling${effectNote}`,
         };
       }
+      // Straight onto the board. Plenty of effects put a Pokémon from the
+      // deck into play, and routing it through the hand first is both extra
+      // taps and a different thing — cards can care about where it came from.
+      if (action.to === "active" || action.to === "bench") {
+        if (action.to === "active" && me.active) {
+          throw new BattleError("You already have an Active Pokémon.");
+        }
+        if (action.to === "bench" && me.bench.length >= 5) {
+          throw new BattleError("Your Bench is full.");
+        }
+        const stack = { face: card, attached: [], damage: 0, playedTurn: state.turnCount };
+        if (action.to === "active") me.active = stack;
+        else me.bench.push(stack);
+        const where = action.to === "active" ? "as their Active Pokémon" : "onto their Bench";
+        return {
+          text: `put ${card.name} from their deck ${where}${
+            shuffled ? " and shuffled" : " — WITHOUT shuffling"
+          }${effectNote}`,
+        };
+      }
       me.hand.push(card);
       return {
         text: shuffled
@@ -649,10 +674,18 @@ export function applyAction(
       return { text: `put a card from their hand ${whereText} their deck${effectNote}` };
     }
     case "stackToDeck": {
-      const stack = removeStack(me, action.target);
-      me.deck.push(...stackCards(stack));
-      me.deck = shuffle(me.deck);
-      return { text: `shuffled ${stack.face.name} (and everything attached) into their deck${effectNote}` };
+      // side "opp": card effects that send the OPPOSING Pokémon back to its
+      // deck. It always goes to its owner's deck, never the player's own.
+      const owner = action.side === "opp" ? opp : me;
+      const stack = removeStack(owner, action.target);
+      owner.deck.push(...stackCards(stack));
+      owner.deck = shuffle(owner.deck);
+      const whose = action.side === "opp" ? "the opposing" : "their own";
+      return {
+        text: `shuffled ${whose} ${stack.face.name} (and everything attached) into ${
+          action.side === "opp" ? "its owner's" : "their"
+        } deck${effectNote}`,
+      };
     }
     case "devolve": {
       const stack = getStack(me, action.target);
@@ -896,9 +929,17 @@ export function applyAction(
       return { text: ko.text, winnerId: ko.winnerId };
     }
     case "stackToHand": {
-      const stack = removeStack(me, action.target);
-      me.hand.push(...stackCards(stack));
-      return { text: `picked ${stack.face.name} (and everything attached) up into their hand` };
+      // Same as stackToDeck: "opp" returns the OPPOSING Pokémon, and it goes
+      // to its owner's hand.
+      const owner = action.side === "opp" ? opp : me;
+      const stack = removeStack(owner, action.target);
+      owner.hand.push(...stackCards(stack));
+      return {
+        text:
+          action.side === "opp"
+            ? `returned the opposing ${stack.face.name} (and everything attached) to its owner's hand`
+            : `picked ${stack.face.name} (and everything attached) up into their hand`,
+      };
     }
     case "detach": {
       // side "opp": attack/card effects that strip energy off the OPPOSING
