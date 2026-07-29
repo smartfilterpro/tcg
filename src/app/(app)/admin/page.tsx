@@ -630,6 +630,8 @@ export default function AdminPage() {
       </>
       )}
 
+      {tab === "analytics" && <BusinessDashboard />}
+
       {tab === "analytics" && analytics && (
         <div className="card-panel p-4">
           <h2 className="mb-2 font-semibold">📊 Analytics</h2>
@@ -1230,6 +1232,172 @@ function CardImportPanel() {
       {state?.error && !error && (
         <p className="text-xs text-red-600">⚠️ Last attempt stopped: {state.error}</p>
       )}
+    </div>
+  );
+}
+
+interface BusinessData {
+  kpis: {
+    mrr: number; payingCustomers: number; totalAccounts: number; aiCost30: number;
+    revenue30: number; grossMarginPct: number | null; conversionPct: number | null;
+  };
+  months: Array<{ label: string; revenue: number; cost: number }>;
+  planMix: Array<{ label: string; count: number; mrr: number }>;
+  credits: {
+    granted30: number; spent30: number; spentPct: number | null;
+    boostCreditsSold30: number; boostRevenue30: number; top5SharePct: number;
+  };
+  modelSplit: Array<{ model: string; cost: number }>;
+  endpointSplit: Array<{ endpoint: string; cost: number }>;
+  scanStats: { scans: number; matchRate: number | null; secondsPerCard: number | null; cardsPerScan: number | null };
+  alerts: Array<{ severity: "red" | "amber"; title: string; body: string }>;
+  customers: Array<{
+    email: string; name: string | null; plan: string; cost30: number; revenue30: number;
+    margin: number; joined: string | null;
+  }>;
+}
+
+/** The owner dashboard (Owner Dashboard.dc.html): the business, on one dark
+ *  panel, every figure from real tables via /api/admin/business. */
+function BusinessDashboard() {
+  const [data, setData] = useState<BusinessData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/business")
+      .then((r) => r.json().then((j) => (r.ok ? setData(j) : setError(j.error))))
+      .catch(() => setError("Couldn't load business data"));
+  }, []);
+
+  if (error) return <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>;
+  if (!data) return <div className="card-panel p-4 text-sm text-slate-500">Loading the business view…</div>;
+
+  const k = data.kpis;
+  const maxBar = Math.max(...data.months.map((m) => Math.max(m.revenue, m.cost)), 0.01);
+  const maxModel = Math.max(...data.modelSplit.map((m) => m.cost), 0.01);
+  const kpi = (label: string, value: string, note: string) => (
+    <div key={label} className="rounded-[14px] bg-dark-panel-alt p-3.5">
+      <div className="font-mono text-[10px] uppercase tracking-[.1em] text-dark-ink4">{label}</div>
+      <div className="mt-1 font-display text-[22px] font-bold tracking-tight text-dark-ink">{value}</div>
+      <div className="mt-0.5 text-[11.5px] text-dark-ink4">{note}</div>
+    </div>
+  );
+
+  return (
+    <div className="mb-4 rounded-[18px] bg-dark-canvas p-4 text-dark-ink sm:p-5">
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <h2 className="m-0 font-display text-lg font-bold">📈 The business</h2>
+        <span className="font-mono text-[10.5px] uppercase tracking-[.08em] text-dark-ink4">
+          last 30 days · real token spend
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        {kpi("MRR", `$${k.mrr.toLocaleString()}`, `${k.payingCustomers} paying · ${k.totalAccounts} accounts`)}
+        {kpi("Revenue 30d", `$${k.revenue30.toFixed(2)}`, "subs + boosts")}
+        {kpi("AI cost 30d", `$${k.aiCost30.toFixed(2)}`, "via estimateCostUsd")}
+        {kpi("Gross margin", k.grossMarginPct == null ? "—" : `${k.grossMarginPct}%`, "of 30d revenue")}
+        {kpi("Free → paid", k.conversionPct == null ? "—" : `${k.conversionPct}%`, "of all accounts")}
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="rounded-[14px] bg-dark-panel p-3.5">
+          <div className="mb-2 flex justify-between font-mono text-[10px] uppercase tracking-[.1em] text-dark-ink4">
+            <span>Revenue vs AI cost · 7 months</span>
+            <span><span className="text-brand-accent-soft">■</span> rev <span className="text-brand-highlight">■</span> cost</span>
+          </div>
+          <div className="flex h-28 items-end gap-2">
+            {data.months.map((m) => (
+              <div key={m.label} className="flex flex-1 flex-col items-center gap-1">
+                <div className="flex w-full flex-1 items-end justify-center gap-1">
+                  <span className="w-2/5 rounded-t bg-brand-accent-soft" style={{ height: `${Math.max((m.revenue / maxBar) * 100, 2)}%` }} title={`$${m.revenue}`} />
+                  <span className="w-2/5 rounded-t bg-brand-highlight" style={{ height: `${Math.max((m.cost / maxBar) * 100, 2)}%` }} title={`$${m.cost}`} />
+                </div>
+                <span className="font-mono text-[9.5px] text-dark-ink4">{m.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <div className="rounded-[14px] bg-dark-panel p-3.5">
+            <div className="mb-2 font-mono text-[10px] uppercase tracking-[.1em] text-dark-ink4">Plan mix</div>
+            {data.planMix.map((pm) => (
+              <div key={pm.label} className="flex items-center justify-between gap-2 py-1 text-[12.5px]">
+                <span className="text-dark-ink2">{pm.label}</span>
+                <span className="font-mono text-[11.5px] text-dark-ink3">
+                  {pm.count} accts · ${pm.mrr.toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-[14px] bg-dark-panel p-3.5 text-[12.5px]">
+            <div className="mb-2 font-mono text-[10px] uppercase tracking-[.1em] text-dark-ink4">Credit economics · 30d</div>
+            <div className="flex justify-between py-0.5"><span className="text-dark-ink2">Credits granted</span><span className="font-mono text-[11.5px]">{data.credits.granted30.toLocaleString()}</span></div>
+            <div className="flex justify-between py-0.5"><span className="text-dark-ink2">Credits spent</span><span className="font-mono text-[11.5px]">{data.credits.spent30.toLocaleString()}{data.credits.spentPct != null ? ` (${data.credits.spentPct}%)` : ""}</span></div>
+            <div className="flex justify-between py-0.5"><span className="text-dark-ink2">Boosts sold</span><span className="font-mono text-[11.5px] text-[#5BD66E]">{data.credits.boostCreditsSold30.toLocaleString()} · ${data.credits.boostRevenue30.toFixed(2)}</span></div>
+            <div className="flex justify-between py-0.5"><span className="text-dark-ink2">Heaviest 5% of users</span><span className="font-mono text-[11.5px] text-brand-warning">{data.credits.top5SharePct}% of AI cost</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="rounded-[14px] bg-dark-panel p-3.5">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[.1em] text-dark-ink4">AI cost by model · 30d</div>
+          {data.modelSplit.length === 0 && <div className="text-[12.5px] text-dark-ink4">No AI calls yet.</div>}
+          {data.modelSplit.map((m) => (
+            <div key={m.model} className="flex items-center gap-2 py-1">
+              <span className="w-40 truncate font-mono text-[11px] text-dark-ink3">{m.model}</span>
+              <span className="h-2 rounded-full bg-brand-accent-soft" style={{ width: `${Math.max((m.cost / maxModel) * 60, 2)}%` }} />
+              <span className="ml-auto font-mono text-[11.5px] text-dark-ink2">${m.cost.toFixed(2)}</span>
+            </div>
+          ))}
+          <div className="mt-3 border-t border-dark-line2 pt-2.5">
+            <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[.1em] text-dark-ink4">
+              Scan quality · the landing page's numbers
+            </div>
+            <div className="flex flex-wrap gap-4 text-[12.5px] text-dark-ink2">
+              <span><b className="font-display text-dark-ink">{data.scanStats.matchRate ?? "—"}%</b> auto-match</span>
+              <span><b className="font-display text-dark-ink">{data.scanStats.secondsPerCard ?? "—"}s</b> per card</span>
+              <span><b className="font-display text-dark-ink">{data.scanStats.cardsPerScan ?? "—"}</b> cards/photo</span>
+              <span className="text-dark-ink4">{data.scanStats.scans} scans, 30d</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-[14px] bg-dark-panel p-3.5">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[.1em] text-dark-ink4">Needs a human</div>
+          {data.alerts.length === 0 ? (
+            <div className="text-[12.5px] text-dark-ink4">Nothing waiting. 🎉</div>
+          ) : (
+            data.alerts.map((a) => (
+              <div key={a.title} className="border-t border-dark-line2 py-2 first:border-t-0">
+                <div className={`text-[13px] font-medium ${a.severity === "red" ? "text-brand-negative" : "text-brand-warning"}`}>{a.title}</div>
+                <div className="text-[12px] text-dark-ink3">{a.body}</div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-x-auto rounded-[14px] bg-dark-panel">
+        <div className="grid min-w-[560px] grid-cols-[1.8fr_70px_90px_90px_90px] gap-2 border-b border-dark-line2 px-3.5 py-2.5 font-mono text-[10px] uppercase tracking-[.08em] text-dark-ink4">
+          <span>Customer · by AI cost</span><span>Plan</span><span>Cost 30d</span><span>Rev 30d</span><span>Margin</span>
+        </div>
+        {data.customers.map((c) => (
+          <div key={c.email} className="grid min-w-[560px] grid-cols-[1.8fr_70px_90px_90px_90px] items-center gap-2 border-b border-dark-line px-3.5 py-2 text-[12.5px]">
+            <span className="truncate text-dark-ink2">{c.name ? `${c.name} · ` : ""}{c.email}</span>
+            <span className={`justify-self-start rounded-full px-2 py-0.5 font-mono text-[10px] ${c.plan === "family" ? "bg-brand-highlight text-brand-ink" : c.plan === "pro" ? "bg-brand-accent text-white" : "bg-dark-tile text-dark-ink3"}`}>
+              {c.plan.toUpperCase()}
+            </span>
+            <span className="font-mono text-[11.5px]">${c.cost30.toFixed(2)}</span>
+            <span className="font-mono text-[11.5px]">${c.revenue30.toFixed(2)}</span>
+            <span className={`font-mono text-[11.5px] ${c.margin < 0 ? "text-brand-negative" : "text-[#5BD66E]"}`}>
+              {c.margin < 0 ? "−" : "+"}${Math.abs(c.margin).toFixed(2)}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

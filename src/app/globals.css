@@ -14,27 +14,34 @@ body {
 }
 
 body {
-  @apply bg-slate-100 text-slate-900 antialiased;
+  @apply bg-brand-canvas font-body text-brand-ink antialiased;
+}
+
+/* Display face for headings, per the design system. Weights and sizes stay
+   whatever each screen sets — only the face and tracking are global. */
+h1, h2, h3 {
+  @apply font-display tracking-tight;
 }
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply btn bg-poke-red text-white hover:bg-red-700;
+    @apply btn bg-brand-ink text-brand-canvas hover:bg-brand-accent;
   }
   .btn-secondary {
-    @apply btn bg-white text-slate-800 border border-slate-300 hover:bg-slate-50;
+    @apply btn border border-brand-line-strong bg-white text-brand-ink hover:bg-brand-sunken;
   }
   .btn-dark {
-    @apply btn bg-poke-dark text-white hover:bg-black;
+    @apply btn-primary;
   }
   .input {
-    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-poke-blue/50 focus:border-poke-blue;
+    @apply w-full rounded-[11px] border border-brand-line-strong bg-white px-3 py-2 text-sm focus:border-brand-accent focus:outline-none focus:ring-[3px] focus:ring-brand-accent/15;
   }
   .card-panel {
-    @apply rounded-xl bg-white shadow-sm border border-slate-200;
+    /* Panels use 1px borders, not shadows. */
+    @apply rounded-[18px] border border-brand-line bg-white;
   }
   .chip {
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
