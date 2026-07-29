@@ -57,6 +57,7 @@ export async function POST(req: Request) {
     const myName = displayName(profile, user.email);
     state.sides[user.id] = buildSide(cards);
     state.names[user.id] = myName;
+    state.decks = { ...(state.decks ?? {}), [user.id]: deck.id };
 
     const hostName = state.names[battle.host_user as string] ?? "Trainer";
     const hostFirst = Math.random() < 0.5;

@@ -200,6 +200,21 @@ export default function BattleBoardPage() {
     }
   }
 
+  async function rematch() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/battles/${id}/rematch`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't start the rematch");
+      router.push(`/battles/${json.id}`);
+      return;
+    } catch (e) {
+      showNotice(e instanceof Error ? e.message : "Couldn't start the rematch");
+    }
+    setBusy(false);
+  }
+
   async function removeBattle() {
     if (!confirm("Remove this battle for both players?")) return;
     await fetch(`/api/battles/${id}`, { method: "DELETE" });
@@ -276,7 +291,10 @@ export default function BattleBoardPage() {
           }`}
         >
           🏆 {data.youWon ? "You won!" : `${data.winnerName ?? oppName} wins!`}
-          <div className="mt-2 flex justify-center gap-2 text-sm font-normal">
+          <div className="mt-2 flex flex-wrap justify-center gap-2 text-sm font-normal">
+            <button className="btn-primary" disabled={busy} onClick={rematch}>
+              {busy ? "Shuffling…" : "🔁 Rematch"}
+            </button>
             <a href="/battles" className="btn-secondary">
               Back to battles
             </a>
@@ -390,12 +408,36 @@ export default function BattleBoardPage() {
 
       {/* ===== Log + notices ===== */}
       {notice && <div className="rounded-lg bg-red-50 p-2 text-center text-xs text-red-700">{notice}</div>}
-      <div ref={logRef} className="card-panel h-24 overflow-y-auto p-2 text-xs text-slate-600">
-        {view.log.map((l, i) => (
-          <div key={i} className="py-0.5">
-            {l.text}
-          </div>
-        ))}
+      <div className="card-panel p-2">
+        <div ref={logRef} className="h-24 overflow-y-auto text-xs text-slate-600">
+          {view.log.map((l, i) => (
+            <div key={i} className="py-0.5">
+              {l.text}
+            </div>
+          ))}
+        </div>
+        <div className="mt-1 flex items-center justify-between gap-2 border-t border-slate-100 pt-1">
+          {view.undo ? (
+            <button
+              className="chip max-w-[70%] shrink truncate bg-amber-50 text-amber-800"
+              disabled={busy}
+              onClick={() => act({ type: "undo" })}
+              title={`Take back your last move: ${view.undo}`}
+            >
+              ↩️ Undo <span className="font-normal opacity-70">{view.undo}</span>
+            </button>
+          ) : (
+            <span />
+          )}
+          <a
+            href={`/api/battles/${id}/log`}
+            download
+            className="text-[11px] text-slate-400 hover:text-poke-blue hover:underline"
+            title="Download the whole game log as a text file — including the early turns that have scrolled out of view here"
+          >
+            ⬇ Export log
+          </a>
+        </div>
       </div>
 
       {/* ===== My side ===== */}
@@ -584,6 +626,14 @@ export default function BattleBoardPage() {
                 onClick={() => act({ type: "handToDeckAll" })}
               >
                 🂠 Hand into deck
+              </button>
+              <button
+                className="chip bg-slate-100 text-slate-600"
+                disabled={busy || me.hand.length === 0}
+                onClick={() => act({ type: "handToDeckAll", where: "bottom" })}
+                title="Shuffle your hand and put it on the bottom of your deck, leaving the rest of the deck in order (Vivillon's Grand Wing, Roxanne-style effects)"
+              >
+                ⬇️ Hand to bottom
               </button>
               <button
                 className="chip bg-slate-100 text-slate-600"

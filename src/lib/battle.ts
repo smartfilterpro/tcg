@@ -110,9 +110,50 @@ export interface BattleState {
   turnsTaken?: Record<string, number>;
   /** The Stadium in play (shared spot, one at a time). */
   stadium?: { card: BattleCard; owner: string } | null;
+  /** Which deck each player brought, keyed by user id — what a rematch
+   *  needs to deal the same two decks again. */
+  decks?: Record<string, string>;
+  /** One step back, for undo. See UndoPoint. */
+  prev?: UndoPoint;
   turnUser: string | null;
   turnCount: number;
   log: LogEntry[];
+}
+
+/** The board as it was immediately before the last action.
+ *
+ *  Exactly one step is kept. This board is almost entirely manual — a
+ *  mis-tapped "Discard hand" is otherwise unrecoverable — but a full history
+ *  would multiply the size of a row that is rewritten on every single move.
+ *  One step turns a misclick into a two-second fix, which is the whole of
+ *  the problem worth solving. */
+export interface UndoPoint {
+  /** The previous board, itself carrying no undo point — so undo can't be
+   *  chained backwards and the row can't grow without bound. */
+  s: BattleState;
+  /** The battle row's status and winner at that moment, so undoing the move
+   *  that ended a game also un-ends it. */
+  status: string;
+  winner: string | null;
+  /** Who acted. Only they may undo it: taking back a move after the other
+   *  player has replied would silently discard their reply. */
+  by: string;
+  /** What it was, for the button and the log ("Undo: discarded their whole hand"). */
+  label: string;
+}
+
+/** Capture the board before an action, for one step of undo. */
+export function takeSnapshot(
+  state: BattleState,
+  status: string,
+  winner: string | null,
+  by: string,
+  label: string
+): UndoPoint {
+  // Dropping `prev` is what keeps this to one level; without it every move
+  // would nest the entire previous history inside the row.
+  const { prev: _prev, ...rest } = state;
+  return { s: structuredClone(rest) as BattleState, status, winner, by, label };
 }
 
 export type BattleAction = { override?: boolean } & (
@@ -120,7 +161,7 @@ export type BattleAction = { override?: boolean } & (
   | { type: "shuffleDeck"; keepTop?: number }
   | { type: "mulligan" }
   | { type: "discardHand" }
-  | { type: "handToDeckAll" }
+  | { type: "handToDeckAll"; where?: "shuffle" | "bottom" | "top" }
   | { type: "redrawSeven" }
   | { type: "handToActive"; handIndex: number; mode: "new" | "evolve" | "attach" }
   | { type: "handToBench"; handIndex: number; benchIndex?: number; mode: "new" | "evolve" | "attach" }
@@ -151,6 +192,7 @@ export type BattleAction = { override?: boolean } & (
   | { type: "endTurn" }
   | { type: "claimTurn" }
   | { type: "concede" }
+  | { type: "undo" }
 );
 
 export interface ActionResult {
@@ -162,7 +204,10 @@ export interface ActionResult {
 export class BattleError extends Error {}
 
 const MAX_BENCH = 5;
-const MAX_LOG = 200;
+// Enough that a whole game survives to be exported. A full six-prize game
+// with manual plays runs a couple of hundred entries, and the old 200 was
+// quietly dropping the opening of any long game.
+const MAX_LOG = 600;
 
 export function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -420,10 +465,26 @@ export function applyAction(
     case "handToDeckAll": {
       const n = me.hand.length;
       if (n === 0) throw new BattleError("Your hand is already empty.");
-      me.deck.push(...me.hand);
+      // Index 0 is the top of the deck, so "bottom" is a plain push. The
+      // hand is still shuffled first — cards like Vivillon's Grand Wing say
+      // "shuffles their hand and puts it on the bottom", which hides the
+      // order you were holding without disturbing the deck underneath.
+      const where = action.where ?? "shuffle";
+      if (where === "top") {
+        me.deck.unshift(...shuffle(me.hand));
+      } else {
+        me.deck.push(...(where === "bottom" ? shuffle(me.hand) : me.hand));
+      }
       me.hand = [];
-      me.deck = shuffle(me.deck);
-      return { text: `shuffled their hand (${n} card${n === 1 ? "" : "s"}) back into their deck` };
+      if (where === "shuffle") me.deck = shuffle(me.deck);
+      const cards = `${n} card${n === 1 ? "" : "s"}`;
+      const text =
+        where === "bottom"
+          ? `shuffled their hand and put it on the bottom of their deck (${cards})`
+          : where === "top"
+            ? `put their hand on top of their deck (${cards})`
+            : `shuffled their hand (${cards}) back into their deck`;
+      return { text };
     }
     case "redrawSeven": {
       // Hand AND prizes go back before re-dealing. Prizes are set when the
@@ -923,6 +984,10 @@ export function applyAction(
     case "concede":
       // Handled by the API route (it also flips the battle row's status).
       return { text: "conceded the battle" };
+    case "undo":
+      // Also the route's: undo restores a whole previous board, which is not
+      // something one action can express against the current one.
+      throw new BattleError("Undo is handled before the board is touched.");
     default:
       throw new BattleError("Unknown action.");
   }
@@ -963,6 +1028,8 @@ export interface BattleView {
   energyUsed: boolean;
   /** The shared Stadium in play, if any. */
   stadium: { card: BattleCard; mine: boolean } | null;
+  /** What this viewer can take back, or null. Only ever their own move. */
+  undo: string | null;
   log: LogEntry[];
 }
 
@@ -993,6 +1060,10 @@ export function redactState(state: BattleState, viewerId: string, oppId: string)
     stadium: state.stadium
       ? { card: state.stadium.card, mine: state.stadium.owner === viewerId }
       : null,
+    // Only the player who made the move is offered it back, and only the
+    // label crosses — the snapshot itself holds both hands and full deck
+    // order, so it must never reach a client.
+    undo: state.prev && state.prev.by === viewerId ? state.prev.label : null,
     log: state.log.slice(-100),
   };
 }
