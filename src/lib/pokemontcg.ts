@@ -361,6 +361,32 @@ export async function searchCards(opts: {
   return cards.map(toSummary);
 }
 
+/** One page of the entire catalogue, for the bulk import.
+ *
+ *  No query at all — every card, ordered by id so the paging is stable. An
+ *  unstable order (release date, say) would let a card slip between pages as
+ *  new sets land, and the import would silently miss it. `totalCount` comes
+ *  from the response envelope, which is the only way to know how far there
+ *  is to go. */
+export async function searchAllCardsPage(
+  page: number,
+  pageSize: number
+): Promise<{ cards: CardSummary[]; totalCount: number | null }> {
+  const url = new URL(`${BASE}/cards`);
+  url.searchParams.set("page", String(page));
+  url.searchParams.set("pageSize", String(pageSize));
+  url.searchParams.set("orderBy", "id");
+  const res = await fetch(url.toString(), { headers: headers(), cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`pokemontcg.io ${res.status}: ${await res.text().catch(() => "")}`);
+  }
+  const json = (await res.json()) as { data?: RawCard[]; totalCount?: number };
+  return {
+    cards: (json.data ?? []).map(toSummary),
+    totalCount: typeof json.totalCount === "number" ? json.totalCount : null,
+  };
+}
+
 export async function getCardById(id: string): Promise<CardSummary | null> {
   try {
     const cards = await apiGet(`/cards/${encodeURIComponent(id)}`, {});
