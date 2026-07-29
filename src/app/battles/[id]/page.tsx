@@ -117,7 +117,10 @@ function FaceDownPile({
   );
 }
 
-const DAMAGE_STEPS = [10, 30, 50, -10];
+// One damage counter is 10 damage, so these are 1, 2, 3, 5 and 10 counters.
+// Cards count counters, not totals ("30 more damage for each damage counter"),
+// which is why the sheet shows the count alongside the number.
+const DAMAGE_STEPS = [10, 20, 30, 50, 100, -10];
 
 export default function BattleBoardPage() {
   const { id } = useParams<{ id: string }>();
@@ -793,6 +796,30 @@ export default function BattleBoardPage() {
                     >
                       → top
                     </button>
+                    {!me.active && (
+                      <button
+                        className="text-green-700 hover:underline"
+                        disabled={busy}
+                        onClick={() => {
+                          act({ type: "deckTake", uid: c.uid, to: "active", noShuffle: !searchShuffle });
+                          setDeckSearch(null);
+                        }}
+                      >
+                        → active
+                      </button>
+                    )}
+                    {me.bench.length < 5 && (
+                      <button
+                        className="text-green-700 hover:underline"
+                        disabled={busy}
+                        onClick={() => {
+                          act({ type: "deckTake", uid: c.uid, to: "bench", noShuffle: !searchShuffle });
+                          setDeckSearch(null);
+                        }}
+                      >
+                        → bench
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1209,20 +1236,69 @@ function SheetContent({
         </div>
       )}
 
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="text-xs text-slate-500">Damage:</span>
-        {DAMAGE_STEPS.map((d) => (
+      <div className="mb-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-slate-500">
+            Damage:{" "}
+            <span className="font-semibold text-slate-700">
+              {stack.damage}
+              {stack.face.hp ? ` / ${stack.face.hp}` : ""}
+            </span>
+            <span className="ml-1 text-slate-400">
+              ({stack.damage / 10} counter{stack.damage === 10 ? "" : "s"})
+            </span>
+          </span>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          {DAMAGE_STEPS.map((d) => (
+            <button
+              key={d}
+              className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700"
+              disabled={busy}
+              onClick={() =>
+                act({ type: "damage", side: mine ? "me" : "opp", target: sheet.target, delta: d })
+              }
+            >
+              {d > 0 ? `+${d}` : d}
+            </button>
+          ))}
           <button
-            key={d}
             className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700"
             disabled={busy}
-            onClick={() =>
-              act({ type: "damage", side: mine ? "me" : "opp", target: sheet.target, delta: d })
-            }
+            onClick={() => {
+              // Counters, not damage: "put 7 damage counters on" is how the
+              // cards are worded, and 7 is easier to read off a card than 70.
+              const raw = prompt("How many damage counters? (each is 10 damage)");
+              if (raw == null) return;
+              const n = Math.round(Number(raw.trim()));
+              if (!Number.isFinite(n) || n === 0) return;
+              act({
+                type: "damage",
+                side: mine ? "me" : "opp",
+                target: sheet.target,
+                delta: n * 10,
+              });
+            }}
           >
-            {d > 0 ? `+${d}` : d}
+            +N…
           </button>
-        ))}
+          {stack.damage > 0 && (
+            <button
+              className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700"
+              disabled={busy}
+              onClick={() =>
+                act({
+                  type: "damage",
+                  side: mine ? "me" : "opp",
+                  target: sheet.target,
+                  delta: -stack.damage,
+                })
+              }
+            >
+              clear
+            </button>
+          )}
+        </div>
       </div>
 
       {sheet.target === "active" && (
@@ -1398,6 +1474,24 @@ function SheetContent({
           ⭐ Switch this to {oppName}&apos;s Active — gust card effect (Boss&apos;s Orders
           etc.)
         </button>
+      )}
+      {!mine && (
+        <>
+          <button
+            className="block w-full border-b border-slate-100 py-2.5 text-left text-sm"
+            disabled={busy}
+            onClick={() => act({ type: "stackToDeck", target: sheet.target, side: "opp" })}
+          >
+            🔀 Shuffle into {oppName}&apos;s deck (with everything attached)
+          </button>
+          <button
+            className="block w-full border-b border-slate-100 py-2.5 text-left text-sm"
+            disabled={busy}
+            onClick={() => act({ type: "stackToHand", target: sheet.target, side: "opp" })}
+          >
+            ✋ Return to {oppName}&apos;s hand (with everything attached)
+          </button>
+        </>
       )}
       <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
         Close
