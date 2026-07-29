@@ -42,7 +42,16 @@ export interface PriceRefreshSummary {
 const STATE_KEY = "price_refresh";
 const MIN_HOURS_BETWEEN_RUNS = 20;
 
-export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSummary> {
+/** @param limit how many stale cards to re-price this run.
+ *  @param opts.ptBudget PokeTrace requests allowed. Its free plan caps the
+ *    day, so a scheduled run takes a larger share than a manual one while
+ *    still leaving room for someone pressing the button afterwards.
+ *  @param opts.textBudget how many cards get their printed text warmed —
+ *    the cache the deck builder, deck review and battles all read. */
+export async function refreshStalePrices(
+  limit = 120,
+  opts?: { ptBudget?: number; textBudget?: number }
+): Promise<PriceRefreshSummary> {
   const admin = createAdminClient();
   const summary: PriceRefreshSummary = {
     ranAt: new Date().toISOString(),
@@ -90,7 +99,7 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
   // PokeTrace usage budget per run: with the free plan's 1-req/2s pacing,
   // ~80 requests ≈ 3 minutes — fits the admin route's time limit and stays
   // far inside the 250/day cap even with a manual run on top of the nightly.
-  const PT_BUDGET = 80;
+  const PT_BUDGET = opts?.ptBudget ?? 80;
   const pt = poketraceEnabled()
     ? { matched: 0, unmatched: 0, priced: 0, requests: 0, error: undefined as string | undefined }
     : null;
@@ -212,7 +221,7 @@ export async function refreshStalePrices(limit = 120): Promise<PriceRefreshSumma
           c.battle_data == null &&
           !(c.id as string).startsWith("custom-")
       )
-      .slice(0, 30);
+      .slice(0, opts?.textBudget ?? 30);
     summary.textWarmed = 0;
     for (let i = 0; i < needsText.length; i += 5) {
       await Promise.all(

@@ -762,6 +762,9 @@ export default function AdminPage() {
           <h3 className="mb-1 mt-4 text-sm font-semibold">💰 Price freshness</h3>
           <PriceRefreshPanel info={analytics.priceRefresh ?? null} />
 
+          <h3 className="mb-1 mt-4 text-sm font-semibold">📚 Card catalogue</h3>
+          <CardImportPanel />
+
           <h3 className="mb-1 mt-4 text-sm font-semibold">🎨 Finish detection</h3>
           {analytics.finish?.tracking === false ? (
             <p className="text-xs text-yellow-800">
@@ -1101,6 +1104,136 @@ export default function AdminPage() {
 }
 
 /** Last background price-refresh summary + a run-it-now button. */
+interface ImportState {
+  page: number;
+  written: number;
+  imagesPreserved: number;
+  totalCount: number | null;
+  updatedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+  done: boolean;
+}
+
+/** Pull the whole card catalogue into our own database.
+ *
+ *  The server does a bounded slice per call and saves its cursor, so this
+ *  keeps calling until it reports done. That also means closing the page
+ *  costs only the slice in flight — reopening picks up where it stopped. */
+function CardImportPanel() {
+  const [state, setState] = useState<ImportState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const stop = useRef(false);
+
+  useEffect(() => {
+    fetch("/api/admin/import-cards")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j && setState(j.state ?? null))
+      .catch(() => {});
+  }, []);
+
+  async function run(restart: boolean) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    stop.current = false;
+    try {
+      let first = restart;
+      for (;;) {
+        const res = await fetch("/api/admin/import-cards", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ restart: first }),
+        });
+        first = false;
+        const json = (await res.json().catch(() => ({}))) as {
+          state?: ImportState;
+          error?: string;
+          alreadyRunning?: boolean;
+        };
+        if (!res.ok) throw new Error(json.error || `Import failed (${res.status})`);
+        if (json.alreadyRunning) throw new Error("An import is already running.");
+        if (json.state) setState(json.state);
+        if (json.state?.error) throw new Error(json.state.error);
+        if (json.state?.done || stop.current) break;
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Import failed");
+    }
+    setBusy(false);
+  }
+
+  const done = state?.done === true;
+  const pct =
+    state?.totalCount && state.totalCount > 0
+      ? Math.min(100, Math.round((state.written / state.totalCount) * 100))
+      : null;
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-slate-500">
+        Downloads every Pokémon card into our own database, with prices. Cards normally
+        arrive one at a time as people scan or search for them, so anything nobody has
+        touched is invisible to search and to the deck builder. Safe to run more than once —
+        it updates what it already has. Member photos and admin-locked artwork are never
+        overwritten.
+      </p>
+
+      {state && (
+        <div className="text-xs text-slate-500">
+          {state.written.toLocaleString()} cards written
+          {state.totalCount ? ` of ${state.totalCount.toLocaleString()}` : ""}
+          {pct != null && ` (${pct}%)`}
+          {state.imagesPreserved > 0 && ` · ${state.imagesPreserved} kept their own artwork`}
+          {done ? " · finished" : ` · next page ${state.page}`}
+          {state.updatedAt && ` · ${new Date(state.updatedAt).toLocaleString()}`}
+        </div>
+      )}
+      {pct != null && (
+        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+          <div
+            className={`h-full rounded-full transition-all ${done ? "bg-green-500" : "bg-poke-blue"}`}
+            style={{ width: `${Math.max(pct, 2)}%` }}
+          />
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn-secondary text-xs" disabled={busy} onClick={() => run(false)}>
+          {busy
+            ? "Importing… leave this page open"
+            : state && !done
+              ? "Continue import"
+              : done
+                ? "Update catalogue again"
+                : "Import all cards"}
+        </button>
+        {busy && (
+          <button
+            className="text-xs text-slate-500 hover:underline"
+            onClick={() => {
+              stop.current = true;
+            }}
+          >
+            Stop after this batch
+          </button>
+        )}
+        {!busy && state && !done && (
+          <button className="text-xs text-slate-400 hover:underline" onClick={() => run(true)}>
+            Start over from the beginning
+          </button>
+        )}
+      </div>
+
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      {state?.error && !error && (
+        <p className="text-xs text-red-600">⚠️ Last attempt stopped: {state.error}</p>
+      )}
+    </div>
+  );
+}
+
 function PriceRefreshPanel({
   info,
 }: {
