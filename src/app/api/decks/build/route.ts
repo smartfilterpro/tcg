@@ -297,18 +297,26 @@ export async function POST(req: Request) {
         // have it cached yet — names lie ("heals Psychic Pokémon" cards in
         // Fighting decks), text doesn't. Cached for every future build.
         const admin = createAdminClient();
+        // Pokémon were excluded here, which quietly capped what the builder
+        // could consider. A Pokémon with no battle_data reaches the model as
+        // a name, HP and type with NO attacks — and the rules below tell it
+        // to skip cards it can't read in favour of ones it knows. On a large
+        // collection that means building from the handful of famous cards in
+        // the model's memory, every time, whatever else you own.
+        //
+        // Pokémon go first because they decide the archetype: the difference
+        // between one deck and another is which attacker you can actually
+        // evaluate. Everything fetched is cached in cards.battle_data for
+        // every future build, every battle and every reader, so a collection
+        // warms up over a few builds and stays warm.
+        const isPokemon = (s: string | null) => s != null && /pok/i.test(s);
         const needsText = collection
-          .filter(
-            (c) =>
-              !c.bd &&
-              !c.id.startsWith("custom-") &&
-              c.supertype != null &&
-              !/pok/i.test(c.supertype)
-          )
-          .slice(0, 20);
-        for (let i = 0; i < needsText.length; i += 5) {
+          .filter((c) => !c.bd && !c.id.startsWith("custom-") && c.supertype != null)
+          .sort((a, b) => Number(isPokemon(b.supertype)) - Number(isPokemon(a.supertype)))
+          .slice(0, 150);
+        for (let i = 0; i < needsText.length; i += 6) {
           await Promise.all(
-            needsText.slice(i, i + 5).map(async (c) => {
+            needsText.slice(i, i + 6).map(async (c) => {
               c.bd = c.id.startsWith("tcgdex-")
                 ? await getTcgdexBattleDataById(c.id)
                 : await getBattleDataById(c.id);
@@ -343,7 +351,7 @@ export async function POST(req: Request) {
         }
 
         const trim = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "…" : s);
-        const leanCollection = pool.map(({ bd, ...c }) => {
+        const extrasFor = (bd: CardBattleData | null) => {
           const text = bd?.rules?.length
             ? trim(bd.rules.join(" "), 180)
             : bd?.abilities?.length
@@ -357,6 +365,84 @@ export async function POST(req: Request) {
                 200
               )
             : undefined;
+          return { text, atk };
+        };
+
+        // Now that Pokémon carry attack text too, a large collection can
+        // outgrow the context window: 1,500 cards with full text measures
+        // ~185k tokens, and with the 32k output cap that is over the limit —
+        // the build would fail outright rather than degrade. So every card
+        // is always listed (the model must see the whole pool), and the text
+        // is what gets rationed.
+        //
+        // Trainers and Special Energy come first because their names lie and
+        // their text is short — the original reason text was fetched at all.
+        // Pokémon follow, biggest HP first, since the attacker is what makes
+        // one deck different from another.
+        const CONTEXT_BUDGET_BYTES = 450_000;
+        const baseOf = ({ bd: _bd, ...c }: (typeof pool)[number]) => c;
+        const byPriority = [...pool].sort((a, b) => {
+          const pa = isPokemon(a.supertype) ? 1 : 0;
+          const pb = isPokemon(b.supertype) ? 1 : 0;
+          if (pa !== pb) return pa - pb;
+          return (parseInt(b.hp ?? "0") || 0) - (parseInt(a.hp ?? "0") || 0);
+        });
+
+        // Pass 1 — which cards are listed at all. Only bites on collections
+        // so large the bare list wouldn't fit; below that everything is kept.
+        // Pokémon get their own reserved share here as well: a single ordered
+        // budget spent the whole allowance on Trainers and kept no Pokémon at
+        // all, which is not a deck.
+        const poolBudget = CONTEXT_BUDGET_BYTES * 0.65;
+        const poolAllowance = { poke: poolBudget * 0.55, other: poolBudget * 0.45 };
+        const poolSpent = { poke: 0, other: 0 };
+        const kept: typeof pool = [];
+        for (const c of byPriority) {
+          const size = JSON.stringify(baseOf(c)).length + 1;
+          const bucket = isPokemon(c.supertype) ? "poke" : "other";
+          if (poolSpent[bucket] + size > poolAllowance[bucket]) continue;
+          poolSpent[bucket] += size;
+          kept.push(c);
+        }
+        // A reserved share must not drop a card when the other share had room
+        // going spare — without this sweep a collection that fits comfortably
+        // still lost a handful to whichever bucket filled first.
+        const keptIds = new Set(kept.map((c) => c.id));
+        let poolTotal = poolSpent.poke + poolSpent.other;
+        for (const c of byPriority) {
+          if (keptIds.has(c.id)) continue;
+          const size = JSON.stringify(baseOf(c)).length + 1;
+          if (poolTotal + size > poolBudget) continue;
+          poolTotal += size;
+          keptIds.add(c.id);
+          kept.push(c);
+        }
+        const used = 2 + poolTotal;
+        const droppedForSize = pool.length - kept.length;
+
+        // Pass 2 — who carries their text. Pokémon get a reserved share:
+        // ordering Trainers first meant they consumed the whole allowance on
+        // a large collection and Pokémon got none, which is precisely the
+        // data the builder needs to tell one archetype from another.
+        // `continue` rather than `break` so a later, smaller entry still fits.
+        const textBudget = CONTEXT_BUDGET_BYTES - used;
+        const pokemonAllowance = Math.floor(textBudget * 0.6);
+        const allowance = { poke: pokemonAllowance, other: textBudget - pokemonAllowance };
+        const spent = { poke: 0, other: 0 };
+        const carriesText = new Set<string>();
+        for (const c of kept) {
+          const { text, atk } = extrasFor(c.bd);
+          if (!text && !atk) continue;
+          const cost = (text?.length ?? 0) + (atk?.length ?? 0) + 16;
+          const bucket = isPokemon(c.supertype) ? "poke" : "other";
+          if (spent[bucket] + cost > allowance[bucket]) continue;
+          spent[bucket] += cost;
+          carriesText.add(c.id);
+        }
+
+        const leanCollection = kept.map(({ bd, ...c }) => {
+          if (!carriesText.has(c.id)) return c;
+          const { text, atk } = extrasFor(bd);
           return { ...c, ...(text ? { text } : {}), ...(atk ? { atk } : {}) };
         });
         const userContent = [
@@ -364,7 +450,22 @@ export async function POST(req: Request) {
           fmt
             ? `FORMAT: ${fmt === "standard" ? "Standard" : "Expanded"} — ${excluded} ineligible cards were already removed from the list below. Entries without legality data remain: exclude any YOU know are not legal in this format, and only suggest format-legal upgrade cards.`
             : null,
-          `PLAYER'S COLLECTION (JSON):\n${JSON.stringify(leanCollection)}`,
+          `PLAYER'S COLLECTION (JSON): ${leanCollection.length} unique cards${
+            droppedForSize > 0
+              ? ` (${droppedForSize} more were too many to list — say so at the end of the strategy)`
+              : ""
+          }.\n${JSON.stringify(leanCollection)}`,
+          // Without this the model has no way to tell "you own few cards" from
+          // "most of your cards arrived without text this time", and silently
+          // narrows to what it remembers instead of saying so.
+          (() => {
+            const noText = leanCollection.filter(
+              (c) => !("atk" in c) && !("text" in c) && isPokemon(c.supertype)
+            ).length;
+            return noText > 0
+              ? `NOTE: ${noText} of the Pokémon in this list arrived without attack data, so you can only judge them by name, HP, type and subtype. Card data fills in over successive builds. Do not treat that as a reason to fall back on the same few well-known cards — work with what you CAN read, and if a promising line is unreadable this time, say so in one sentence at the end of the strategy.`
+              : null;
+          })(),
           priorDecks.length > 0
             ? `DECKS THIS PLAYER ALREADY HAS (newest first):\n${priorDecks
                 .map((d, i) => `${i + 1}. ${d}`)
