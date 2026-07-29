@@ -37,6 +37,7 @@ export default function BattlesPage() {
   const [joinDeck, setJoinDeck] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  const [practiceAllowed, setPracticeAllowed] = useState(false);
   const [practiceDeck, setPracticeDeck] = useState("");
   const [botDeck, setBotDeck] = useState("");
 
@@ -55,6 +56,7 @@ export default function BattlesPage() {
       setBattles(bJson.battles ?? []);
       setMigrated(bJson.migrated !== false);
       setIsAdmin(bJson.isAdmin === true);
+      setPracticeAllowed(bJson.practiceAllowed === true || bJson.isAdmin === true);
       // Shared decks are a bonus — don't fail the page if friends data errors.
       if (fRes.ok) {
         const fJson = await fRes.json();
@@ -267,11 +269,32 @@ export default function BattlesPage() {
         </div>
       )}
 
-      {isAdmin && (decks.length > 0 || sharedDecks.length > 0) && (
+      {!practiceAllowed && (
+        <div className="card-panel p-5 text-center">
+          <div className="mx-auto mb-3.5 flex h-[52px] w-[52px] items-center justify-center rounded-[14px] bg-brand-sunken text-xl">
+            🔒
+          </div>
+          <h2 className="m-0 mb-2 font-display text-[21px] font-bold tracking-[-.02em]">
+            Practice battles are a Pro feature
+          </h2>
+          <p className="mx-auto mb-4 max-w-md text-[14.5px] leading-[1.6] text-brand-ink3">
+            Practise your deck against a bot that plays a straightforward, honest game — bench,
+            energy, evolve, attack — so you can see how fast your deck sets up.
+          </p>
+          <div className="mx-auto mb-4 max-w-md rounded-xl bg-brand-sunken px-3.5 py-3 text-left text-[13px] leading-[1.55] text-brand-ink2">
+            Pro also unlocks grading reports and <b>500 credits a month</b> — $9, cancel any time.
+            Battles against friends stay free for everyone.
+          </div>
+          <a href="/pricing" className="btn-primary inline-block">
+            See plans
+          </a>
+        </div>
+      )}
+      {practiceAllowed && (decks.length > 0 || sharedDecks.length > 0) && (
         <form onSubmit={createPractice} className="card-panel space-y-3 p-4">
           <div className="flex items-center gap-2">
             <h2 className="font-semibold">🤖 Practice vs Trainer AI</h2>
-            <span className="chip bg-poke-gold/30 text-yellow-900">Admin · testing</span>
+            <span className="chip bg-poke-gold/30 text-yellow-900">Pro</span>
           </div>
           <p className="text-xs text-slate-500">
             Play a deck against the practice opponent — no code, no waiting. It plays a

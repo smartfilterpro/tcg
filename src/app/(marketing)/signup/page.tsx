@@ -29,7 +29,7 @@ export default function SignupPage() {
         email: email.trim().toLowerCase(),
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=/onboarding`,
           // Stamped into the profile by the auth callback once the email is
           // verified — the box they just ticked must not be asked twice.
           data: { tos_accepted_at: new Date().toISOString() },
@@ -39,7 +39,7 @@ export default function SignupPage() {
       if (data.session) {
         // Email confirmations are off in this Supabase project: the account
         // is live immediately.
-        window.location.href = "/";
+        window.location.href = "/onboarding";
         return;
       }
       setVerifySent(true);
