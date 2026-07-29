@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { FanMarkTile } from "@/components/Logo";
+import { APP_NAME } from "@/lib/branding";
 
 export default function LoginPage() {
   const [mode, setMode] = useState<"signin" | "signup">("signin");
@@ -75,11 +77,11 @@ export default function LoginPage() {
       <div className="mx-auto mt-16 max-w-sm">
         <div className="card-panel p-8">
           <div className="mb-4 text-center">
-            <div className="mx-auto mb-3 h-12 w-12 rounded-full border-4 border-poke-dark bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
+            <FanMarkTile size={48} className="mx-auto mb-3" title={APP_NAME} />
             <h1 className="text-xl font-bold">One quick thing</h1>
           </div>
           <p className="text-sm leading-relaxed text-slate-600">
-            PokéDeck now has{" "}
+            {APP_NAME} now has{" "}
             <Link href="/terms" target="_blank" className="font-medium text-poke-blue hover:underline">
               Terms of Service
             </Link>{" "}
@@ -106,8 +108,8 @@ export default function LoginPage() {
     <div className="mx-auto mt-16 max-w-sm">
       <div className="card-panel p-8">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 h-12 w-12 rounded-full border-4 border-poke-dark bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
-          <h1 className="text-2xl font-bold">PokéDeck</h1>
+          <FanMarkTile size={48} className="mx-auto mb-3" title={APP_NAME} />
+          <h1 className="text-2xl font-bold">{APP_NAME}</h1>
           <p className="mt-1 text-sm text-slate-500">
             Scan your cards. Track your collection. Build decks with Trainer AI.
           </p>

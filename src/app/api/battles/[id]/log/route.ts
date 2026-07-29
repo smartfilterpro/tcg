@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/auth";
 import { type BattleState } from "@/lib/battle";
 import { battleErrorResponse } from "../../lib";
+import { APP_NAME } from "@/lib/branding";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -37,7 +38,7 @@ export async function GET(_req: Request, { params }: Params) {
     const started = new Date(battle.created_at as string);
 
     const header = [
-      `PokéDeck battle log`,
+      `${APP_NAME} battle log`,
       players.length > 0 ? `Players: ${players.join(" vs ")}` : null,
       `Started: ${started.toLocaleString("en-GB", { timeZone: "UTC" })} UTC`,
       `Code: ${battle.code}`,

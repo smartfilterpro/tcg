@@ -19,6 +19,8 @@ import CardCropper from "@/components/CardCropper";
 import CenteringDiagram from "@/components/CenteringDiagram";
 import GradeReportView, { gradeColor } from "@/components/GradeReportView";
 import type { SavedGrade } from "@/app/api/grade/reports/route";
+import { FanMark } from "@/components/Logo";
+import { APP_NAME } from "@/lib/branding";
 
 const GRADE_STEPS = [
   "Flattening the card and measuring its borders…",
@@ -415,7 +417,7 @@ export default function GradePage() {
       <div>
         <h1 className="text-2xl font-bold">Card Grading</h1>
         <p className="text-sm text-slate-500">
-          Place the card&apos;s corners, and PokéDeck flattens out the camera angle, measures the
+          Place the card&apos;s corners, and {APP_NAME} flattens out the camera angle, measures the
           borders in software, and has {AI_NAME} judge the corners, edges and surface from
           close-ups — then tells you whether grading it would actually pay. Every grade is kept, so
           you can come back to it.
@@ -465,7 +467,7 @@ export default function GradePage() {
           </button>
           {grading && (
             <div className="flex items-center gap-2">
-              <span className="animate-spin-slow inline-block h-4 w-4 shrink-0 rounded-full border-2 border-poke-dark bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
+              <FanMark size={16} className="animate-spin-slow shrink-0" />
               <p className="animate-pulse text-sm text-slate-500">{GRADE_STEPS[step]}</p>
             </div>
           )}

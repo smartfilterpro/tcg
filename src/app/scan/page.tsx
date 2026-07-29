@@ -13,6 +13,7 @@ import {
   type CardSummary,
   type ScanMatch,
 } from "@/lib/types";
+import { FanMark } from "@/components/Logo";
 
 interface ReviewRow {
   key: number;
@@ -275,7 +276,7 @@ export default function ScanPage() {
             </div>
           )}
           <div className="flex items-center justify-center gap-3">
-            <span className="animate-spin-slow inline-block h-6 w-6 shrink-0 rounded-full border-2 border-poke-dark bg-gradient-to-b from-poke-red from-50% to-white to-50%" />
+            <FanMark size={24} className="animate-spin-slow shrink-0" />
             <span className="text-lg font-semibold">Identifying cards…</span>
           </div>
           <p className="mt-2 min-h-5 text-sm text-slate-500 transition-opacity" key={scanStep}>

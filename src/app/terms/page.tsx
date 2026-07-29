@@ -1,3 +1,4 @@
+import { APP_NAME } from "@/lib/branding";
 const EFFECTIVE_DATE = "July 27, 2026";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -13,11 +14,11 @@ export default function TermsPage() {
   return (
     <div className="mx-auto max-w-2xl">
       <div className="card-panel p-6 sm:p-8">
-        <h1 className="text-2xl font-bold">PokéDeck — Terms of Service</h1>
+        <h1 className="text-2xl font-bold">{APP_NAME} — Terms of Service</h1>
         <p className="mt-1 text-xs text-slate-400">Effective date: {EFFECTIVE_DATE}</p>
 
         <p className="mt-4 text-sm leading-relaxed text-slate-700">
-          PokéDeck (the &ldquo;Service&rdquo;) is a private, invite-only hobby application for
+          {APP_NAME} (the &ldquo;Service&rdquo;) is a private, invite-only hobby application for
           cataloging trading cards, building decks, and coordinating with other invited
           members. By creating an account, signing in, or using the Service in any way, you
           agree to these Terms of Service (the &ldquo;Terms&rdquo;). If you do not agree, do
@@ -136,7 +137,7 @@ export default function TermsPage() {
           <p>
             Pokémon and all card names, images, and related marks are trademarks and
             copyrights of Nintendo, Creatures Inc., GAME FREAK inc., and The Pokémon Company
-            International. PokéDeck is an <b>unofficial fan project</b> with no affiliation,
+            International. {APP_NAME} is an <b>unofficial fan project</b> with no affiliation,
             sponsorship, or endorsement by those companies. Card data and images are provided
             by third-party databases for personal, non-commercial collection tracking only.
           </p>
