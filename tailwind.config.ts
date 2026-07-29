@@ -5,11 +5,28 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // The Phase 6 restyle happens HERE, not in ten thousand class edits.
+        // Every screen is written in slate-* text and poke-* accents; mapping
+        // those names onto the design system's values restyles the whole app
+        // at once with zero behaviour churn. The names get cleaned up
+        // opportunistically — the colours are already the new ones.
         poke: {
-          red: "#EE1515",
-          dark: "#222224",
-          gold: "#FFCB05",
-          blue: "#2A75BB",
+          red: "#D8452F", // destructive / damage — the system's negative
+          dark: "#16171B", // ink
+          gold: "#E8FF3A", // highlight
+          blue: "#2C5CFF", // accent
+        },
+        slate: {
+          50: "#F7F6F3", // panel-alt
+          100: "#F2F0EC", // sunken
+          200: "#E7E4DD", // line
+          300: "#D8D4CB", // line-strong
+          400: "#9A9A99", // ink5
+          500: "#7C7C7B", // ink4
+          600: "#5A5C63", // ink3
+          700: "#3E4046", // ink2
+          800: "#16171B",
+          900: "#16171B", // ink
         },
         // TrainerDeck design tokens, from the handoff's token sheet. The
         // poke-* tokens above survive until the Phase 6 restyles retire them
