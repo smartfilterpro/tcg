@@ -1,7 +1,18 @@
 import type { Metadata, Viewport } from "next";
 import Link from "next/link";
+import { Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { getUserAndProfile } from "@/lib/auth";
+
+// The display face for the wordmark and headings. next/font rather than a
+// <link> as the design bundle used: it self-hosts the file, so there's no
+// third-party request and no flash of fallback type on the logo.
+const display = Space_Grotesk({
+  subsets: ["latin"],
+  weight: ["400", "500", "700"],
+  variable: "--font-display",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "PokéDeck — scan, collect, battle",
@@ -18,7 +29,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const auth = await getUserAndProfile();
 
   return (
-    <html lang="en">
+    <html lang="en" className={display.variable}>
       <body className="min-h-screen">
         {auth && (
           <header className="sticky top-0 z-40 bg-poke-dark text-white shadow">
