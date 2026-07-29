@@ -3,7 +3,8 @@ import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { matchDetectedCard, numberKey, cleanCardName } from "@/lib/pokemontcg";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
-import { logAiUsage, checkAiBudget } from "@/lib/usage";
+import { logAiUsage } from "@/lib/usage";
+import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import { rowToSummary, defaultVariantFor, type CardSummaryRow } from "@/lib/types";
 import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
@@ -149,7 +150,7 @@ export async function POST(req: Request) {
     }
 
     const supabase = await createClient();
-    const budget = await checkAiBudget(supabase, user, profile);
+    const budget = await checkCredits(user, profile);
     if (!budget.ok) {
       return NextResponse.json({ error: budget.message }, { status: 429 });
     }

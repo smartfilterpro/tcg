@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
-import { logAiUsage, checkAiBudget } from "@/lib/usage";
+import { logAiUsage } from "@/lib/usage";
+import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import { itemPrice, variantLabel, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
@@ -92,7 +93,7 @@ export async function POST(req: Request) {
 
     const supabase = await createClient();
 
-    const budget = await checkAiBudget(supabase, user, profile);
+    const budget = await checkCredits(user, profile);
     if (!budget.ok) {
       return NextResponse.json({ error: budget.message }, { status: 429 });
     }

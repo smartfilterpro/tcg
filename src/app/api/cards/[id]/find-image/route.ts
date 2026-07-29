@@ -3,7 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
-import { logAiUsage, checkAiBudget } from "@/lib/usage";
+import { logAiUsage } from "@/lib/usage";
+import { checkCredits } from "@/lib/credits";
 import { getTcgdexImageById } from "@/lib/tcgdex";
 import { getCardById } from "@/lib/pokemontcg";
 
@@ -40,7 +41,7 @@ export async function POST(req: Request, { params }: Params) {
     const body = (await req.json().catch(() => ({}))) as { asAdmin?: boolean };
     const asAdmin = body?.asAdmin === true && profile?.role === "admin";
 
-    const budget = await checkAiBudget(supabase, user, profile);
+    const budget = await checkCredits(user, profile);
     if (!budget.ok) {
       return NextResponse.json({ error: budget.message }, { status: 429 });
     }

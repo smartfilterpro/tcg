@@ -5,7 +5,8 @@ import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
 import { searchCards, getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
-import { checkAiBudget } from "@/lib/usage";
+import { logAiUsage } from "@/lib/usage";
+import { checkCredits } from "@/lib/credits";
 import { analyzeDeck, analysisSummary, type DeckMathEntry } from "@/lib/deckMath";
 import { normalizeForSearch } from "@/lib/text";
 import { fetchAllRows } from "@/lib/fetchAll";
@@ -192,7 +193,7 @@ export async function POST(req: Request) {
     const fmt = format === "standard" || format === "expanded" ? format : null;
     const supabase = await createClient();
 
-    const budget = await checkAiBudget(supabase, user, profile);
+    const budget = await checkCredits(user, profile);
     if (!budget.ok) {
       return NextResponse.json({ error: budget.message }, { status: 429 });
     }
@@ -495,20 +496,10 @@ export async function POST(req: Request) {
         });
         const response = await stream.finalMessage();
 
-        // Log usage with the service client (request cookies are gone by now)
-        try {
-          await createAdminClient()
-            .from("ai_usage")
-            .insert({
-              user_id: user.id,
-              endpoint: "deck_build",
-              model: MODEL,
-              input_tokens: response.usage?.input_tokens ?? 0,
-              output_tokens: response.usage?.output_tokens ?? 0,
-            });
-        } catch {
-          // best-effort
-        }
+        // Log + debit with the service client (request cookies are gone by
+        // now). logAiUsage is the metering choke point, so the build pays for
+        // itself the same way every other AI feature does.
+        await logAiUsage(createAdminClient(), user.id, "deck_build", MODEL, response.usage);
 
         if (response.stop_reason === "refusal") {
           jobs.set(jobId, {
@@ -607,15 +598,7 @@ export async function POST(req: Request) {
               ],
             });
             const revision = await revisionStream.finalMessage();
-            try {
-              await createAdminClient().from("ai_usage").insert({
-                user_id: user.id,
-                endpoint: "deck_build",
-                model: MODEL,
-                input_tokens: revision.usage?.input_tokens ?? 0,
-                output_tokens: revision.usage?.output_tokens ?? 0,
-              });
-            } catch {}
+            await logAiUsage(createAdminClient(), user.id, "deck_build", MODEL, revision.usage);
             const revText = revision.content.find((b) => b.type === "text");
             if (revText && revText.type === "text") {
               const revised = JSON.parse(revText.text) as typeof deck;
