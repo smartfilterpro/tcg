@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
 import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
+import { ACTION_ESTIMATES } from "@/lib/credits";
 import { uploadCardPhoto } from "@/lib/photos";
 import { matchesSearch } from "@/lib/text";
 
@@ -482,7 +483,7 @@ export default function CollectionPage() {
             + Add by search
           </button>
           <Link href="/scan" className="btn-primary">
-            + Scan cards
+            Bulk scan · {ACTION_ESTIMATES.scan} cr
           </Link>
         </div>
       </div>
@@ -493,7 +494,7 @@ export default function CollectionPage() {
       {/* Artboard 02: one wrapping row — search pill, then chip-style selects. */}
       <div className="mb-3.5 flex flex-wrap gap-2">
         <input
-          className="min-w-[220px] flex-[1_1_260px] rounded-full border border-brand-line-strong bg-white px-4 py-2.5 text-sm outline-none placeholder:text-brand-ink5 focus:border-brand-accent focus:ring-[3px] focus:ring-brand-accent/15"
+          className="min-w-[200px] max-w-[420px] flex-[1_1_240px] rounded-full border border-brand-line-strong bg-white px-4 py-2.5 text-sm outline-none placeholder:text-brand-ink5 focus:border-brand-accent focus:ring-[3px] focus:ring-brand-accent/15"
           type="search"
           placeholder="🔍 Search your cards by name…"
           value={search}
@@ -508,7 +509,7 @@ export default function CollectionPage() {
         ].map((f) => (
           <select
             key={f.all}
-            className={`max-w-[46vw] cursor-pointer rounded-full border bg-white px-3.5 py-2.5 text-[13.5px] outline-none ${
+            className={`max-w-[46vw] cursor-pointer rounded-full border bg-white px-3.5 py-2.5 text-[13px] outline-none ${
               f.value ? "border-brand-accent text-brand-accent" : "border-brand-line-strong text-brand-ink2"
             }`}
             value={f.value}
@@ -521,7 +522,7 @@ export default function CollectionPage() {
           </select>
         ))}
         <select
-          className="max-w-[46vw] cursor-pointer rounded-full border border-brand-line-strong bg-white px-3.5 py-2.5 text-[13.5px] text-brand-ink2 outline-none"
+          className="max-w-[46vw] cursor-pointer rounded-full border border-brand-line-strong bg-white px-3.5 py-2.5 text-[13px] text-brand-ink2 outline-none"
           value={sort}
           onChange={(e) => setSort(e.target.value as SortKey)}
         >
@@ -559,12 +560,12 @@ export default function CollectionPage() {
               </span>
             )}
             {group.items.length > 1 ? (
-              <span className="absolute left-2 top-2 z-10 rounded-full bg-poke-gold px-2 py-0.5 text-[10px] font-bold text-poke-dark shadow">
+              <span className="absolute left-2 top-2 z-10 rounded-full bg-brand-ink/75 px-2 py-0.5 font-mono text-[10px] text-white">
                 {group.items.length} finishes
               </span>
             ) : (
               (item.variant ?? "normal") !== "normal" && (
-                <span className="absolute left-2 top-2 z-10 rounded-full bg-poke-gold px-2 py-0.5 text-[10px] font-bold text-poke-dark shadow">
+                <span className="absolute left-2 top-2 z-10 rounded-full bg-brand-ink/75 px-2 py-0.5 font-mono text-[10px] text-white">
                   {variantLabel(item.variant)}
                 </span>
               )
