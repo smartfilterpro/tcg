@@ -252,6 +252,44 @@ export default function CollectionPage() {
     return list;
   }, [items, search, typeFilter, setFilter, rarityFilter, supertypeFilter, variantFilter, sort]);
 
+  /** One tile per card, not per finish.
+   *
+   *  A card owned as normal, holo and reverse holo is three collection rows
+   *  — that's the right storage, since each finish has its own price, notes
+   *  and count — but it made the same card appear three times in the list.
+   *  The finishes are kept on the group so the detail view can break them
+   *  down; only the grid collapses them. */
+  const grouped = useMemo(() => {
+    const byCard = new Map<string, { card: CollectionItem["card"]; items: CollectionItem[] }>();
+    for (const i of filtered) {
+      const g = byCard.get(i.card.id);
+      if (g) g.items.push(i);
+      else byCard.set(i.card.id, { card: i.card, items: [i] });
+    }
+    return [...byCard.values()].map((g) => {
+      // Biggest stack first: it's the copy the detail view opens on, and the
+      // one the owner most likely means.
+      const sorted = [...g.items].sort((a, b) => b.quantity - a.quantity);
+      const prices = sorted.map((i) => itemPrice(i)).filter((p): p is number => p != null);
+      return {
+        card: g.card,
+        items: sorted,
+        quantity: sorted.reduce((s, i) => s + i.quantity, 0),
+        minPrice: prices.length > 0 ? Math.min(...prices) : null,
+        maxPrice: prices.length > 0 ? Math.max(...prices) : null,
+        overridden: sorted.some((i) => i.price_override != null),
+      };
+    });
+  }, [filtered]);
+
+  /** Every finish of the open card, for the breakdown in the detail view. */
+  const selectedFinishes = useMemo(() => {
+    if (!selected) return [];
+    return (items ?? [])
+      .filter((i) => i.card && i.card.id === selected.card.id)
+      .sort((a, b) => b.quantity - a.quantity);
+  }, [items, selected]);
+
   const totals = useMemo(() => {
     const all = (items ?? []).filter((i) => i.card);
     return {
@@ -343,6 +381,53 @@ export default function CollectionPage() {
       setNotesSaved(true);
       setTimeout(() => setNotesSaved(false), 2000);
     }
+  }
+
+  /** Download what's currently shown as a spreadsheet.
+   *
+   *  One row per finish, not per card: a spreadsheet is where you'd want the
+   *  finishes separable — different prices, different counts — and anyone who
+   *  wants them combined can pivot. The grid collapses them; the file
+   *  doesn't. Follows the filters, so "what you see is what you get". */
+  function exportCsv() {
+    const cell = (v: string | number | null | undefined) => {
+      const s = v == null ? "" : String(v);
+      // Excel reads a leading =, +, - or @ as a formula. Prefixing an
+      // apostrophe keeps a card named "-Blastoise" as text.
+      const safe = /^[=+\-@]/.test(s) ? `'${s}` : s;
+      return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+    };
+    const header = [
+      "Name", "Set", "Number", "Rarity", "Supertype", "Types",
+      "Finish", "Quantity", "Unit value USD", "Total value USD", "Custom value", "Notes", "Card ID",
+    ];
+    const rows = filtered.map((i) => {
+      const unit = itemPrice(i);
+      return [
+        i.card.name,
+        i.card.set_name,
+        i.card.number,
+        i.card.rarity ?? "",
+        i.card.supertype ?? "",
+        (i.card.types ?? []).join(" / "),
+        variantLabel(i.variant ?? "normal"),
+        i.quantity,
+        unit != null ? unit.toFixed(2) : "",
+        unit != null ? (unit * i.quantity).toFixed(2) : "",
+        i.price_override != null ? "yes" : "",
+        i.notes ?? "",
+        i.card.id,
+      ].map(cell).join(",");
+    });
+    // The BOM is what makes Excel open a UTF-8 CSV without mangling the é
+    // in Pokémon and every accented card name.
+    const csv = "\uFEFF" + [header.map(cell).join(","), ...rows].join("\r\n") + "\r\n";
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pokedeck-collection-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function openDetail(item: CollectionItem) {
@@ -515,24 +600,42 @@ export default function CollectionPage() {
         </div>
       </div>
 
-      <p className="mb-2 text-xs text-slate-400">{filtered.length} shown</p>
+      <div className="mb-2 flex items-center justify-between gap-2 text-xs text-slate-400">
+        <span>
+          {grouped.length} card{grouped.length === 1 ? "" : "s"} shown
+          {filtered.length !== grouped.length && ` · ${filtered.length} finishes`}
+        </span>
+        {filtered.length > 0 && (
+          <button className="text-poke-blue hover:underline" onClick={exportCsv}>
+            ⬇ Export CSV
+          </button>
+        )}
+      </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-        {filtered.map((item) => (
+        {grouped.map((group) => {
+          const item = group.items[0];
+          return (
           <button
-            key={item.id}
+            key={group.card.id}
             className="card-panel group relative overflow-hidden p-2 text-left transition-transform hover:-translate-y-0.5 hover:shadow-md"
             onClick={() => openDetail(item)}
           >
-            {item.quantity > 1 && (
+            {group.quantity > 1 && (
               <span className="absolute right-2 top-2 z-10 rounded-full bg-poke-dark px-2 py-0.5 text-xs font-bold text-white">
-                ×{item.quantity}
+                ×{group.quantity}
               </span>
             )}
-            {(item.variant ?? "normal") !== "normal" && (
+            {group.items.length > 1 ? (
               <span className="absolute left-2 top-2 z-10 rounded-full bg-poke-gold px-2 py-0.5 text-[10px] font-bold text-poke-dark shadow">
-                {variantLabel(item.variant)}
+                {group.items.length} finishes
               </span>
+            ) : (
+              (item.variant ?? "normal") !== "normal" && (
+                <span className="absolute left-2 top-2 z-10 rounded-full bg-poke-gold px-2 py-0.5 text-[10px] font-bold text-poke-dark shadow">
+                  {variantLabel(item.variant)}
+                </span>
+              )
             )}
             {hasImage(item) ? (
               // Fixed card aspect ratio — user-taken photos (arbitrary shapes)
@@ -558,16 +661,20 @@ export default function CollectionPage() {
               {item.card.set_name} · #{item.card.number}
             </div>
             <div className="mt-1 flex items-center justify-between text-xs">
-              <span className="truncate text-slate-400">{item.card.rarity ?? ""}</span>
-              {itemPrice(item) != null && (
-                <span className="font-semibold text-green-700">
-                  ${itemPrice(item)!.toFixed(2)}
-                  {item.price_override != null ? "*" : ""}
+              <span className="truncate text-slate-400">{group.card.rarity ?? ""}</span>
+              {group.maxPrice != null && (
+                <span className="shrink-0 font-semibold text-green-700">
+                  {/* A range when the finishes are worth different amounts —
+                      one number would be wrong for every finish but one. */}
+                  ${group.minPrice!.toFixed(2)}
+                  {group.maxPrice !== group.minPrice ? `–$${group.maxPrice.toFixed(2)}` : ""}
+                  {group.overridden ? "*" : ""}
                 </span>
               )}
             </div>
           </button>
-        ))}
+          );
+        })}
       </div>
 
       {/* Detail-modal photo capture for cards without art */}
@@ -652,6 +759,39 @@ export default function CollectionPage() {
                     <div>Type: {(selected.card.types ?? []).join(", ")}</div>
                   )}
                   {selected.card.hp && <div>HP: {selected.card.hp}</div>}
+                  {selectedFinishes.length > 1 && (
+                    <div className="rounded-lg bg-slate-50 p-2">
+                      <div className="mb-1 text-[11px] font-semibold text-slate-500">
+                        You own {selectedFinishes.reduce((s, i) => s + i.quantity, 0)} copies
+                        across {selectedFinishes.length} finishes — tap one to edit it:
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {selectedFinishes.map((f) => {
+                          const on = f.id === selected.id;
+                          const p = itemPrice(f);
+                          return (
+                            <button
+                              key={f.id}
+                              className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                                on
+                                  ? "bg-poke-blue text-white"
+                                  : "bg-white text-slate-600 hover:bg-slate-100"
+                              }`}
+                              onClick={() => openDetail(f)}
+                            >
+                              {variantLabel(f.variant ?? "normal")} ×{f.quantity}
+                              {p != null && (
+                                <span className={on ? "opacity-80" : "text-slate-400"}>
+                                  {" "}
+                                  ${p.toFixed(2)}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2">
                     <span className="shrink-0">Finish:</span>
                     <select
