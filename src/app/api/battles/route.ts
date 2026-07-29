@@ -24,6 +24,9 @@ export async function GET() {
   try {
     const { user, profile } = await requireUser();
     const isAdmin = profile?.role === "admin";
+    // Practice-vs-bot is the one plan-gated feature: it left admin-only
+    // testing and became a Pro perk. Two-player battles stay free for all.
+    const practiceAllowed = isAdmin || profile?.plan === "pro" || profile?.plan === "family";
     const admin = createAdminClient();
     const { data, error } = await admin
       .from("battles")
@@ -33,7 +36,7 @@ export async function GET() {
       .limit(25);
     if (error) {
       if (isMissingBattlesTable(error)) {
-        return NextResponse.json({ battles: [], migrated: false, isAdmin });
+        return NextResponse.json({ battles: [], migrated: false, isAdmin, practiceAllowed });
       }
       throw error;
     }
@@ -75,7 +78,7 @@ export async function GET() {
         updatedAt: b.updated_at as string,
       };
     });
-    return NextResponse.json({ battles, migrated: true, isAdmin });
+    return NextResponse.json({ battles, migrated: true, isAdmin, practiceAllowed });
   } catch (err) {
     return battleErrorResponse(err);
   }
@@ -92,8 +95,10 @@ export async function POST(req: Request) {
       vsBot?: boolean;
       botDeckId?: string;
     };
-    // Practice battles are admin-only while the opponent is being tried out.
-    const practice = vsBot === true && profile?.role === "admin";
+    // Practice battles: admins always; otherwise a Pro/Family perk.
+    const practice =
+      vsBot === true &&
+      (profile?.role === "admin" || profile?.plan === "pro" || profile?.plan === "family");
     if (!deckId || typeof deckId !== "string") {
       return NextResponse.json({ error: "Pick a deck to battle with." }, { status: 400 });
     }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getUserAndProfile } from "@/lib/auth";
 import { APP_NAME, FAN_DISCLAIMER } from "@/lib/branding";
 import { FanMark, Wordmark } from "@/components/Logo";
+import HeaderCredits from "@/components/HeaderCredits";
 
 /** The signed-in app shell. Logged-out visitors reach exactly two routes in
  *  this group — the landing at "/" and /terms — and both bring their own
@@ -71,6 +72,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
                     Admin
                   </Link>
                 )}
+                <HeaderCredits />
                 <Link
                   href="/support"
                   aria-label="Help & support"

@@ -3,72 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
+import CreditsMeter from "@/components/CreditsMeter";
 import { uploadCardPhoto } from "@/lib/photos";
 import { matchesSearch } from "@/lib/text";
-import { AI_NAME } from "@/lib/branding";
 
-/** How much Trainer AI the user has left this month — a meter, not a bill. */
-function AiMeter() {
-  const [data, setData] = useState<{
-    admin: boolean;
-    percentUsed: number | null;
-    calls: number;
-    resetsOn: string;
-    daily: number[];
-  } | null>(null);
-
-  useEffect(() => {
-    fetch("/api/usage/me")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => j && setData(j))
-      .catch(() => {});
-  }, []);
-
-  if (!data) return null;
-
-  const pct = data.percentUsed;
-  const barColor =
-    pct == null ? "bg-poke-blue" : pct >= 90 ? "bg-red-500" : pct >= 60 ? "bg-yellow-500" : "bg-green-500";
-  const resets = new Date(data.resetsOn).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-
-  return (
-    <div className="card-panel mb-4 p-3">
-      <div className="flex items-end justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold">🤖 {AI_NAME} this month</span>
-            <span className="text-slate-500">
-              {data.admin || pct == null
-                ? `${data.calls} call${data.calls === 1 ? "" : "s"} · unlimited`
-                : pct >= 100
-                  ? `All used — refills ${resets}`
-                  : `${Math.round(100 - pct)}% left · refills ${resets}`}
-            </span>
-          </div>
-          <div className="mt-1.5 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-            <div
-              className={`h-full rounded-full transition-all ${barColor}`}
-              style={{ width: `${pct == null ? (data.calls > 0 ? 6 : 0) : Math.max(pct, 2)}%` }}
-            />
-          </div>
-        </div>
-        {/* Last 14 days of activity, tallest bar = busiest day */}
-        <div className="flex h-8 shrink-0 items-end gap-0.5" title="Your last 14 days of AI activity">
-          {data.daily.map((v, i) => (
-            <div
-              key={i}
-              className="w-1 rounded-t bg-poke-blue/50"
-              style={{ height: `${Math.max(v * 100, 6)}%` }}
-            />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
 import {
   availableVariants,
   canonicalRarity,
@@ -549,7 +487,7 @@ export default function CollectionPage() {
         </div>
       </div>
 
-      <AiMeter />
+      <CreditsMeter />
 
       <div className="card-panel mb-4 space-y-2 p-3">
         {/* Full-width search on its own row; filters in a tidy grid below */}
