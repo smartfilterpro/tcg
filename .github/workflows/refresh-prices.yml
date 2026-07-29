@@ -1,0 +1,61 @@
+# Nightly card-price refresh.
+#
+# The app has no scheduler of its own, so prices only moved when an admin
+# pressed the button. This calls the app's authenticated cron endpoint once a
+# night; the work itself all happens in the app.
+#
+# Setup (one time):
+#   Repo → Settings → Secrets and variables → Actions:
+#     APP_URL      https://tcg-production-7bdb.up.railway.app   (no trailing slash)
+#     CRON_SECRET  a long random string
+#   Railway → the service's Variables:
+#     CRON_SECRET  the same string
+#
+# Run it by hand any time from the Actions tab ("Run workflow").
+
+name: Refresh card prices
+
+on:
+  schedule:
+    # 07:10 UTC daily. Off the hour because scheduled runs cluster (and get
+    # delayed) on the hour, and after midnight US time so PokeTrace's daily
+    # numbers have settled.
+    - cron: "10 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  # A delayed run must never overlap the next one — both would spend the
+  # same PokeTrace daily allowance.
+  group: refresh-prices
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Call the refresh endpoint
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "APP_URL and CRON_SECRET repository secrets must both be set." >&2
+            exit 1
+          fi
+          # --max-time covers the endpoint's own 300s ceiling with headroom;
+          # the run is long by design (PokeTrace requires 2s between calls).
+          code=$(curl -sS -o response.json -w '%{http_code}' \
+            --max-time 900 \
+            --retry 2 --retry-delay 30 --retry-connrefused \
+            -X POST "$APP_URL/api/cron/refresh-prices" \
+            -H "Authorization: Bearer $CRON_SECRET")
+          echo "HTTP $code"
+          cat response.json
+          echo
+          # A non-2xx is a real failure worth an email — most likely a
+          # mismatched secret or the app being down.
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            exit 1
+          fi
