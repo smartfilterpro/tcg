@@ -3,7 +3,29 @@ import { NextResponse, type NextRequest } from "next/server";
 
 type CookieToSet = { name: string; value: string; options?: CookieOptions };
 
-const PUBLIC_PATHS = ["/login", "/auth", "/api/auth", "/api/export", "/terms"];
+const PUBLIC_PATHS = [
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/reset-password",
+  "/pricing",
+  "/auth",
+  "/api/auth",
+  "/api/export",
+  // Self-authenticated endpoints: the Stripe webhook proves itself with an
+  // HMAC signature and the cron route with a bearer secret. Neither carries
+  // session cookies, so the blanket 401 here was rejecting them before
+  // their own (stricter) checks could run.
+  "/api/billing/webhook",
+  "/api/cron",
+  "/terms",
+];
+
+/** startsWith("/") matches everything, so the landing page is handled as an
+ *  exact match instead of living in the list. */
+function isPublicPath(pathname: string): boolean {
+  return pathname === "/" || PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+}
 
 // Reachable while signed in but before accepting the Terms
 const TOS_EXEMPT_PATHS = [...PUBLIC_PATHS, "/accept-terms"];
@@ -36,7 +58,7 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
-  const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+  const isPublic = isPublicPath(pathname);
 
   if (!user && !isPublic) {
     if (pathname.startsWith("/api/")) {
@@ -55,6 +77,8 @@ export async function middleware(request: NextRequest) {
   // accept page (server-side — the login-screen gate alone was bypassable
   // by simply navigating away). Pre-migration-016 profiles (no column, or
   // query error) skip the gate gracefully.
+  // "/" is public for strangers but NOT TOS-exempt: for a signed-in account
+  // it renders the collection, which the terms gate must still cover.
   if (user && !TOS_EXEMPT_PATHS.some((p) => pathname.startsWith(p))) {
     const { data: prof, error } = await supabase
       .from("profiles")
