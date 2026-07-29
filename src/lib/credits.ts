@@ -99,14 +99,16 @@ async function familyContext(admin: SupabaseClient, userId: string): Promise<Fam
   const ownerId = group?.owner_user as string;
   const { data: owner } = await admin
     .from("profiles")
-    .select("created_at")
+    .select("created_at, billing_anchor")
     .eq("id", ownerId)
     .single();
   const memberIds = [...new Set([...(members ?? []).map((m) => m.user_id as string), ownerId])];
   return {
     groupId: me.group_id as string,
     ownerId,
-    ownerAnchorIso: (owner?.created_at as string) ?? new Date().toISOString(),
+    ownerAnchorIso:
+      ((owner as { billing_anchor?: string | null } | null)?.billing_anchor as string | undefined) ??
+      ((owner?.created_at as string) ?? new Date().toISOString()),
     memberIds,
     myCap: (me.credit_cap as number | null) ?? null,
   };
@@ -176,7 +178,7 @@ export interface CreditStatus {
  *  calls the user could afford. */
 export async function checkCredits(
   user: { id: string },
-  profile: { role?: string; plan?: string; created_at?: string } | null
+  profile: { role?: string; plan?: string; created_at?: string; billing_anchor?: string | null } | null
 ): Promise<CreditStatus> {
   const plan = profile?.plan ?? "free";
   if (profile?.role === "admin") return { ok: true, balance: Infinity, plan, pooled: false };
@@ -187,7 +189,10 @@ export async function checkCredits(
     // lives on the group OWNER's profile, and a kid's own row still reads
     // 'free'. Membership is what makes the pool theirs.
     const family = await familyContext(admin, user.id);
-    const anchorIso = profile?.created_at ?? new Date().toISOString();
+    // Billing period once Stripe has set it, signup anniversary before then —
+    // so grants line up with invoices the moment someone pays.
+    const anchorIso =
+      profile?.billing_anchor ?? profile?.created_at ?? new Date().toISOString();
     await ensureGrants(admin, user.id, plan, anchorIso, family);
 
     const poolIds = family ? family.memberIds : [user.id];
@@ -263,7 +268,7 @@ export async function debitCredits(
 /** The numbers the meter UI needs, without gating anything. */
 export async function creditSummary(
   user: { id: string },
-  profile: { role?: string; plan?: string; created_at?: string } | null
+  profile: { role?: string; plan?: string; created_at?: string; billing_anchor?: string | null } | null
 ): Promise<{
   balance: number;
   plan: string;
@@ -275,7 +280,8 @@ export async function creditSummary(
   const plan = profile?.plan ?? "free";
   const admin = createAdminClient();
   const family = await familyContext(admin, user.id);
-  const anchorIso = profile?.created_at ?? new Date().toISOString();
+  const anchorIso =
+    profile?.billing_anchor ?? profile?.created_at ?? new Date().toISOString();
   await ensureGrants(admin, user.id, plan, anchorIso, family);
   const poolIds = family ? family.memberIds : [user.id];
   const start = cycleStart(family ? family.ownerAnchorIso : anchorIso);

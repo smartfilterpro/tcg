@@ -1,0 +1,178 @@
+import { NextResponse } from "next/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { verifyStripeSignature } from "@/lib/stripe";
+
+export const maxDuration = 60;
+
+// The only writer of plan state and paid credits. Publicly reachable by
+// design — authentication is the signature, and everything inside is
+// idempotent because Stripe retries deliveries: replaying any event must
+// change nothing the second time.
+
+type Obj = Record<string, unknown>;
+
+function str(v: unknown): string | null {
+  return typeof v === "string" ? v : null;
+}
+
+/** Resolve which user an event belongs to. Metadata first (we stamp it on
+ *  sessions and subscriptions at creation); the stored customer id is the
+ *  fallback for events created outside our flow (e.g. portal actions). */
+async function userForEvent(
+  admin: ReturnType<typeof createAdminClient>,
+  meta: Obj | null,
+  customerId: string | null
+): Promise<string | null> {
+  const fromMeta = str(meta?.user_id);
+  if (fromMeta) return fromMeta;
+  if (!customerId) return null;
+  const { data } = await admin
+    .from("profiles")
+    .select("id")
+    .eq("stripe_customer", customerId)
+    .maybeSingle();
+  return (data?.id as string) ?? null;
+}
+
+async function handleSubscription(admin: ReturnType<typeof createAdminClient>, sub: Obj) {
+  const userId = await userForEvent(admin, (sub.metadata as Obj) ?? null, str(sub.customer));
+  if (!userId) return;
+  const status = str(sub.status);
+  const plan = str((sub.metadata as Obj)?.plan) === "family" ? "family" : "pro";
+
+  if (status === "canceled" || status === "incomplete_expired") {
+    // The paid period is over (deletion fires at period end when the user
+    // cancelled through the portal). Down to free; the ledger keeps history.
+    await admin
+      .from("profiles")
+      .update({ plan: "free", stripe_subscription: null, plan_expires_at: null, billing_anchor: null })
+      .eq("id", userId);
+    return;
+  }
+  if (status !== "active" && status !== "trialing" && status !== "past_due") return;
+
+  const periodStart = typeof sub.current_period_start === "number" ? sub.current_period_start : null;
+  const periodEnd = typeof sub.current_period_end === "number" ? sub.current_period_end : null;
+  await admin
+    .from("profiles")
+    .update({
+      plan,
+      stripe_subscription: str(sub.id),
+      // Anchors credit cycles to the billing period from here on.
+      billing_anchor: periodStart ? new Date(periodStart * 1000).toISOString() : null,
+      // Set only while a cancellation is pending: the UI reads it as "Pro
+      // until <date>", and access genuinely runs to that date.
+      plan_expires_at:
+        sub.cancel_at_period_end === true && periodEnd
+          ? new Date(periodEnd * 1000).toISOString()
+          : null,
+    })
+    .eq("id", userId);
+}
+
+async function handleCheckoutCompleted(admin: ReturnType<typeof createAdminClient>, session: Obj) {
+  const meta = (session.metadata as Obj) ?? null;
+  if (str(session.mode) === "payment" && str(meta?.kind) === "boost") {
+    const sessionId = str(session.id);
+    const userId = await userForEvent(admin, meta, str(session.customer));
+    if (!sessionId || !userId) return;
+
+    // Flip pending → completed. The filter on status makes the update a
+    // no-op on redelivery, and the ledger's unique (user, reason, ref)
+    // index refuses a second grant even if the row was already flipped.
+    await admin
+      .from("boost_purchases")
+      .update({ status: "completed", stripe_payment_intent: str(session.payment_intent) })
+      .eq("stripe_checkout_session", sessionId)
+      .eq("status", "pending");
+
+    const credits = Number(str(meta?.credits)) || 0;
+    if (credits > 0) {
+      await admin
+        .from("credit_ledger")
+        .upsert(
+          [{ user_id: userId, delta: credits, reason: "boost", ref_id: sessionId }],
+          { onConflict: "user_id,reason,ref_id", ignoreDuplicates: true }
+        );
+    }
+  }
+  // mode=subscription sessions need nothing here: the subscription events
+  // carry the same information and also cover renewals and portal changes.
+}
+
+async function handleRefund(admin: ReturnType<typeof createAdminClient>, charge: Obj) {
+  const paymentIntent = str(charge.payment_intent);
+  if (!paymentIntent) return;
+  const { data: purchase } = await admin
+    .from("boost_purchases")
+    .select("user_id, credits, status, stripe_checkout_session")
+    .eq("stripe_payment_intent", paymentIntent)
+    .maybeSingle();
+  if (!purchase || purchase.status !== "completed") return;
+
+  await admin
+    .from("boost_purchases")
+    .update({ status: "refunded" })
+    .eq("stripe_payment_intent", paymentIntent)
+    .eq("status", "completed");
+  // The claw-back mirrors the grant, keyed to the same session so a
+  // redelivered refund event can't double-debit.
+  await admin.from("credit_ledger").upsert(
+    [
+      {
+        user_id: purchase.user_id as string,
+        delta: -(purchase.credits as number),
+        reason: "boost_refund",
+        ref_id: (purchase.stripe_checkout_session as string) ?? paymentIntent,
+      },
+    ],
+    { onConflict: "user_id,reason,ref_id", ignoreDuplicates: true }
+  );
+}
+
+export async function POST(req: Request) {
+  const secret = (process.env.STRIPE_WEBHOOK_SECRET ?? "").trim();
+  if (!secret) {
+    // Same stance as the cron route: an unverifiable webhook that can mint
+    // credits is worse than none.
+    return NextResponse.json({ error: "Webhook not configured." }, { status: 503 });
+  }
+  const rawBody = await req.text();
+  if (!verifyStripeSignature(rawBody, req.headers.get("stripe-signature"), secret)) {
+    return NextResponse.json({ error: "Bad signature." }, { status: 400 });
+  }
+
+  let event: Obj;
+  try {
+    event = JSON.parse(rawBody) as Obj;
+  } catch {
+    return NextResponse.json({ error: "Bad payload." }, { status: 400 });
+  }
+  const type = str(event.type) ?? "";
+  const object = ((event.data as Obj)?.object as Obj) ?? {};
+  const admin = createAdminClient();
+
+  try {
+    if (type === "checkout.session.completed") {
+      await handleCheckoutCompleted(admin, object);
+    } else if (
+      type === "customer.subscription.created" ||
+      type === "customer.subscription.updated" ||
+      type === "customer.subscription.deleted"
+    ) {
+      await handleSubscription(admin, object);
+    } else if (type === "charge.refunded") {
+      await handleRefund(admin, object);
+    }
+    // Everything else: acknowledged and ignored.
+    return NextResponse.json({ received: true });
+  } catch (err) {
+    // A 500 makes Stripe retry — which is exactly right for a transient
+    // database failure, and harmless for everything else because every
+    // handler is idempotent.
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Webhook handling failed" },
+      { status: 500 }
+    );
+  }
+}
