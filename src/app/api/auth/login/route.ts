@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 
-/** Email + password auth, invite-only signups.
- *  Body: { email, password, mode: "signin" | "signup" }
- *  Signup is allowed if (a) no users exist yet (bootstrap the admin) or
- *  (b) the email is on the invite list. No emails are ever sent. */
+/** Email + password sign-in. Account creation lives at /signup. */
 export async function POST(req: Request) {
   const { email, password, mode, tosAgreed } = (await req.json()) as {
     email?: string;
@@ -33,36 +29,13 @@ export async function POST(req: Request) {
   }
 
   if (mode === "signup") {
-    const admin = createAdminClient();
-    const [{ count: profileCount }, { data: existing }, { data: invite }] = await Promise.all([
-      admin.from("profiles").select("id", { count: "exact", head: true }),
-      admin.from("profiles").select("id").eq("email", normalized).maybeSingle(),
-      admin.from("invites").select("id").eq("email", normalized).maybeSingle(),
-    ]);
-
-    if (existing) {
-      return NextResponse.json(
-        { error: "An account with this email already exists — sign in instead." },
-        { status: 400 }
-      );
-    }
-    const allowed = (profileCount ?? 0) === 0 || !!invite;
-    if (!allowed) {
-      return NextResponse.json(
-        { error: "This email hasn't been invited yet. Ask the admin for an invite." },
-        { status: 403 }
-      );
-    }
-
-    // Create the user pre-confirmed (no confirmation email needed).
-    const { error: createErr } = await admin.auth.admin.createUser({
-      email: normalized,
-      password,
-      email_confirm: true,
-    });
-    if (createErr) {
-      return NextResponse.json({ error: createErr.message }, { status: 500 });
-    }
+    // Account creation moved to /signup (public, email-verified). This
+    // endpoint predates it and created users invite-only with no email —
+    // keeping both paths alive would mean two signup flows to secure.
+    return NextResponse.json(
+      { error: "Signup has moved — create your account at /signup." },
+      { status: 410 }
+    );
   }
 
   // Sign in (for both modes) — sets the session cookies on the response.

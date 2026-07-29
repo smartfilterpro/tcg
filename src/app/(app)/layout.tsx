@@ -1,0 +1,133 @@
+import Link from "next/link";
+import { getUserAndProfile } from "@/lib/auth";
+import { APP_NAME, FAN_DISCLAIMER } from "@/lib/branding";
+import { FanMark, Wordmark } from "@/components/Logo";
+
+/** The signed-in app shell. Logged-out visitors reach exactly two routes in
+ *  this group — the landing at "/" and /terms — and both bring their own
+ *  full-width shells, so they render bare. */
+export default async function AppLayout({ children }: { children: React.ReactNode }) {
+  const auth = await getUserAndProfile();
+
+  if (!auth) return <>{children}</>;
+
+  return (
+    <>
+        {auth && (
+          <header className="sticky top-0 z-40 bg-brand-ink text-white shadow">
+            <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-3 py-3 sm:px-4">
+              {/* The mark alone on narrow screens, exactly as the Poké Ball
+                  behaved — the wordmark is what used to hide at sm, not the
+                  mark, so the nav keeps the same room it had. */}
+              <Link href="/" className="flex shrink-0 items-center gap-2 font-bold" aria-label={APP_NAME}>
+                <FanMark size={22} reversed />
+                <span className="hidden sm:inline">
+                  <Wordmark reversed />
+                </span>
+              </Link>
+              {/* Scrolls sideways on narrow screens instead of pushing items off-screen */}
+              <nav className="no-scrollbar flex min-w-0 items-center gap-0.5 overflow-x-auto text-sm">
+                <Link
+                  href="/"
+                  className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
+                >
+                  Collection
+                </Link>
+                <Link
+                  href="/scan"
+                  className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
+                >
+                  Scan
+                </Link>
+                <Link
+                  href="/decks"
+                  className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
+                >
+                  Decks
+                </Link>
+                <Link
+                  href="/battles"
+                  className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
+                >
+                  Battle
+                </Link>
+                <Link
+                  href="/grade"
+                  className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
+                >
+                  Grade
+                </Link>
+                <Link
+                  href="/friends"
+                  className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
+                >
+                  Friends
+                </Link>
+                {auth.profile?.role === "admin" && (
+                  <Link
+                    href="/admin"
+                    className="whitespace-nowrap rounded px-2 py-1.5 hover:bg-white/10 sm:px-3"
+                  >
+                    Admin
+                  </Link>
+                )}
+                <Link
+                  href="/support"
+                  aria-label="Help & support"
+                  title="Help & support"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white/70 hover:bg-white/10"
+                >
+                  <svg
+                    width="17"
+                    height="17"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                </Link>
+                <form action="/api/auth/logout" method="post" className="shrink-0">
+                  <button
+                    aria-label="Sign out"
+                    title="Sign out"
+                    className="ml-0.5 flex h-8 w-8 items-center justify-center rounded-full text-white/70 hover:bg-white/10"
+                  >
+                    <svg
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                      <polyline points="16 17 21 12 16 7" />
+                      <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                  </button>
+                </form>
+              </nav>
+            </div>
+          </header>
+        )}
+        <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>
+        <footer className="mx-auto max-w-5xl px-4 pb-8 pt-2 text-center text-xs text-slate-400">
+          <div>
+            {APP_NAME} ·{" "}
+            <Link href="/terms" className="hover:underline">
+              Terms of Service
+            </Link>
+          </div>
+          <p className="mx-auto mt-1.5 max-w-lg leading-snug">{FAN_DISCLAIMER}</p>
+        </footer>
+    </>
+  );
+}
