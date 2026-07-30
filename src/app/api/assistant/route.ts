@@ -111,10 +111,124 @@ const CARD_LOOKUP_TOOL = {
   },
 };
 
+/** The set-completion tool: "what am I missing from X" computed server-side
+ *  — the catalogue's rows for a set, minus what the player owns. The model
+ *  could in principle diff the digest against a checklist itself, but the
+ *  digest truncates low-value cards on big collections, so its arithmetic
+ *  would be confidently wrong exactly when the collection is large. */
+const SET_COMPLETION_TOOL = {
+  name: "set_completion",
+  description:
+    "For one named set: how many cards the app's catalogue holds vs the " +
+    "set's official printed size, how many of those the player owns, and " +
+    "which catalogued cards the player is MISSING. Use for 'what am I " +
+    "missing from X', 'how complete is my X collection', 'is X fully " +
+    "catalogued'. The missing list only covers catalogued cards — the " +
+    "output says how complete the catalogue itself is; repeat that caveat " +
+    "when it applies.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      set_name: {
+        type: "string",
+        description: "The set's name, or enough of it to be unambiguous (e.g. 'Perfect Order').",
+      },
+    },
+    required: ["set_name"],
+  },
+};
+
 /** How many tool round-trips a single reply may spend. Each round is a
  *  model call billed like any other; four is enough to look up a set, a
  *  card, and a follow-up without letting a loop run a tab. */
 const MAX_TOOL_ROUNDS = 4;
+
+/** Sort key for collector numbers: numerically where they're numeric, so
+ *  "2" comes before "10", with lettered numbers (TG12, SWSH250) after. */
+function numberOrder(n: string | null): [number, string] {
+  const raw = (n ?? "").trim();
+  const digits = raw.replace(/\D/g, "");
+  const plain = /^\d+$/.test(raw);
+  return [plain && digits ? parseInt(digits, 10) : Number.MAX_SAFE_INTEGER, raw];
+}
+
+async function runSetCompletion(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  input: { set_name?: string }
+): Promise<string> {
+  const wanted = (input.set_name ?? "").trim();
+  if (!wanted) return "Name a set.";
+
+  const { data: rows, error } = await supabase
+    .from("cards")
+    .select("id, name, number, rarity, set_name, set_printed_total")
+    .ilike("set_name", `%${wanted}%`)
+    .limit(2000);
+  if (error) return `The lookup failed: ${error.message}`;
+  if (!rows || rows.length === 0) {
+    return (
+      `The catalogue holds no cards for a set matching "${wanted}". Either ` +
+      "the name is different or the set hasn't been imported yet — say the " +
+      "app's database doesn't cover it yet, not that the set doesn't exist."
+    );
+  }
+
+  // A loose name can catch several sets ("Base" catches Base Set and Base
+  // Set 2). Answering about the wrong one would be worse than asking.
+  const setNames = [...new Set(rows.map((r) => r.set_name ?? "Unknown set"))];
+  if (setNames.length > 1) {
+    return (
+      `"${wanted}" matches ${setNames.length} sets: ${setNames.slice(0, 12).join(", ")}. ` +
+      "Call this tool again with the exact one you mean."
+    );
+  }
+  const setName = setNames[0];
+
+  const { data: ownedRows, error: ownErr } = await supabase
+    .from("collection_items")
+    .select("card_id, cards!inner(set_name)")
+    .eq("user_id", userId)
+    .ilike("cards.set_name", `%${wanted}%`);
+  if (ownErr) return `The lookup failed: ${ownErr.message}`;
+  const ownedIds = new Set((ownedRows ?? []).map((r) => r.card_id as string));
+
+  const printed = rows.reduce((m, r) => Math.max(m, r.set_printed_total ?? 0), 0);
+  const missing = rows
+    .filter((r) => !ownedIds.has(r.id))
+    .sort((a, b) => {
+      const [an, ar] = numberOrder(a.number);
+      const [bn, br] = numberOrder(b.number);
+      return an - bn || ar.localeCompare(br);
+    });
+  const ownedCount = rows.length - missing.length;
+
+  const coverage =
+    printed > 0
+      ? rows.length >= printed
+        ? `The catalogue holds all ${printed} printed cards of this set` +
+          (rows.length > printed ? ` plus ${rows.length - printed} secret rares` : "") +
+          ", so this missing list is COMPLETE."
+        : `The catalogue holds only ${rows.length} of this set's ${printed} printed cards, ` +
+          "so this missing list is INCOMPLETE — cards not yet imported can't appear on it. " +
+          "Say so plainly."
+      : `The catalogue holds ${rows.length} cards for this set with no official size on file, ` +
+        "so completeness can't be judged. Say so.";
+
+  const CAP = 200;
+  const lines = missing
+    .slice(0, CAP)
+    .map((r) => [r.name, `#${r.number}`, r.rarity ?? ""].filter(Boolean).join(" | "));
+  return (
+    `Set: ${setName}\n${coverage}\n` +
+    `The player owns ${ownedCount} of the ${rows.length} catalogued cards.\n` +
+    (missing.length === 0
+      ? "They own every catalogued card in this set."
+      : `MISSING ${missing.length} catalogued cards` +
+        (missing.length > CAP ? ` (first ${CAP} shown)` : "") +
+        `:\n${lines.join("\n")}`)
+  );
+}
 
 async function runCardLookup(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -209,7 +323,7 @@ async function runChat(opts: {
       model: MODEL,
       max_tokens: 4000,
       system,
-      tools: [CARD_LOOKUP_TOOL],
+      tools: [CARD_LOOKUP_TOOL, SET_COMPLETION_TOOL],
       // The last permitted round forbids another lookup, so the model
       // answers with what it has instead of ending mid-thought on a tool
       // call nothing will ever run.
@@ -224,10 +338,13 @@ async function runChat(opts: {
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const b of response.content) {
       if (b.type !== "tool_use") continue;
+      const args = (b.input ?? {}) as { name?: string; set_name?: string };
       const lookup =
         b.name === "search_card_database"
-          ? await runCardLookup(supabase, (b.input ?? {}) as { name?: string; set_name?: string })
-          : `Unknown tool: ${b.name}`;
+          ? await runCardLookup(supabase, args)
+          : b.name === "set_completion"
+            ? await runSetCompletion(supabase, userId, args)
+            : `Unknown tool: ${b.name}`;
       results.push({ type: "tool_result", tool_use_id: b.id, content: lookup });
     }
     messages.push({ role: "user", content: results });
