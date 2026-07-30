@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { mirrorBatch, mirrorStatus } from "@/lib/artMirror";
+import { mirrorBatch, mirrorStatus, readMirrorLoopState } from "@/lib/artMirror";
 
 export const maxDuration = 300;
 
@@ -10,7 +10,8 @@ export async function GET() {
   try {
     await requireAdmin();
     const admin = createAdminClient();
-    return NextResponse.json(await mirrorStatus(admin));
+    const [status, auto] = await Promise.all([mirrorStatus(admin), readMirrorLoopState(admin)]);
+    return NextResponse.json({ ...status, auto });
   } catch (err) {
     return errorResponse(err);
   }

@@ -15,6 +15,7 @@
 // nothing is ever blanked — and remain eligible for the next run.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 const BUCKET = "card-art";
 
@@ -152,6 +153,7 @@ export async function mirrorBatch(
   const rows = (data ?? []) as MirrorRow[];
 
   let mirrored = 0;
+  let attempts = 0;
   const failed: Array<{ id: string; reason: string }> = [];
   let lastId: string | null = after;
   let examinedAll = true;
@@ -160,12 +162,16 @@ export async function mirrorBatch(
     const needs =
       isThirdParty(row.image_small, ours) || isThirdParty(row.image_large, ours);
     if (needs) {
-      if (mirrored >= MIRROR_PER_BATCH) {
+      // The cap counts ATTEMPTS, not successes — on a day the source is
+      // down, counting successes would grind through the whole scan
+      // window at one download-timeout per card before returning.
+      if (attempts >= MIRROR_PER_BATCH) {
         // Batch is full; the cursor stops BEFORE this card so the next
         // batch picks it up.
         examinedAll = false;
         break;
       }
+      attempts++;
       const result = await mirrorCard(admin, row, ours);
       if (result.ok) mirrored++;
       if (!result.ok || result.reason) {
@@ -182,6 +188,129 @@ export async function mirrorBatch(
     lastId,
     done: examinedAll && rows.length < SCAN_WINDOW,
   };
+}
+
+// --- The background loop -------------------------------------------------
+//
+// The mirror runs itself: a self-scheduling loop on the long-lived Railway
+// process, same pattern as the price refresher. While there's a backlog it
+// chews through ~100 cards every few minutes (a fresh catalogue takes
+// about a day); once a full pass finds the catalogue clean it drops to a
+// six-hour sweep that catches whatever new imports brought in. The admin
+// panel stays as a window into it, and its button just runs a burst on
+// demand — nothing depends on anyone pressing it.
+
+const STATE_KEY = "art_mirror";
+
+/** Batches per background run: ~100 attempted cards, a few minutes — long
+ *  enough to make progress, short enough that a restart loses little and
+ *  the run finishes well inside the claim window. */
+const BATCHES_PER_RUN = 5;
+const TICK_MS = 10 * 60_000;
+const BACKLOG_GAP_MS = 8 * 60_000;
+const IDLE_GAP_MS = 6 * 3600_000;
+
+export interface MirrorLoopState {
+  /** Where the current pass has scanned to; null between passes. */
+  cursor: string | null;
+  ranAt?: string;
+  lastRunMirrored?: number;
+  lastRunFailed?: number;
+  mirroredTotal?: number;
+  /** True while a pass is mid-catalogue — the loop runs hot until a full
+   *  pass completes, then coasts. */
+  backlog?: boolean;
+  lastError?: string | null;
+}
+
+export async function readMirrorLoopState(admin: SupabaseClient): Promise<MirrorLoopState | null> {
+  try {
+    const { data } = await admin
+      .from("app_state")
+      .select("value")
+      .eq("key", STATE_KEY)
+      .maybeSingle();
+    const value = data?.value as MirrorLoopState | null;
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function startArtMirrorLoop() {
+  const tick = async () => {
+    try {
+      const admin = createAdminClient();
+      const state = (await readMirrorLoopState(admin)) ?? { cursor: null };
+      // Hot while there's known work; a long coast once a pass came back
+      // clean. Never-ran counts as backlog — the first pass IS the work.
+      const gap = state.backlog === false ? IDLE_GAP_MS : BACKLOG_GAP_MS;
+      const cutoff = new Date(Date.now() - gap).toISOString();
+      // Ensure the row exists, then claim it only if it's stale — zero rows
+      // updated means another instance (or a recent run) beat us to it.
+      await admin
+        .from("app_state")
+        .upsert({ key: STATE_KEY }, { onConflict: "key", ignoreDuplicates: true })
+        .then(() => {});
+      const { data: claimed, error } = await admin
+        .from("app_state")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("key", STATE_KEY)
+        .lt("updated_at", cutoff)
+        .select("key");
+      if (error || !claimed || claimed.length === 0) return;
+
+      let cursor = state.cursor ?? null;
+      let mirrored = 0;
+      let failedCount = 0;
+      let done = false;
+      let lastError: string | null = null;
+      try {
+        for (let i = 0; i < BATCHES_PER_RUN; i++) {
+          const result = await mirrorBatch(admin, cursor);
+          mirrored += result.mirrored;
+          failedCount += result.failed.length;
+          cursor = result.lastId;
+          if (result.done) {
+            done = true;
+            cursor = null; // next pass starts from the top
+            break;
+          }
+        }
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+      }
+
+      const next: MirrorLoopState = {
+        cursor,
+        ranAt: new Date().toISOString(),
+        lastRunMirrored: mirrored,
+        lastRunFailed: failedCount,
+        mirroredTotal: (state.mirroredTotal ?? 0) + mirrored,
+        // A completed pass means coast — even if some cards failed, they
+        // stay hotlinked and the six-hour sweep retries them; running hot
+        // on a permanently dead source would just hammer it.
+        backlog: !done,
+        lastError,
+      };
+      await admin
+        .from("app_state")
+        .upsert({ key: STATE_KEY, value: next, updated_at: new Date().toISOString() })
+        .then(() => {});
+      if (mirrored > 0 || failedCount > 0 || lastError) {
+        console.log(
+          `art mirror: ${mirrored} mirrored, ${failedCount} failed` +
+            (done ? " — pass complete" : "") +
+            (lastError ? ` — ERROR: ${lastError}` : "")
+        );
+      }
+    } catch (err) {
+      console.error("art mirror loop error", err);
+    }
+  };
+  // First run shortly after boot, then steadily.
+  setTimeout(tick, 150_000);
+  setInterval(tick, TICK_MS);
 }
 
 export interface MirrorStatus {

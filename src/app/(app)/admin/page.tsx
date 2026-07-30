@@ -2060,6 +2060,14 @@ function MirrorArtPanel() {
     withImages: number;
     ours: number;
     remaining: number;
+    auto?: {
+      ranAt?: string;
+      lastRunMirrored?: number;
+      lastRunFailed?: number;
+      mirroredTotal?: number;
+      backlog?: boolean;
+      lastError?: string | null;
+    } | null;
   } | null>(null);
   const [running, setRunning] = useState(false);
   const [run, setRun] = useState({ mirrored: 0, failures: [] as string[] });
@@ -2124,16 +2132,29 @@ function MirrorArtPanel() {
   return (
     <div className="rounded-lg border border-brand-line bg-white p-3">
       <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
-        Copies card artwork from the third-party databases into our own storage and repoints
-        the cards, so pictures keep working when pokemontcg.io has a bad day. Originals are
-        kept on file; failed downloads stay pointed at the source and are retried on the next
-        run. Safe to stop and resume — and worth re-running after a catalogue import, which
-        brings in new hotlinked images.
+        Card artwork is copied into our own storage automatically — a background job chews
+        through the backlog a batch at a time and then sweeps every few hours for anything a
+        catalogue import brought in. Originals are kept on file; failed downloads stay
+        pointed at the source and are retried on a later sweep. The button below just runs a
+        burst on demand; nothing depends on pressing it.
       </p>
       {status && (
         <p className="m-0 mb-2 text-xs text-brand-ink3">
           {status.ours.toLocaleString()} of {status.withImages.toLocaleString()} card images
           in our storage · {status.remaining.toLocaleString()} still hotlinked
+          {status.auto?.ranAt && (
+            <>
+              <br />
+              Background job: last ran {new Date(status.auto.ranAt).toLocaleString()} ·{" "}
+              {(status.auto.lastRunMirrored ?? 0).toLocaleString()} mirrored
+              {(status.auto.lastRunFailed ?? 0) > 0 && `, ${status.auto.lastRunFailed} failed`}
+              {" · "}
+              {status.auto.backlog === false ? "caught up, sweeping periodically" : "working through the backlog"}
+              {status.auto.lastError && (
+                <span className="text-brand-negative"> · {status.auto.lastError}</span>
+              )}
+            </>
+          )}
         </p>
       )}
       <div className="flex flex-wrap gap-2">
