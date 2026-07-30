@@ -4,6 +4,7 @@ import Link from "next/link";
  *  sections; only the two that exist are rendered — dead sidebar links are
  *  worse than a shorter sidebar, and the rest arrive with their features. */
 const SECTIONS = [
+  { label: "Account", href: "/settings/account" },
   { label: "Billing", href: "/settings/billing" },
   { label: "Family", href: "/settings/family" },
 ];
