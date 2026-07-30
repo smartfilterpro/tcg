@@ -287,28 +287,47 @@ export function detectCards(source: RGBAImage): CardBox[] {
   const { img } = downscale(source, WORK_DIM);
   if (img.width < 32 || img.height < 32) return [];
 
-  // More cards wins; on a tie, more AREA wins.
+  // Merge every pass, don't pick one.
   //
-  // The tie-break matters more than it looks. A card is a white border round
-  // an art window round a text box, and a threshold that leaks past the
-  // border still finds the art window — which is card-ish enough to pass the
-  // shape tests. That yields the right COUNT with every box drawn around a
-  // fragment of its card. Preferring the larger answer at equal count picks
-  // the whole card over the picture inside it.
-  let best: CardBox[] = [];
-  let bestArea = 0;
+  // Choosing a single winner assumes one setting suits the whole photo, and
+  // a real spread disproves that immediately: a pale white Trainer card and
+  // a dark-bordered holo in the same shot want different thresholds, so the
+  // pass that finds one loses the other. A photo of six came back as four
+  // for exactly this reason — both pale Trainer cards missing.
+  //
+  // So take the union and resolve overlaps. Sorted largest first, a box is
+  // kept unless it sits inside one already kept, which also fixes the other
+  // half of the same bug: when a threshold leaks past a card's white border
+  // it still finds the art window inside, and that fragment would otherwise
+  // be the tile shown for the card. Largest-first means the whole card is
+  // already there and the fragment is discarded.
+  const all: CardBox[] = [];
   for (const flood of [true, false]) {
     for (const tolerance of [18, 26, 38, 54, 78]) {
       for (const erode of [false, true]) {
-        const found = pass(img, tolerance, erode, flood);
-        if (found.length === 0) continue;
-        const area = found.reduce((sum, b) => sum + b.w * b.h, 0);
-        if (found.length > best.length || (found.length === best.length && area > bestArea)) {
-          best = found;
-          bestArea = area;
-        }
+        all.push(...pass(img, tolerance, erode, flood));
       }
     }
   }
-  return best;
+
+  all.sort((a, b) => b.w * b.h - a.w * a.h);
+  const kept: CardBox[] = [];
+  for (const box of all) {
+    // Same card as one we already have? Centres inside each other, or a
+    // substantial share of the smaller box covered by the larger, both mean
+    // "this is that card again, found at a different setting".
+    const duplicate = kept.some((k) => {
+      const cx = box.x + box.w / 2;
+      const cy = box.y + box.h / 2;
+      const inside = cx > k.x && cx < k.x + k.w && cy > k.y && cy < k.y + k.h;
+      if (inside) return true;
+      const ox = Math.max(0, Math.min(box.x + box.w, k.x + k.w) - Math.max(box.x, k.x));
+      const oy = Math.max(0, Math.min(box.y + box.h, k.y + k.h) - Math.max(box.y, k.y));
+      return (ox * oy) / (box.w * box.h) > 0.3;
+    });
+    if (!duplicate) kept.push(box);
+  }
+
+  // Reading order, so the tiles run the way the cards were laid out.
+  return kept.sort((a, b) => (Math.abs(a.y - b.y) > 0.08 ? a.y - b.y : a.x - b.x));
 }
