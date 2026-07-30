@@ -11,6 +11,17 @@ import Markdown from "@/components/Markdown";
 
 type UpgradeSuggestion = DeckSuggestion;
 
+/** Asking price for one card, from /api/prices/listings. Mirrors
+ *  ListingPrice in lib/ebayListings — kept structural rather than imported
+ *  so the client bundle doesn't pull the server-side eBay module in. */
+interface EbayAsk {
+  low: number;
+  median: number;
+  count: number;
+  currency: string;
+  url: string;
+}
+
 /** A card in the manual builder's pick list: your collection aggregated by
  *  card name (finishes combined — a deck list doesn't care about holos). */
 interface OwnedCard {
@@ -559,6 +570,36 @@ function UpgradeList({
     (s, u) => s + (u.card?.marketPrice ?? 0) * u.quantity,
     0
   );
+
+  // Live eBay asking prices for the cards being recommended. An ask is the
+  // wrong number for "what is my card worth" and the right one for "what
+  // will this cost me", which is the only question this panel asks.
+  const [asks, setAsks] = useState<Record<string, EbayAsk | null>>({});
+  useEffect(() => {
+    if (suggestions.length === 0) return;
+    let live = true;
+    fetch("/api/prices/listings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cards: suggestions.slice(0, 12).map((u) => ({
+          name: u.name,
+          number: u.card?.number ?? null,
+          setName: u.card?.setName ?? null,
+        })),
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (live && j?.prices) setAsks(j.prices);
+      })
+      // Silent: a missing price line is invisible, a broken buy-list is not.
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [suggestions]);
+
   const imageFor = (u: UpgradeSuggestion) =>
     u.card?.imageSmall ??
     (u.card?.id ? cardImages?.[u.card.id] : null) ??
@@ -610,6 +651,27 @@ function UpgradeList({
                 )}
               </div>
               <div className="mt-0.5 text-amber-800">{u.reason}</div>
+              {asks[u.name] && (
+                <div className="mt-1 text-amber-800">
+                  eBay: from{" "}
+                  <span className="font-semibold">${asks[u.name]!.low.toFixed(2)}</span>
+                  {asks[u.name]!.count >= 3 && (
+                    <> · typically ${asks[u.name]!.median.toFixed(2)}</>
+                  )}{" "}
+                  <a
+                    href={asks[u.name]!.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  >
+                    {asks[u.name]!.count} listed
+                  </a>
+                  {/* Said once per card rather than once per panel: someone
+                      scanning a single row shouldn't have to find a footnote
+                      to know this is an ask, not a sale. */}
+                  <span className="text-amber-600"> (asking, incl. shipping)</span>
+                </div>
+              )}
               {(u.owners?.length ?? 0) > 0 && (
                 <div className="mt-1 rounded bg-white/60 px-1.5 py-1 font-medium text-green-800">
                   🤝 Trade before you buy:{" "}
