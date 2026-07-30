@@ -1924,18 +1924,23 @@ function PriceSyncPanel() {
       {st && total > 0 && (
         <>
           <p className="m-0 mb-1 text-xs">
-            Set {st.setIndex} of {total} ({pct}%) · {st.cardsSeen.toLocaleString()} cards seen ·{" "}
-            <b>{st.pricesFilled.toLocaleString()} prices</b>,{" "}
-            {st.imagesFilled.toLocaleString()} images, {st.idsFilled.toLocaleString()} ids filled
-            {st.skippedAmbiguous > 0 && ` · ${st.skippedAmbiguous} skipped as ambiguous`}
+            {/* Every number defaulted: this panel renders state persisted by
+                whatever build wrote it last, and one undefined here blanks
+                the entire admin page. */}
+            Set {st.setIndex ?? 0} of {total} ({pct}%) ·{" "}
+            {(st.cardsSeen ?? 0).toLocaleString()} cards seen ·{" "}
+            <b>{(st.pricesFilled ?? 0).toLocaleString()} prices</b>,{" "}
+            {(st.imagesFilled ?? 0).toLocaleString()} images,{" "}
+            {(st.idsFilled ?? 0).toLocaleString()} ids filled
+            {(st.skippedAmbiguous ?? 0) > 0 && ` · ${st.skippedAmbiguous} skipped as ambiguous`}
           </p>
           {/* Zero matches with cards streaming past is the signature of a
               broken index, and looks identical to "their data is missing"
               unless the index size is on screen. */}
-          {st.cardsSeen > 50 && st.idsFilled === 0 && (
+          {(st.cardsSeen ?? 0) > 50 && (st.idsFilled ?? 0) === 0 && (
             <p className="m-0 mb-1 text-xs text-brand-negative">
-              {st.indexedCards === 0
-                ? "None of our cards were indexed — the catalogue is empty or migration 033 hasn't run."
+              {!st.indexedCards
+                ? "None of our cards were indexed — the catalogue is empty, migration 033 hasn't run, or this run predates the check."
                 : `${st.indexedCards.toLocaleString()} of our cards are indexed but nothing matched — names or numbers are formatted differently than expected.`}
             </p>
           )}
@@ -1951,9 +1956,10 @@ function PriceSyncPanel() {
         </>
       )}
       <p className="m-0 mb-2 font-mono text-[11px] text-brand-ink5">
-        {info.budget.used.toLocaleString()} of {info.budget.cap.toLocaleString()} credits used
+        {(info.budget?.used ?? 0).toLocaleString()} of{" "}
+        {(info.budget?.cap ?? 0).toLocaleString()} credits used
         today
-        {info.budget.remainingUpstream != null &&
+        {info.budget?.remainingUpstream != null &&
           ` · ${info.budget.remainingUpstream.toLocaleString()} left upstream`}
       </p>
       <div className="flex flex-wrap gap-2">

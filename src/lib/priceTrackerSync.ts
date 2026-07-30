@@ -80,13 +80,22 @@ export function freshSyncState(): SyncState {
   };
 }
 
+/** Read the saved state, filled out to the CURRENT shape.
+ *
+ *  A row written by an older build is missing whatever fields have been
+ *  added since, and those arrive at the UI as undefined — where a perfectly
+ *  reasonable `state.indexedCards.toLocaleString()` throws and takes the
+ *  whole admin page down with a blank client-side error. Persisted JSON
+ *  outlives the code that wrote it, so the reader owns the defaults. */
 export async function readSyncState(admin: SupabaseClient): Promise<SyncState | null> {
   const { data } = await admin
     .from("app_state")
     .select("value")
     .eq("key", SYNC_STATE_KEY)
     .maybeSingle();
-  return (data?.value as SyncState | undefined) ?? null;
+  const stored = data?.value as Partial<SyncState> | undefined;
+  if (!stored) return null;
+  return { ...freshSyncState(), ...stored };
 }
 
 async function writeSyncState(admin: SupabaseClient, state: SyncState): Promise<void> {
