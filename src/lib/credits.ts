@@ -58,6 +58,10 @@ export const ACTION_ESTIMATES: Record<string, string> = {
   deck_review: "5–15",
   grade: "8–15",
   coach: "1–3",
+  // Measured, not guessed: the chat carries an index of your collection and
+  // your decks, so it costs more than the deck coach, which is handed one
+  // deck. 3 credits for a small collection, 5 for a large one.
+  chat: "3–5",
   trade_chat: "1–3",
   find_image: "1–5",
 };
