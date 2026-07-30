@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
 import { ACTION_ESTIMATES } from "@/lib/credits";
 import { FanMark } from "@/components/Logo";
+import Markdown from "@/components/Markdown";
 
 interface Msg {
   id?: string;
@@ -125,9 +126,12 @@ export default function TrainerChat() {
         )}
       </button>
 
+      {/* Wider on a big screen than the 30rem it used to be fixed at. A
+          deckbuilding answer is a page of structure, and a phone-width column
+          on a 27" monitor makes it four screens of scrolling. */}
       {open && (
         <div
-          className="fixed inset-x-0 bottom-0 z-40 flex max-h-[86vh] flex-col rounded-t-[20px] border border-brand-line bg-brand-canvas shadow-2xl sm:inset-x-auto sm:bottom-24 sm:right-6 sm:max-h-[min(680px,78vh)] sm:w-[min(30rem,calc(100vw-3rem))] sm:rounded-[20px]"
+          className="fixed inset-x-0 bottom-0 z-40 flex max-h-[86vh] flex-col rounded-t-[20px] border border-brand-line bg-brand-canvas shadow-2xl sm:inset-x-auto sm:bottom-24 sm:right-6 sm:max-h-[min(720px,80vh)] sm:w-[min(32rem,calc(100vw-3rem))] sm:rounded-[20px] lg:max-h-[min(820px,82vh)] lg:w-[38rem]"
           role="dialog"
           aria-label={`${AI_NAME} chat`}
         >
@@ -186,20 +190,31 @@ export default function TrainerChat() {
             )}
 
             <div className="flex flex-col gap-2.5">
-              {msgs.map((m, i) => (
-                <div
-                  key={m.id ?? i}
-                  className={`max-w-[88%] whitespace-pre-wrap rounded-[14px] px-3.5 py-2.5 text-[13.5px] leading-[1.55] ${
-                    m.role === "user"
-                      ? "ml-auto bg-brand-ink text-brand-canvas"
-                      : m.refused
-                        ? "bg-brand-sunken text-brand-ink3"
+              {msgs.map((m, i) =>
+                m.role === "user" ? (
+                  <div
+                    key={m.id ?? i}
+                    className="ml-auto max-w-[88%] whitespace-pre-wrap rounded-[14px] bg-brand-ink px-3.5 py-2.5 text-[13.5px] leading-[1.55] text-brand-canvas"
+                  >
+                    {m.content}
+                  </div>
+                ) : (
+                  // Answers get the full width of the panel. They're
+                  // structured — headings, buy-lists, sometimes a table — and
+                  // an 88% column threw away a tenth of an already narrow
+                  // measure for the sake of a chat-bubble silhouette.
+                  <div
+                    key={m.id ?? i}
+                    className={`rounded-[14px] px-3.5 py-3 text-[13.5px] leading-[1.6] ${
+                      m.refused
+                        ? "max-w-[88%] bg-brand-sunken text-brand-ink3"
                         : "bg-white text-brand-ink2 ring-1 ring-brand-line"
-                  }`}
-                >
-                  {m.content}
-                </div>
-              ))}
+                    }`}
+                  >
+                    <Markdown text={m.content} />
+                  </div>
+                )
+              )}
               {busy && (
                 <div className="flex items-center gap-2 rounded-[14px] bg-white px-3.5 py-2.5 ring-1 ring-brand-line">
                   <FanMark size={15} className="animate-spin-slow shrink-0" />

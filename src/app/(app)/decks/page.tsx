@@ -7,6 +7,7 @@ import type { CollectionItem, Deck, DeckCardEntry, DeckSuggestion } from "@/lib/
 import type { CardDetail } from "@/app/api/cards/details/route";
 import { FanMark } from "@/components/Logo";
 import Modal, { ModalClose, PROSE } from "@/components/Modal";
+import Markdown from "@/components/Markdown";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -436,9 +437,9 @@ function ManualBuilder({
               </button>
             </div>
             {review && (
-              <p className="mt-2 whitespace-pre-wrap rounded bg-slate-50 p-2 text-sm text-slate-700">
-                {review}
-              </p>
+              <div className="mt-2 rounded bg-slate-50 p-2 text-sm leading-[1.6] text-slate-700">
+                <Markdown text={review} />
+              </div>
             )}
           </div>
 
@@ -513,8 +514,8 @@ function CoachBox({ deck }: { deck: { name: string; strategy: string | null; car
         </p>
       )}
       {answer && (
-        <div className="mt-2 whitespace-pre-wrap rounded bg-white p-3 text-sm text-slate-700 shadow-sm">
-          {answer}
+        <div className="mt-2 rounded bg-white p-3 text-sm leading-[1.6] text-slate-700 shadow-sm">
+          <Markdown text={answer} />
         </div>
       )}
     </div>
@@ -997,7 +998,10 @@ export default function DecksPage() {
                 </button>
               </div>
             </div>
-            <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{built.strategy}</p>
+            <Markdown
+              text={built.strategy}
+              className="mt-2 text-sm leading-[1.6] text-slate-700"
+            />
             <DeckList cards={built.cards} />
             {built.missing_suggestions?.length > 0 && (
               <UpgradeList
@@ -1114,11 +1118,10 @@ export default function DecksPage() {
               </div>
               <div className="flex min-w-0 flex-col gap-4">
                 {viewing.strategy && (
-                  <p
-                    className={`${PROSE} m-0 whitespace-pre-wrap text-sm leading-[1.6] text-brand-ink2`}
-                  >
-                    {viewing.strategy}
-                  </p>
+                  <Markdown
+                    text={viewing.strategy}
+                    className={`${PROSE} text-sm leading-[1.6] text-brand-ink2`}
+                  />
                 )}
                 {(viewing.suggestions?.length ?? 0) > 0 && (
                   <UpgradeList

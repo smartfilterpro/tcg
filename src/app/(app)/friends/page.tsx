@@ -13,6 +13,7 @@ import { AI_NAME } from "@/lib/branding";
 import { avatarColor, initialsFor } from "@/lib/avatar";
 import { formatFriendCode, friendLink, normalizeFriendCode } from "@/lib/friendCode";
 import QrCode from "@/components/QrCode";
+import Markdown from "@/components/Markdown";
 import { matchesSearch, shortAgo } from "@/lib/text";
 
 interface PostCardRef {
@@ -820,9 +821,10 @@ export default function FriendsPage() {
               </button>
             </div>
             {viewingDeck.strategy && (
-              <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
-                {viewingDeck.strategy}
-              </p>
+              <Markdown
+                text={viewingDeck.strategy}
+                className="mt-2 text-sm leading-[1.6] text-slate-700"
+              />
             )}
             <SharedDeckList cards={viewingDeck.cards ?? []} />
           </div>
