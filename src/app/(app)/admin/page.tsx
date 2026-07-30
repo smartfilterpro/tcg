@@ -1866,6 +1866,7 @@ function PriceSyncPanel() {
       skippedAmbiguous: number;
       indexedCards: number;
       rateLimited: boolean;
+      unmatchedSamples?: Array<{ set: string; name: string; num: string }>;
       done: boolean;
       error: string | null;
     } | null;
@@ -1883,18 +1884,51 @@ function PriceSyncPanel() {
     load();
   }, [load]);
 
+  const stopRef = useRef(false);
+
+  /** Small slices in a loop, not one big request.
+   *
+   *  Twelve sets with six-second spacing between them is a ninety-second
+   *  request; Railway's proxy gives up first and answers with a plain-text
+   *  "upstream error" page — which res.json() then turned into the baffling
+   *  "Unexpected token 'u'". Three sets a call stays well inside the
+   *  timeout, and the loop keeps going until done, rate-limited, stopped or
+   *  failed. */
   async function run(restart = false) {
     setBusy(true);
     setError(null);
+    stopRef.current = false;
     try {
-      const res = await fetch("/api/admin/price-sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxSets: 12, restart }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Sync failed");
-      await load();
+      let first = true;
+      for (;;) {
+        if (stopRef.current) break;
+        const res = await fetch("/api/admin/price-sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ maxSets: 3, restart: restart && first }),
+        });
+        first = false;
+        // The proxy's failure page is text, not JSON — read it as text and
+        // show it as itself rather than as a JSON parse error.
+        const text = await res.text();
+        let json: { state?: { done?: boolean; rateLimited?: boolean; error?: string | null } };
+        try {
+          json = JSON.parse(text);
+        } catch {
+          throw new Error(`The server answered with something other than JSON: ${text.slice(0, 120)}`);
+        }
+        if (!res.ok) throw new Error((json as { error?: string }).error || "Sync failed");
+        await load();
+        const st2 = json.state;
+        if (!st2 || st2.done || st2.error) break;
+        if (st2.rateLimited) {
+          // Their minute window. Wait it out and carry on rather than making
+          // the admin play the role of a retry loop.
+          for (let i = 0; i < 65 && !stopRef.current; i++) {
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Sync failed");
     }
@@ -1941,8 +1975,23 @@ function PriceSyncPanel() {
             <p className="m-0 mb-1 text-xs text-brand-negative">
               {!st.indexedCards
                 ? "None of our cards were indexed — the catalogue is empty, migration 033 hasn't run, or this run predates the check."
-                : `${st.indexedCards.toLocaleString()} of our cards are indexed but nothing matched — names or numbers are formatted differently than expected.`}
+                : `${st.indexedCards.toLocaleString()} of our cards are indexed but nothing matched yet. ` +
+                  `If the catalogue import isn't finished, that's the likely cause — their sets ` +
+                  `arrive newest-first, and a partial import holds mostly older cards.`}
             </p>
+          )}
+          {(st.unmatchedSamples?.length ?? 0) > 0 && (st.idsFilled ?? 0) === 0 && (
+            <details className="mb-1 text-[11px] text-brand-ink4">
+              <summary className="cursor-pointer">
+                Sample of unmatched cards (to tell &ldquo;we don&apos;t hold it&rdquo; from a
+                format mismatch)
+              </summary>
+              {st.unmatchedSamples!.map((u, i) => (
+                <div key={i} className="font-mono">
+                  {u.set}: {u.name} #{u.num}
+                </div>
+              ))}
+            </details>
           )}
           {st.rateLimited && (
             <p className="m-0 mb-1 text-xs text-brand-warning">
@@ -1964,8 +2013,18 @@ function PriceSyncPanel() {
       </p>
       <div className="flex flex-wrap gap-2">
         <button className="btn-primary text-sm" disabled={busy} onClick={() => run(false)}>
-          {busy ? "Syncing…" : st?.done ? "Run again" : "Sync next 12 sets"}
+          {busy ? "Syncing…" : st?.done ? "Run again" : "Sync"}
         </button>
+        {busy && (
+          <button
+            className="btn-secondary text-sm"
+            onClick={() => {
+              stopRef.current = true;
+            }}
+          >
+            Stop after this slice
+          </button>
+        )}
         {st && !st.done && (
           <button className="btn-secondary text-sm" disabled={busy} onClick={() => run(true)}>
             Start over
