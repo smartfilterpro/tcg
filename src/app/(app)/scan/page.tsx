@@ -16,7 +16,6 @@ import {
   type ScanMatch,
 } from "@/lib/types";
 import { FanMark } from "@/components/Logo";
-import { detectCards, type CardBox } from "@/lib/multiCardDetect";
 
 interface ReviewRow {
   key: number;
@@ -43,7 +42,7 @@ interface ReviewRow {
 async function fileToBase64(
   file: File,
   maxDim = 1568
-): Promise<{ data: string; mediaType: string; boxes: CardBox[]; crops: string[] }> {
+): Promise<{ data: string; mediaType: string }> {
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
   const w = Math.round(bitmap.width * scale);
@@ -53,52 +52,8 @@ async function fileToBase64(
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(bitmap, 0, 0, w, h);
-
-  // Find the cards while we have the pixels in hand — the same canvas is
-  // already here for the resize, so this costs one getImageData and about
-  // 40ms rather than a second decode.
-  let boxes: CardBox[] = [];
-  try {
-    const pixels = ctx.getImageData(0, 0, w, h);
-    boxes = detectCards({ data: pixels.data, width: w, height: h });
-  } catch {
-    // Detection is decoration. A failure here must never stop a scan.
-  }
-
-  // Cut each detected card out of the photo.
-  //
-  // Better than drawing boxes on the whole picture, which is what the first
-  // version did: on a phone the photo is thumbnail-sized, so six outlines on
-  // it are six slivers with unreadable labels. One tile per card shows each
-  // one big enough to recognise, which is the point of showing them at all.
-  const crops: string[] = [];
-  for (const b of boxes) {
-    const cw = Math.max(1, Math.round(b.w * w));
-    const ch = Math.max(1, Math.round(b.h * h));
-    const out = document.createElement("canvas");
-    // Capped: these are thumbnails, and a full-resolution crop per card
-    // would be several megabytes of data URLs held in React state.
-    const s = Math.min(1, 220 / Math.max(cw, ch));
-    out.width = Math.max(1, Math.round(cw * s));
-    out.height = Math.max(1, Math.round(ch * s));
-    out
-      .getContext("2d")!
-      .drawImage(
-        canvas,
-        Math.round(b.x * w),
-        Math.round(b.y * h),
-        cw,
-        ch,
-        0,
-        0,
-        out.width,
-        out.height
-      );
-    crops.push(out.toDataURL("image/jpeg", 0.8));
-  }
-
   const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
-  return { data: dataUrl.split(",")[1], mediaType: "image/jpeg", boxes, crops };
+  return { data: dataUrl.split(",")[1], mediaType: "image/jpeg" };
 }
 
 
@@ -145,11 +100,6 @@ export default function ScanPage() {
     expected: null,
   });
   const [partial, setPartial] = useState<Array<{ name: string; num: string | null }>>([]);
-  /** Card outlines found in the photo before it was even sent. Cosmetic: a
-   *  card the detector misses is still read by the model. */
-  const [boxes, setBoxes] = useState<CardBox[]>([]);
-  /** Each detected card, cut out of the photo. */
-  const [crops, setCrops] = useState<string[]>([]);
   const [phase, setPhase] = useState<"idle" | "scanning" | "review" | "saving" | "done">("idle");
   const [rows, setRows] = useState<ReviewRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -260,18 +210,10 @@ export default function ScanPage() {
     setPhase("scanning");
     setProgress({ read: 0, expected: null });
     setPartial([]);
-    setBoxes([]);
-    setCrops([]);
     setPreview(URL.createObjectURL(file));
     const startedAt = Date.now();
     try {
-      const { data, mediaType, boxes: found, crops: cut } = await fileToBase64(file);
-      setBoxes(found);
-      setCrops(cut);
-      // A denominator before the model has said anything. Replaced by its
-      // own count the moment that arrives — the model is the authority on
-      // how many cards there are, this is just a head start.
-      if (found.length > 0) setProgress({ read: 0, expected: found.length });
+      const { data, mediaType } = await fileToBase64(file);
       const res = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -484,68 +426,28 @@ export default function ScanPage() {
 
       {phase === "scanning" && (
         <div className="card-panel p-6 text-center">
-          {/* One tile per detected card, cut out of the photo.
-              ────────────────────────────────────────────────────────────
-              Names are attached ONLY when the detector found exactly as many
-              cards as the model read. Pairing tile i with card i is an
-              assumption, and when it is wrong it is wrong loudly: the first
-              build of this labelled a bottom-row Pawmi as "Bayleef" and drew
-              one box over four cards, because three boxes were zipped against
-              six names. A silent tile is a small loss; a confident wrong
-              caption is a bug someone has to notice to distrust. */}
-          {/* The tiles are shown only while nothing contradicts them: once
-              the model states how many cards are in the photo, a detector
-              that found a different number was wrong somewhere, and wrong
-              tiles are worse than no tiles. Fall back to the plain photo —
-              the failure then looks like the ordinary scan screen rather
-              than a broken one. The checklist below carries the real
-              progress either way. */}
-          {crops.length > 0 && (progress.expected == null || crops.length === progress.expected) ? (
-            <div className="mx-auto mb-4 grid max-w-md grid-cols-3 gap-2 sm:grid-cols-4">
-              {crops.map((src, i) => {
-                const named = crops.length === partial.length ? partial[i] : null;
-                const read = crops.length === partial.length ? i < progress.read : false;
-                return (
-                  <div key={i} className="relative">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={src}
-                      alt={named ? named.name : `Detected card ${i + 1}`}
-                      className={`aspect-[63/88] w-full rounded-md object-cover ring-2 transition ${
-                        read ? "ring-poke-red" : "opacity-70 ring-slate-200"
-                      }`}
-                    />
-                    {named && (
-                      <span className="absolute inset-x-0 bottom-0 truncate rounded-b-md bg-poke-red/90 px-1 py-0.5 text-[10px] font-medium leading-tight text-white">
-                        {named.name}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+          {/* The plain photo and the scan beam. The per-card tile show is
+              shelved by owner decision: the detector kept finding new
+              real-world layouts to be wrong about, and a wrong show is worse
+              than none. The checklist below is the model's own reading and
+              has been right in every photo — that is the part worth
+              watching. lib/multiCardDetect.ts remains for a future revisit. */}
+          {preview && (
+            <div className="relative mx-auto mb-5 inline-block overflow-hidden rounded-lg">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={preview} alt="scan preview" className="max-h-56 rounded-lg" />
+              <div className="absolute inset-0 bg-poke-dark/20" />
+              <div className="scan-beam" />
             </div>
-          ) : (
-            preview && (
-              <div className="relative mx-auto mb-5 inline-block overflow-hidden rounded-lg">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={preview} alt="scan preview" className="max-h-56 rounded-lg" />
-                <div className="absolute inset-0 bg-poke-dark/20" />
-                <div className="scan-beam" />
-              </div>
-            )
           )}
-          {crops.length > 0 && progress.read === 0 && (
-            <p className="mb-3 font-mono text-[11px] uppercase tracking-wide text-slate-400">
-              {crops.length} detected
-            </p>
-          )}
-
           <div className="flex items-center justify-center gap-3">
             <FanMark size={22} className="animate-spin-slow shrink-0" />
             <span className="text-lg font-semibold">Identifying cards</span>
-            {progress.expected != null && (
+            {(progress.read > 0 || progress.expected != null) && (
               <span className="font-mono text-sm text-slate-500">
-                {progress.read}/{progress.expected}
+                {progress.expected != null
+                  ? `${progress.read}/${progress.expected}`
+                  : `${progress.read} read`}
               </span>
             )}
           </div>
