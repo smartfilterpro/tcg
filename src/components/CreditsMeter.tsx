@@ -257,8 +257,14 @@ export default function CreditsMeter() {
                     : `${planLabel} credits left`}
                 </span>
               </div>
+              {/* The dollar equivalent used to sit here. It made the whole
+                  allowance read as pocket change — "100 credits" sounds like
+                  something, "≈ $1.00 of AI" sounds like nothing. What's
+                  useful is what the credits BUY, so that's what it says. */}
               <span className="font-mono text-[11.5px] text-brand-ink4">
-                ≈ ${(c.balance / 100).toFixed(2)} of AI
+                {c.balance > 0
+                  ? `about ${Math.max(1, Math.floor(c.balance / 3))} more scans`
+                  : "refills next cycle"}
               </span>
             </div>
             <div className="flex h-2.5 overflow-hidden rounded-full bg-brand-sunken">

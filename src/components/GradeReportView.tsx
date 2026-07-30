@@ -9,6 +9,7 @@ import type { GradeReport } from "@/lib/grading";
 import type { GradeValue } from "@/lib/gradeValue";
 import { CORNER_REGIONS, type CenteringMeasurement } from "@/lib/cardGeometry";
 import CenteringDiagram from "@/components/CenteringDiagram";
+import Markdown from "@/components/Markdown";
 
 /** Grade → pill colour, on the artboard's thresholds. */
 export function gradeColor(g: number): string {
@@ -243,9 +244,7 @@ export default function GradeReportView({
 
       <div className={PANEL}>
         <div className={`${PANEL_TITLE} mb-2`}>Grader&apos;s report</div>
-        <p className="whitespace-pre-wrap text-sm leading-[1.65] text-brand-ink2">
-          {report.summary}
-        </p>
+        <Markdown text={report.summary} className="text-sm leading-[1.65] text-brand-ink2" />
       </div>
 
       {value && <ValuePanel value={value} />}
