@@ -53,6 +53,11 @@ export interface SyncState {
   /** Set when their minute window cut a run short. Not an error — press
    *  again in a minute. */
   rateLimited: boolean;
+  /** A few of their cards that matched nothing of ours, verbatim. "Nothing
+   *  matched" has two very different causes — we don't hold the card, or we
+   *  hold it under a different name/number format — and only seeing real
+   *  examples separates them. */
+  unmatchedSamples: Array<{ set: string; name: string; num: string }>;
   startedAt: string;
   updatedAt: string;
   finishedAt: string | null;
@@ -72,6 +77,7 @@ export function freshSyncState(): SyncState {
     skippedAmbiguous: 0,
     indexedCards: 0,
     rateLimited: false,
+    unmatchedSamples: [],
     startedAt: now,
     updatedAt: now,
     finishedAt: null,
@@ -229,7 +235,11 @@ export async function runPriceSync(
   if (!priceTrackerEnabled()) {
     throw new Error("POKEMONPRICETRACKER_API_KEY isn't set.");
   }
-  const maxSets = Math.max(1, Math.min(60, opts.maxSets ?? 12));
+  // Small by default. Twelve sets with six-second spacing is a ninety-second
+  // request, which is past what Railway's proxy will sit through — it
+  // answers with a plain-text "upstream error" page instead. The panel calls
+  // repeatedly; each call stays well inside the timeout.
+  const maxSets = Math.max(1, Math.min(60, opts.maxSets ?? 3));
   const reserve = Math.max(0, opts.reserve ?? 2000);
 
   const previous = await readSyncState(admin);
@@ -327,7 +337,16 @@ export async function runPriceSync(
           continue;
         }
         const mine = byKey.get(key);
-        if (!mine) continue;
+        if (!mine) {
+          if (state.unmatchedSamples.length < 10) {
+            state.unmatchedSamples.push({
+              set: set.name,
+              name: theirs.name ?? "?",
+              num: theirs.cardNumber ?? "?",
+            });
+          }
+          continue;
+        }
         const patch = patchFor(mine, theirs);
         if (patch) patches.push(patch);
       }
