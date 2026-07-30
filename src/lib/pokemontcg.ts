@@ -110,6 +110,69 @@ function headers(): Record<string, string> {
   return h;
 }
 
+/* ------------------------------------------------------- request handling */
+
+// Worth another go. 5xx is pokemontcg.io failing on its own side, 429 is
+// quota, and the timeouts are load. None of them say the request was wrong.
+const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
+const ATTEMPTS = 3;
+
+/** Say what actually happened.
+ *
+ *  The old message was `pokemontcg.io 500:` and nothing else — the body was
+ *  empty, so the interesting half of the string was blank and the reader was
+ *  left with a bare number. A 500 with no body is a specific, diagnosable
+ *  thing: their servers fell over, our request was fine, and trying again
+ *  later is the entire remedy. Say that instead of implying a mistake. */
+function describeFailure(status: number, body: string, url: string): string {
+  const target = `${new URL(url).pathname}${new URL(url).search}`;
+  const detail = body.trim() ? body.trim().slice(0, 300) : "empty response body";
+  const nature =
+    status >= 500
+      ? "pokemontcg.io's own servers failed — nothing is wrong with the request, and it usually clears on its own"
+      : status === 429
+        ? "rate limited"
+        : "the request was rejected";
+  const key = (process.env.POKEMONTCG_API_KEY ?? "").trim()
+    ? "An API key is configured."
+    : "No POKEMONTCG_API_KEY is set — unauthenticated callers get a much smaller quota.";
+  return `pokemontcg.io ${status} on ${target} (${detail}). ${nature}. ${key}`;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** GET and parse, retrying the failures that are worth retrying.
+ *
+ *  The catalogue import fetches ~80 pages in a row. Without this, a single
+ *  blip anywhere in that sequence ends the run — which is exactly what
+ *  happened: one 500 on page 1 and the whole import wrote nothing. */
+async function apiFetchJson(url: string): Promise<Record<string, unknown>> {
+  let last = "pokemontcg.io could not be reached";
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    // 0.75s, then 1.5s. Long enough for a load spike to pass, short enough
+    // that the caller's request timeout isn't spent waiting.
+    if (attempt > 0) await sleep(750 * 2 ** (attempt - 1));
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: headers(),
+        cache: "no-store",
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      last = `pokemontcg.io network error: ${err instanceof Error ? err.message : String(err)}`;
+      continue;
+    }
+
+    if (res.ok) return (await res.json()) as Record<string, unknown>;
+    last = describeFailure(res.status, await res.text().catch(() => ""), url);
+    // A 400 or a 404 will say the same thing three times over.
+    if (!RETRYABLE.has(res.status)) break;
+  }
+  throw new Error(`${last} (${ATTEMPTS} attempts)`);
+}
+
 /** Best-effort USD market price across print variants. */
 function extractPrice(card: RawCard): number | null {
   const prices = card.tcgplayer?.prices;
@@ -177,11 +240,7 @@ export function toSummary(card: RawCard): CardSummary {
 async function apiGet(path: string, params: Record<string, string>): Promise<RawCard[]> {
   const url = new URL(`${BASE}${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await fetch(url.toString(), { headers: headers(), cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`pokemontcg.io ${res.status}: ${await res.text().catch(() => "")}`);
-  }
-  const json = (await res.json()) as { data: RawCard | RawCard[] };
+  const json = (await apiFetchJson(url.toString())) as { data: RawCard | RawCard[] };
   return Array.isArray(json.data) ? json.data : [json.data];
 }
 
@@ -376,11 +435,7 @@ export async function searchAllCardsPage(
   url.searchParams.set("page", String(page));
   url.searchParams.set("pageSize", String(pageSize));
   url.searchParams.set("orderBy", "id");
-  const res = await fetch(url.toString(), { headers: headers(), cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`pokemontcg.io ${res.status}: ${await res.text().catch(() => "")}`);
-  }
-  const json = (await res.json()) as { data?: RawCard[]; totalCount?: number };
+  const json = (await apiFetchJson(url.toString())) as { data?: RawCard[]; totalCount?: number };
   return {
     cards: (json.data ?? []).map(toSummary),
     totalCount: typeof json.totalCount === "number" ? json.totalCount : null,

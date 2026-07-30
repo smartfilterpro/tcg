@@ -148,8 +148,15 @@ export async function runCardImport(
   opts?: { restart?: boolean }
 ): Promise<CardImportState> {
   const previous = await readImportState(admin);
+  // Resume after a failure — do NOT start over.
+  //
+  // `previous.error` used to force a fresh state, so a transient upstream
+  // 500 on page 60 meant the next click on "Continue import" quietly threw
+  // away 15,000 cards of progress and began again at page 1. The button says
+  // continue; it has to continue. Starting over is what `restart` is for,
+  // and it is a deliberate click on a different control.
   const state =
-    opts?.restart || !previous || previous.done || previous.error
+    opts?.restart || !previous || previous.done
       ? freshImportState()
       : { ...previous, error: null };
 
