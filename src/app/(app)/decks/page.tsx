@@ -8,6 +8,8 @@ import type { CardDetail } from "@/app/api/cards/details/route";
 import { FanMark } from "@/components/Logo";
 import Modal, { ModalClose, PROSE } from "@/components/Modal";
 import Markdown from "@/components/Markdown";
+import { CreditLock } from "@/components/CreditLock";
+import { useCredits } from "@/components/useCredits";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -48,6 +50,7 @@ function ManualBuilder({
   editDeck?: Deck | null;
   onEditStarted?: () => void;
 }) {
+  const credits = useCredits();
   const [open, setOpen] = useState(false);
   const [owned, setOwned] = useState<OwnedCard[] | null>(null);
   const [search, setSearch] = useState("");
@@ -439,13 +442,17 @@ function ManualBuilder({
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
               />
-              <button
-                className="btn-secondary shrink-0 text-sm"
-                disabled={reviewing || total === 0}
-                onClick={askReview}
-              >
-                {reviewing ? "Reviewing…" : `🤖 Review`}
-              </button>
+              {credits.empty ? (
+                <CreditLock plan={credits.credits?.plan} label="Out of credits" />
+              ) : (
+                <button
+                  className="btn-secondary shrink-0 text-sm"
+                  disabled={reviewing || total === 0}
+                  onClick={askReview}
+                >
+                  {reviewing ? "Reviewing…" : `🤖 Review`}
+                </button>
+              )}
             </div>
             {review && (
               <div className="mt-2 rounded bg-slate-50 p-2 text-sm leading-[1.6] text-slate-700">
@@ -479,6 +486,7 @@ function ManualBuilder({
 }
 
 function CoachBox({ deck }: { deck: { name: string; strategy: string | null; cards: DeckCardEntry[] } }) {
+  const credits = useCredits();
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
@@ -515,9 +523,13 @@ function CoachBox({ deck }: { deck: { name: string; strategy: string | null; car
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && ask()}
         />
-        <button className="btn-secondary shrink-0 text-sm" onClick={ask} disabled={asking}>
-          {asking ? "Thinking…" : "Ask"}
-        </button>
+        {credits.empty ? (
+          <CreditLock plan={credits.credits?.plan} label="Out of credits" />
+        ) : (
+          <button className="btn-secondary shrink-0 text-sm" onClick={ask} disabled={asking}>
+            {asking ? "Thinking…" : "Ask"}
+          </button>
+        )}
       </div>
       {asking && (
         <p className="mt-2 animate-pulse text-xs text-slate-400">
@@ -719,6 +731,7 @@ const BUILD_STEPS = [
 const JOB_STORAGE_KEY = "pokedeck-build-job";
 
 export default function DecksPage() {
+  const credits = useCredits();
   const [decks, setDecks] = useState<Deck[]>([]);
   const [styleNotes, setStyleNotes] = useState("");
   const [styleSaved, setStyleSaved] = useState(false);
@@ -1029,9 +1042,13 @@ export default function DecksPage() {
               <option value="standard">🏆 Standard</option>
               <option value="expanded">📚 Expanded</option>
             </select>
-            <button className="btn-primary shrink-0" onClick={build} disabled={building}>
-              {building ? "Building…" : "Build deck"}
-            </button>
+            {credits.empty ? (
+              <CreditLock plan={credits.credits?.plan} label="Out of credits to build" />
+            ) : (
+              <button className="btn-primary shrink-0" onClick={build} disabled={building}>
+                {building ? "Building…" : "Build deck"}
+              </button>
+            )}
           </div>
         </div>
         {building && (
