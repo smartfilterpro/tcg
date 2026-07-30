@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { verifyStripeSignature } from "@/lib/stripe";
+import { stripeFetch, verifyStripeSignature } from "@/lib/stripe";
 
 export const maxDuration = 60;
 
@@ -36,7 +36,15 @@ async function userForEvent(
 
 async function handleSubscription(admin: ReturnType<typeof createAdminClient>, sub: Obj) {
   const userId = await userForEvent(admin, (sub.metadata as Obj) ?? null, str(sub.customer));
-  if (!userId) return;
+  if (!userId) {
+    // Silent here meant a paid subscription that never reached an account.
+    console.error(
+      `BILLING: subscription ${str(sub.id)} for customer ${str(sub.customer)} ` +
+        `matched no user — no metadata.user_id and no profile with that ` +
+        `stripe_customer. The plan was NOT applied.`
+    );
+    return;
+  }
   const status = str(sub.status);
   const plan = str((sub.metadata as Obj)?.plan) === "family" ? "family" : "pro";
 
@@ -123,8 +131,41 @@ async function handleCheckoutCompleted(admin: ReturnType<typeof createAdminClien
       });
     }
   }
-  // mode=subscription sessions need nothing here: the subscription events
-  // carry the same information and also cover renewals and portal changes.
+  // A subscription checkout.
+  //
+  // This USED to do nothing, on the reasoning that customer.subscription.*
+  // carries the same information. True — but only if the endpoint in the
+  // Stripe dashboard is subscribed to those events, and an endpoint created
+  // with just checkout.session.completed is a normal thing to end up with.
+  // The symptom is the worst kind: payment succeeds, Stripe shows the
+  // subscription, and the app still says Free.
+  //
+  // So the session now applies the plan itself by fetching the subscription
+  // it created. If both events arrive, the second is a no-op — handleSubscription
+  // writes the same row either way.
+  if (str(session.mode) === "subscription") {
+    const subId = str(session.subscription);
+    if (!subId) return;
+    try {
+      const sub = await stripeFetch(`/subscriptions/${subId}`, { method: "GET" });
+      // The session's metadata is the more reliable of the two: we stamp it
+      // at creation, whereas a subscription made through the portal may carry
+      // none. Prefer it, fall back to the subscription's own.
+      const merged: Obj = {
+        ...sub,
+        metadata: { ...((sub.metadata as Obj) ?? {}), ...((meta ?? {}) as Obj) },
+      };
+      await handleSubscription(admin, merged);
+    } catch (err) {
+      // Loud: this is the path between a customer paying and getting what
+      // they paid for.
+      console.error(
+        `BILLING: checkout ${str(session.id)} completed but the subscription ` +
+          `could not be applied: ${err instanceof Error ? err.message : err}`
+      );
+      throw err; // 500 → Stripe retries, which is what we want here.
+    }
+  }
 }
 
 async function handleRefund(admin: ReturnType<typeof createAdminClient>, charge: Obj) {

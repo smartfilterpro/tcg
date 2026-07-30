@@ -26,6 +26,7 @@ export default function BillingPage() {
   const [data, setData] = useState<BillingData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [boost, setBoost] = useState(false);
 
   useEffect(() => {
@@ -45,8 +46,18 @@ export default function BillingPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `${label} failed`);
-      window.location.href = json.url as string;
-      return;
+      // Checkout and the portal answer with a url to send the browser to.
+      // Sync answers with a message and changes state in place — navigating
+      // to `undefined` is what the old unconditional redirect would have done.
+      if (typeof json.url === "string") {
+        window.location.href = json.url;
+        return;
+      }
+      setNotice(typeof json.message === "string" ? json.message : `${label} done.`);
+      // Re-read so the plan card reflects whatever just changed.
+      const fresh = await fetch("/api/billing").then((r) => (r.ok ? r.json() : null));
+      if (fresh) setData(fresh);
+      setBusy(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : `${label} failed`);
       setBusy(null);
@@ -69,6 +80,11 @@ export default function BillingPage() {
         Your plan, your credits, and every charge we&apos;ve ever made.
       </p>
       {error && <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+      {notice && (
+        <div className="mb-4 rounded-[14px] border border-brand-line bg-white p-3 text-sm text-brand-positive">
+          {notice}
+        </div>
+      )}
 
       <div className="mb-4 flex flex-wrap gap-4">
         {/* plan card */}
@@ -114,15 +130,44 @@ export default function BillingPage() {
               >
                 Boost credits
               </button>
+              {/* Both paid plans, not just Pro. Family was reachable from the
+                  pricing page and from signup but not from here, which is the
+                  one screen someone already paying-curious actually opens. */}
               {data.plan === "free" && (
-                <button
-                  className="rounded-full border border-[#4A4C52] px-[18px] py-2.5 text-[13.5px] font-medium text-brand-canvas disabled:opacity-50"
-                  disabled={busy !== null || !data.stripeConfigured}
-                  onClick={() => post("Upgrade", "/api/billing/checkout", { plan: "pro" })}
-                >
-                  {busy === "Upgrade" ? "Opening…" : "Upgrade to Pro"}
-                </button>
+                <>
+                  <button
+                    className="rounded-full border border-[#4A4C52] px-[18px] py-2.5 text-[13.5px] font-medium text-brand-canvas disabled:opacity-50"
+                    disabled={busy !== null || !data.stripeConfigured}
+                    onClick={() => post("Upgrade", "/api/billing/checkout", { plan: "pro" })}
+                  >
+                    {busy === "Upgrade" ? "Opening…" : "Upgrade to Pro"}
+                  </button>
+                  <button
+                    className="rounded-full border border-[#4A4C52] px-[18px] py-2.5 text-[13.5px] font-medium text-brand-canvas disabled:opacity-50"
+                    disabled={busy !== null || !data.stripeConfigured}
+                    onClick={() => post("Family", "/api/billing/checkout", { plan: "family" })}
+                    title="Up to 5 profiles sharing one pool of credits"
+                  >
+                    {busy === "Family" ? "Opening…" : "Get Family"}
+                  </button>
+                </>
               )}
+              {/* Paid but still showing Free? The webhook can miss — a wrong
+                  event list, a delivery that failed mid-deploy — and Stripe
+                  won't resend an event it already accepted, so waiting never
+                  fixes it. This asks Stripe directly. */}
+              <button
+                className="rounded-full border border-[#4A4C52] px-[18px] py-2.5 text-[13.5px] font-medium text-brand-canvas disabled:opacity-50"
+                disabled={busy !== null || !data.stripeConfigured}
+                onClick={() => post("Sync", "/api/billing/sync")}
+                title="Re-read your subscription from Stripe and apply it"
+              >
+                {busy === "Sync" ? "Checking…" : "Already paid? Refresh"}
+              </button>
+
+              {/* A Pro subscriber moving up to Family goes through the Stripe
+                  portal, which prorates. The checkout route refuses anyone who
+                  already has a plan, so sending them there would just error. */}
               {data.plan === "pro" && (
                 <button
                   className="rounded-full border border-[#4A4C52] px-[18px] py-2.5 text-[13.5px] font-medium text-brand-canvas disabled:opacity-50"

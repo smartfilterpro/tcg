@@ -910,6 +910,51 @@ export default function AdminPage() {
       </div>
       )}
 
+      {tab === "analytics" && (
+        <div className="card-panel p-4">
+          <h2 className="mb-2 font-display text-[17px] font-bold">🎓 Grading data export</h2>
+          <p className="mb-3 text-[13px] leading-[1.55] text-brand-ink3">
+            Every saved grading report — the photos, the centering the app measured, and what
+            the grader estimated. Use it to improve the grading prompt and to see where the
+            estimate drifts.
+          </p>
+          <div className="mb-3 rounded-[14px] border border-[#F0DFA8] bg-[#FFF8E1] px-4 py-3 text-[12.5px] leading-[1.6] text-[#7A5A12]">
+            <b>Only rows with a real grade can train anything.</b> The rest hold the model&apos;s
+            own estimate, and training on those teaches it to repeat its current mistakes with
+            more confidence. They&apos;re still worth having for spotting drift and finding
+            disagreements to review. Real grades get recorded by the card&apos;s owner on their
+            saved report, once it comes back from PSA, BGS or CGC.
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <a
+              href="/api/admin/grade-export?format=jsonl"
+              download
+              className="rounded-full bg-brand-ink px-4 py-2 text-[13px] font-medium text-brand-canvas hover:bg-brand-ink2"
+            >
+              ⬇ JSONL — everything
+            </a>
+            <a
+              href="/api/admin/grade-export?format=jsonl&only=labelled"
+              download
+              className="rounded-full border border-brand-line-strong bg-white px-4 py-2 text-[13px] font-medium hover:bg-brand-sunken"
+            >
+              ⬇ JSONL — only real grades
+            </a>
+            <a
+              href="/api/admin/grade-export?format=csv"
+              download
+              className="rounded-full border border-brand-line-strong bg-white px-4 py-2 text-[13px] font-medium hover:bg-brand-sunken"
+            >
+              ⬇ CSV — for a spreadsheet
+            </a>
+          </div>
+          <p className="mb-0 mt-2.5 text-[11.5px] text-brand-ink5">
+            User ids are replaced with a stable pseudonym, so you can split train/test without
+            the same person landing in both, and without carrying identities into a dataset.
+          </p>
+        </div>
+      )}
+
       {tab === "cards" && (
       <div className="card-panel p-4">
         <h2 className="mb-2 font-display text-[17px] font-bold">🖼 Card image review ({reviewRows.length})</h2>

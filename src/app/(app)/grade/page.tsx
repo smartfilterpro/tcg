@@ -196,14 +196,158 @@ function SidePanel({
 /** A saved grade, reopened. Scrolls the whole overlay rather than a fixed
  *  panel, which is what keeps it on screen when a phone keyboard or zoom
  *  shifts the viewport. */
+/** Recording what a card ACTUALLY graded.
+ *
+ *  This is the only real supervision the grader will ever get — everything
+ *  else in a saved report is the model's own opinion, and a dataset of a
+ *  model's opinions can only teach it to be more sure of them. So it is asked
+ *  for plainly, on the report it belongs to, at the moment someone has the
+ *  slab in their hand. */
+function OutcomeForm({ grade, onSaved }: { grade: SavedGrade; onSaved: () => void }) {
+  const [open, setOpen] = useState(grade.actualGrade != null);
+  const [value, setValue] = useState(grade.actualGrade?.toString() ?? "");
+  const [grader, setGrader] = useState(grade.actualGrader ?? "PSA");
+  const [cert, setCert] = useState(grade.actualCert ?? "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const predicted = grade.estimatedGrade;
+  const actual = grade.actualGrade;
+  const delta = predicted != null && actual != null ? predicted - actual : null;
+
+  async function save(clear = false) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/grade/reports", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: grade.id,
+          actualGrade: clear ? null : Number(value),
+          actualGrader: clear ? null : grader,
+          actualCert: clear ? null : cert,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't save that");
+      setSaved(true);
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn't save that");
+    }
+    setBusy(false);
+  }
+
+  if (!open) {
+    return (
+      <button
+        className="self-start rounded-full border border-brand-line-strong bg-white px-4 py-2 text-[12.5px] font-medium hover:bg-brand-sunken"
+        onClick={() => setOpen(true)}
+      >
+        Did you get it graded? Record the real result
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-[14px] border border-brand-line bg-white p-4">
+      <div className="mb-1 font-display text-[15px] font-bold">What did it actually grade?</div>
+      <p className="mb-3 text-[12.5px] leading-[1.55] text-brand-ink3">
+        Only worth filling in once the card is back from the grader. It&apos;s what teaches the
+        estimate to get better — and it shows you how close this one was.
+      </p>
+      {actual != null && delta != null && (
+        <div className="mb-3 rounded-[10px] bg-brand-panel-alt px-3 py-2 text-[12.5px] text-brand-ink2">
+          Estimated <b>{predicted}</b>, actually <b>{actual}</b> —{" "}
+          {delta === 0
+            ? "exactly right."
+            : `${Math.abs(delta)} ${Math.abs(delta) === 1 ? "point" : "points"} ${
+                delta > 0 ? "optimistic" : "conservative"
+              }.`}
+        </div>
+      )}
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-[12px] font-medium text-brand-ink3">
+          Grade
+          <input
+            type="number"
+            min={1}
+            max={10}
+            step={0.5}
+            className="w-[86px] rounded-[10px] border border-brand-line-strong px-2.5 py-1.5 text-sm outline-none focus:border-brand-accent"
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setSaved(false);
+            }}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-[12px] font-medium text-brand-ink3">
+          Graded by
+          <select
+            className="rounded-[10px] border border-brand-line-strong bg-white px-2.5 py-1.5 text-sm outline-none focus:border-brand-accent"
+            value={grader}
+            onChange={(e) => {
+              setGrader(e.target.value);
+              setSaved(false);
+            }}
+          >
+            {["PSA", "BGS", "CGC", "SGC", "other"].map((g) => (
+              <option key={g} value={g}>
+                {g}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex min-w-[140px] flex-1 flex-col gap-1 text-[12px] font-medium text-brand-ink3">
+          Cert number <span className="font-normal text-brand-ink5">(optional)</span>
+          <input
+            className="rounded-[10px] border border-brand-line-strong px-2.5 py-1.5 text-sm outline-none focus:border-brand-accent"
+            value={cert}
+            onChange={(e) => {
+              setCert(e.target.value);
+              setSaved(false);
+            }}
+          />
+        </label>
+        <button
+          className="rounded-full bg-brand-ink px-4 py-2 text-[13px] font-medium text-brand-canvas hover:bg-brand-ink2 disabled:opacity-50"
+          disabled={busy || !value}
+          onClick={() => save()}
+        >
+          {busy ? "Saving…" : saved ? "Saved" : "Save"}
+        </button>
+        {actual != null && (
+          <button
+            className="text-[12px] text-brand-ink4 hover:underline"
+            disabled={busy}
+            onClick={() => {
+              setValue("");
+              setCert("");
+              save(true);
+            }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {err && <p className="mb-0 mt-2 text-[12.5px] text-brand-negative">{err}</p>}
+    </div>
+  );
+}
+
 function SavedGradeModal({
   grade,
   onClose,
   onDelete,
+  onOutcomeSaved,
 }: {
   grade: SavedGrade;
   onClose: () => void;
   onDelete: () => void;
+  onOutcomeSaved: () => void;
 }) {
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-brand-ink/60 p-4" onClick={onClose}>
@@ -243,6 +387,7 @@ function SavedGradeModal({
           }
           footer={
             <>
+              <OutcomeForm grade={grade} onSaved={onOutcomeSaved} />
               <div className="rounded-[14px] bg-brand-sunken px-4 py-[14px] text-[12.5px] leading-[1.55] text-brand-ink2">
                 <b className="font-display">An estimate for fun and planning</b> — not an official
                 grade. PSA, BGS or CGC may grade differently after physical inspection.
@@ -635,6 +780,7 @@ export default function GradePage() {
           grade={openGrade}
           onClose={() => setOpenGrade(null)}
           onDelete={() => deleteGrade(openGrade.id)}
+          onOutcomeSaved={loadHistory}
         />
       )}
     </>
