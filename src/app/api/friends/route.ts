@@ -68,10 +68,17 @@ export async function GET() {
       }));
     }
 
+    // Own card count, for the "You: name · N cards" badge on the share row.
+    const { count: myCardCount } = await supabase
+      .from("collection_items")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id);
+
     return NextResponse.json({
       migrated,
       sharing: me?.share_collection === true,
       myName: (me?.display_name || me?.email || "") as string,
+      myCardCount: myCardCount ?? 0,
       friends,
       sharedDecks,
     });
