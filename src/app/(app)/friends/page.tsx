@@ -803,7 +803,7 @@ export default function FriendsPage() {
           onClick={() => setViewingDeck(null)}
         >
           <div
-            className="card-panel mx-auto my-6 w-full max-w-lg p-5"
+            className="card-panel mx-auto my-6 w-full max-w-[min(56rem,94vw)] p-5"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-2">
@@ -1234,7 +1234,7 @@ function SharedDeckList({ cards }: { cards: DeckCardEntry[] }) {
               <h4 className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-400">
                 {cat} ({groups[cat].reduce((s, c) => s + c.quantity, 0)})
               </h4>
-              <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+              <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-8">
                 {groups[cat].map((c, i) => (
                   <div key={i} title={c.name}>
                     <div className="relative">

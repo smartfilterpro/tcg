@@ -6,6 +6,7 @@ import { matchesSearch } from "@/lib/text";
 import type { CollectionItem, Deck, DeckCardEntry, DeckSuggestion } from "@/lib/types";
 import type { CardDetail } from "@/app/api/cards/details/route";
 import { FanMark } from "@/components/Logo";
+import Modal, { ModalClose, PROSE } from "@/components/Modal";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -1000,24 +1001,17 @@ export default function DecksPage() {
       </div>
 
       {viewing && (
-        <div
-          className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/60 p-4"
-          onClick={() => setViewing(null)}
-        >
-          <div
-            className="card-panel mx-auto my-6 w-full max-w-lg p-4 sm:p-5"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <Modal onClose={() => setViewing(null)} size="xl" labelledBy="deck-modal-title">
+          <>
             {/* Title row always fits; actions wrap onto their own line on phones */}
             <div className="flex items-start justify-between gap-2">
-              <h2 className="min-w-0 break-words text-xl font-bold">{viewing.name}</h2>
-              <button
-                aria-label="Close"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200"
-                onClick={() => setViewing(null)}
+              <h2
+                id="deck-modal-title"
+                className="min-w-0 break-words font-display text-xl font-bold"
               >
-                ✕
-              </button>
+                {viewing.name}
+              </h2>
+              <ModalClose onClose={() => setViewing(null)} />
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <button
@@ -1054,19 +1048,40 @@ export default function DecksPage() {
               </button>
             </div>
             <DeckDirectShares deckId={viewing.id} />
-            {viewing.strategy && (
-              <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{viewing.strategy}</p>
-            )}
-            <DeckList cards={viewing.cards ?? []} />
-            {(viewing.suggestions?.length ?? 0) > 0 && (
-              <UpgradeList suggestions={viewing.suggestions!} />
-            )}
-            <HandSimulator getCards={() => viewing.cards ?? []} />
-            <CoachBox
-              deck={{ name: viewing.name, strategy: viewing.strategy, cards: viewing.cards ?? [] }}
-            />
-          </div>
-        </div>
+
+            {/* Two columns once there's room for them. Everything used to be
+                one stack, so on a wide screen the write-up ran as a narrow
+                ribbon and the card list sat a full screen below it. The cards
+                are the deck, so they take the wider column; the write-up and
+                the tools sit beside them, and the prose keeps a readable
+                measure instead of stretching to fill. */}
+            <div className="mt-3 grid items-start gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+              <div className="min-w-0">
+                <DeckList cards={viewing.cards ?? []} />
+              </div>
+              <div className="flex min-w-0 flex-col gap-4">
+                {viewing.strategy && (
+                  <p
+                    className={`${PROSE} m-0 whitespace-pre-wrap text-sm leading-[1.6] text-brand-ink2`}
+                  >
+                    {viewing.strategy}
+                  </p>
+                )}
+                {(viewing.suggestions?.length ?? 0) > 0 && (
+                  <UpgradeList suggestions={viewing.suggestions!} />
+                )}
+                <HandSimulator getCards={() => viewing.cards ?? []} />
+                <CoachBox
+                  deck={{
+                    name: viewing.name,
+                    strategy: viewing.strategy,
+                    cards: viewing.cards ?? [],
+                  }}
+                />
+              </div>
+            </div>
+          </>
+        </Modal>
       )}
 
       <CardReader />
@@ -1084,7 +1099,7 @@ export default function DecksPage() {
                 <h4 className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-400">
                   {cat} ({groups[cat].reduce((s, c) => s + c.quantity, 0)})
                 </h4>
-                <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+                <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 xl:grid-cols-7">
                   {groups[cat].map((c, i) => (
                     <button
                       key={i}
@@ -1140,7 +1155,7 @@ export default function DecksPage() {
         onClick={() => setReading(null)}
       >
         <div
-          className="mx-auto my-4 max-w-lg rounded-xl bg-white p-4 shadow-xl sm:p-5"
+          className="mx-auto my-4 w-full max-w-[min(46rem,94vw)] rounded-xl bg-white p-4 shadow-xl sm:p-5"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="mb-3 flex items-start gap-3">
