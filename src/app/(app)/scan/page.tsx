@@ -16,6 +16,7 @@ import {
   type ScanMatch,
 } from "@/lib/types";
 import { FanMark } from "@/components/Logo";
+import { detectCards, type CardBox } from "@/lib/multiCardDetect";
 
 interface ReviewRow {
   key: number;
@@ -38,7 +39,10 @@ interface ReviewRow {
  *  Sending exactly what the model will see costs the same tokens and about
  *  40% fewer bytes. Do not raise this expecting better recognition; the
  *  server-side resize would undo it. */
-async function fileToBase64(file: File, maxDim = 1568): Promise<{ data: string; mediaType: string }> {
+async function fileToBase64(
+  file: File,
+  maxDim = 1568
+): Promise<{ data: string; mediaType: string; boxes: CardBox[] }> {
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
   const w = Math.round(bitmap.width * scale);
@@ -48,8 +52,20 @@ async function fileToBase64(file: File, maxDim = 1568): Promise<{ data: string; 
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(bitmap, 0, 0, w, h);
+
+  // Find the cards while we have the pixels in hand — the same canvas is
+  // already here for the resize, so this costs one getImageData and about
+  // 40ms rather than a second decode.
+  let boxes: CardBox[] = [];
+  try {
+    const pixels = ctx.getImageData(0, 0, w, h);
+    boxes = detectCards({ data: pixels.data, width: w, height: h });
+  } catch {
+    // Detection is decoration. A failure here must never stop a scan.
+  }
+
   const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
-  return { data: dataUrl.split(",")[1], mediaType: "image/jpeg" };
+  return { data: dataUrl.split(",")[1], mediaType: "image/jpeg", boxes };
 }
 
 
@@ -65,6 +81,9 @@ export default function ScanPage() {
     expected: null,
   });
   const [partial, setPartial] = useState<Array<{ name: string; num: string | null }>>([]);
+  /** Card outlines found in the photo before it was even sent. Cosmetic: a
+   *  card the detector misses is still read by the model. */
+  const [boxes, setBoxes] = useState<CardBox[]>([]);
   const [phase, setPhase] = useState<"idle" | "scanning" | "review" | "saving" | "done">("idle");
   const [rows, setRows] = useState<ReviewRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -152,7 +171,12 @@ export default function ScanPage() {
       if (job.status === "cancelled") return null;
 
       // Cards read so far — the real numerator behind "4 of 6".
-      setProgress({ read: job.cards?.length ?? 0, expected: job.expected ?? null });
+      setProgress((prev) => ({
+        read: job.cards?.length ?? 0,
+        // The model's count wins once it exists; until then keep whatever
+        // the detector found rather than dropping back to "unknown".
+        expected: job.expected ?? prev.expected,
+      }));
       setPartial(
         (job.cards ?? []).map((c) => {
           const o = c as { name?: string; num?: string | null; detected?: { name?: string } };
@@ -170,10 +194,16 @@ export default function ScanPage() {
     setPhase("scanning");
     setProgress({ read: 0, expected: null });
     setPartial([]);
+    setBoxes([]);
     setPreview(URL.createObjectURL(file));
     const startedAt = Date.now();
     try {
-      const { data, mediaType } = await fileToBase64(file);
+      const { data, mediaType, boxes: found } = await fileToBase64(file);
+      setBoxes(found);
+      // A denominator before the model has said anything. Replaced by its
+      // own count the moment that arrives — the model is the authority on
+      // how many cards there are, this is just a head start.
+      if (found.length > 0) setProgress({ read: 0, expected: found.length });
       const res = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -387,7 +417,38 @@ export default function ScanPage() {
               <img src={preview} alt="scan preview" className="max-h-56 rounded-lg" />
               <div className="absolute inset-0 bg-poke-dark/20" />
               <div className="scan-beam" />
+              {/* Outlines found locally, before the photo was sent. They fill
+                  in as the model names each card — box i belongs to card i,
+                  since both run in reading order. Percentages, so they track
+                  the image at whatever size it rendered. */}
+              {boxes.map((b, i) => (
+                <div
+                  key={i}
+                  className={`absolute rounded-[3px] border-2 transition-colors duration-300 ${
+                    i < progress.read
+                      ? "border-poke-red bg-poke-red/10"
+                      : "border-white/70"
+                  }`}
+                  style={{
+                    left: `${b.x * 100}%`,
+                    top: `${b.y * 100}%`,
+                    width: `${b.w * 100}%`,
+                    height: `${b.h * 100}%`,
+                  }}
+                >
+                  {partial[i] && (
+                    <span className="absolute inset-x-0 bottom-0 truncate bg-poke-red px-1 py-px text-[8px] font-medium leading-tight text-white">
+                      {partial[i].name}
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
+          )}
+          {boxes.length > 0 && progress.read === 0 && (
+            <p className="mb-2 -mt-3 font-mono text-[11px] uppercase tracking-wide text-slate-400">
+              {boxes.length} detected
+            </p>
           )}
           <div className="flex items-center justify-center gap-3">
             <FanMark size={22} className="animate-spin-slow shrink-0" />
