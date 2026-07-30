@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { boardEnabled, BOARD_OFF_ERROR } from "@/lib/tradeBoard";
 
 /** Lightweight card reference attached to a post, for showing pictures. */
 export interface PostCardRef {
@@ -53,7 +54,13 @@ function sanitizeCards(input: unknown, cap = 10): PostCardRef[] {
 /** GET: the trade board — all posts, newest first, with comments. */
 export async function GET() {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
+    // A profile whose board is off gets the lock screen, not a stripped-down
+    // board: returning the posts and hiding them client-side would leave the
+    // whole board sitting in the page source.
+    if (!boardEnabled(profile)) {
+      return NextResponse.json({ migrated: true, posts: [], myId: user.id, boardEnabled: false });
+    }
     const supabase = await createClient();
 
     const { data: posts, error } = await supabase
@@ -113,7 +120,7 @@ export async function GET() {
       comments: byPost.get(p.id) ?? [],
     }));
 
-    return NextResponse.json({ migrated: true, posts: result, myId: user.id });
+    return NextResponse.json({ migrated: true, posts: result, myId: user.id, boardEnabled: true });
   } catch (err) {
     return errorResponse(err);
   }
@@ -123,7 +130,10 @@ export async function GET() {
  *  Body: { lookingFor, offering, lookingForCards?, offeringCards? } */
 export async function POST(req: Request) {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
+    if (!boardEnabled(profile)) {
+      return NextResponse.json({ error: BOARD_OFF_ERROR }, { status: 403 });
+    }
     const body = (await req.json()) as {
       lookingFor?: string;
       offering?: string;
