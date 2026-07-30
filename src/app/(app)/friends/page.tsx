@@ -10,6 +10,7 @@ import {
   type DeckCardEntry,
 } from "@/lib/types";
 import { AI_NAME } from "@/lib/branding";
+import { artSrc } from "@/lib/art";
 import { avatarColor, initialsFor } from "@/lib/avatar";
 import { formatFriendCode, friendLink, normalizeFriendCode } from "@/lib/friendCode";
 import QrCode from "@/components/QrCode";
@@ -318,7 +319,7 @@ export default function FriendsPage() {
         label: itemLabel(it),
         qty: side[it.id],
         value: itemPrice(it),
-        image: it.card.image_small,
+        image: artSrc(it.card.id, it.card.image_small),
       }));
   }
 
@@ -1157,7 +1158,7 @@ function CardPicker({
                 {it.card.image_small && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={it.card.image_small}
+                    src={artSrc(it.card.id, it.card.image_small)!}
                     alt=""
                     className="h-full w-full object-cover"
                     loading="lazy"

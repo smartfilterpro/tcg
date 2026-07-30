@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Profile } from "@/lib/types";
 import { uploadCardPhoto } from "@/lib/photos";
+import { artSrc } from "@/lib/art";
 
 interface Invite {
   id: string;
@@ -1084,7 +1085,7 @@ export default function AdminPage() {
                     {card.image_small ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={card.image_small}
+                        src={artSrc(card.id, card.image_small)!}
                         alt={card.name}
                         className="h-full w-full object-cover"
                       />

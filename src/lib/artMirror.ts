@@ -48,7 +48,7 @@ function isThirdParty(url: string | null | undefined, ours: string): boolean {
   return !!url && /^https?:\/\//i.test(url) && !url.startsWith(ours);
 }
 
-interface MirrorRow {
+export interface MirrorRow {
   id: string;
   image_small: string | null;
   image_large: string | null;
@@ -88,8 +88,9 @@ function extOf(contentType: string): string {
 
 /** Copy one card's images. Updates only the sides that succeeded — a card
  *  whose large image failed keeps its third-party large URL and stays
- *  eligible for the next run. */
-async function mirrorCard(
+ *  eligible for the next run. Exported for the on-demand art route, which
+ *  mirrors a card the moment someone first views it. */
+export async function mirrorCard(
   admin: SupabaseClient,
   row: MirrorRow,
   ours: string
