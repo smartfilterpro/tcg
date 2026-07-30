@@ -118,14 +118,19 @@ const IMAGE_URL = /^https?:\/\/\S+\.(?:png|jpe?g|webp)(?:\?\S*)?$/i;
  *  Returns largest-looking first: keys mentioning large/high/hires usually
  *  are, and a card scan is worth having at the best resolution offered. */
 export function extractImageUrls(json: unknown): string[] {
-  const found: Array<{ url: string; score: number }> = [];
-  const seen = new Set<string>();
+  // Keyed by url, so the same image reached under two keys keeps the BETTER
+  // score rather than the first one seen.
+  //
+  // Their payload carries `imageCdnUrl` and `imageCdnUrl800` as the same
+  // string. Skipping the second as a duplicate meant the 800px image was
+  // scored under the unsized alias, missed the size bonus, and sorted below
+  // the 400px one — the live probe returned 400, 200, 800 in that order.
+  const found = new Map<string, number>();
 
   const walk = (node: unknown, key: string, depth: number) => {
     if (depth > 8 || node == null) return;
     if (typeof node === "string") {
-      if (!IMAGE_URL.test(node) || seen.has(node)) return;
-      seen.add(node);
+      if (!IMAGE_URL.test(node)) return;
       const k = key.toLowerCase();
       // Prefer explicit "large", then anything image-ish, and push
       // thumbnails and symbols/logos to the back — a set symbol is an image
@@ -141,7 +146,8 @@ export function extractImageUrls(json: unknown): string[] {
       const px = /(\d{2,4})\s*$/.exec(k);
       if (px) score += Math.min(2, Number(px[1]) / 400);
       if (/logo|symbol|icon|avatar|banner/.test(k)) score -= 5;
-      found.push({ url: node, score });
+      const prev = found.get(node);
+      if (prev == null || score > prev) found.set(node, score);
       return;
     }
     if (Array.isArray(node)) {
@@ -156,10 +162,10 @@ export function extractImageUrls(json: unknown): string[] {
   };
 
   walk(json, "", 0);
-  return found
-    .filter((f) => f.score > -3)
-    .sort((a, b) => b.score - a.score)
-    .map((f) => f.url);
+  return [...found.entries()]
+    .filter(([, score]) => score > -3)
+    .sort((a, b) => b[1] - a[1])
+    .map(([url]) => url);
 }
 
 /** Any USD-looking price in the response, best effort. Same reasoning as the
