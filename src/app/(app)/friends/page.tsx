@@ -10,7 +10,8 @@ import {
   type DeckCardEntry,
 } from "@/lib/types";
 import { AI_NAME } from "@/lib/branding";
-import { matchesSearch } from "@/lib/text";
+import { avatarColor, initialsFor } from "@/lib/avatar";
+import { matchesSearch, shortAgo } from "@/lib/text";
 
 interface PostCardRef {
   id: string;
@@ -105,8 +106,13 @@ export default function FriendsPage() {
   const [migrated, setMigrated] = useState(true);
   const [sharing, setSharing] = useState(false);
   const [myName, setMyName] = useState("");
+  const [myCardCount, setMyCardCount] = useState(0);
   const [nameDraft, setNameDraft] = useState("");
   const [nameSaved, setNameSaved] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  /** Pal user ids, lifted out of PalsSection so the sharers list can badge
+   *  them — the artboard marks a pal wherever their name appears. */
+  const [palIds, setPalIds] = useState<Set<string>>(new Set());
   const [friends, setFriends] = useState<Friend[]>([]);
   const [sharedDecks, setSharedDecks] = useState<SharedDeck[]>([]);
   const [viewingDeck, setViewingDeck] = useState<SharedDeck | null>(null);
@@ -141,6 +147,7 @@ export default function FriendsPage() {
       setMigrated(json.migrated);
       setSharing(json.sharing);
       setMyName(json.myName ?? "");
+      setMyCardCount(json.myCardCount ?? 0);
       setNameDraft(json.myName ?? "");
       setFriends(json.friends ?? []);
       setSharedDecks(json.sharedDecks ?? []);
@@ -348,328 +355,275 @@ export default function FriendsPage() {
 
   if (loading) return <p className="text-slate-500">Loading…</p>;
 
+  const pendingOffers = offers.filter((o) => o.status === "pending");
+
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Friends</h1>
-        <p className="text-sm text-slate-500">
-          Share collections, browse each other&apos;s decks, and work out trades with {AI_NAME}.
-        </p>
-      </div>
-
-      {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-
-      {!migrated && (
-        <div className="rounded-lg bg-yellow-50 p-3 text-sm text-yellow-800">
-          Sharing needs a one-time database update — ask the admin to run{" "}
-          <code>supabase/migrations/008_sharing.sql</code> in the Supabase SQL editor.
+    <div className="space-y-4">
+      {!friend && (
+        <div>
+          <h1 className="font-display text-[26px] font-bold tracking-[-.025em]">Friends</h1>
+          <p className="mt-[3px] max-w-[70ch] text-sm leading-[1.6] text-brand-ink3">
+            Members who share their collection show up here. Browse their binder, borrow a shared
+            deck for a battle, and work trades out card for card with {AI_NAME}.
+          </p>
         </div>
       )}
 
-      <div className="card-panel p-4">
-        <h2 className="font-semibold">Your username</h2>
-        <p className="mb-2 text-xs text-slate-500">
-          This is what other members see instead of your email — on shared collections,
-          decks, trades, and the trade board.
-        </p>
-        <form
-          className="flex gap-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setError(null);
-            setNameSaved(false);
-            const res = await fetch("/api/account", {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ displayName: nameDraft }),
-            });
-            const json = await res.json();
-            if (!res.ok) setError(json.error);
-            else {
-              setMyName(json.displayName);
-              setNameSaved(true);
-            }
-          }}
-        >
-          <input
-            className="input"
-            maxLength={30}
-            value={nameDraft}
-            onChange={(e) => {
-              setNameDraft(e.target.value);
-              setNameSaved(false);
-            }}
-            placeholder="e.g. AshK"
-          />
-          <button
-            className="btn-secondary shrink-0"
-            disabled={!nameDraft.trim() || nameDraft.trim() === myName}
-          >
-            {nameSaved ? "✓ Saved" : "Save"}
-          </button>
-        </form>
-      </div>
-
-      <div className="card-panel flex items-center justify-between gap-3 p-4">
-        <div>
-          <h2 className="font-semibold">Share my collection</h2>
-          <p className="text-xs text-slate-500">
-            Lets other members see your cards and propose trades. You can turn this off any
-            time.
-          </p>
+      {error && (
+        <div className="rounded-xl border border-brand-line bg-white p-3 text-sm text-brand-negative">
+          {error}
         </div>
-        <button
-          role="switch"
-          aria-checked={sharing}
-          onClick={toggleSharing}
-          className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
-            sharing ? "bg-green-500" : "bg-slate-300"
-          }`}
-        >
-          <span
-            className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${
-              sharing ? "left-[22px]" : "left-0.5"
-            }`}
-          />
-        </button>
-      </div>
+      )}
 
-      {!friend && <PalsSection />}
+      {!migrated && (
+        <div className="rounded-[14px] border border-[#F0DFA8] bg-[#FFF8E1] px-[17px] py-[15px] text-[13px] leading-[1.6] text-[#7A5A12]">
+          Sharing needs a one-time database update — ask the admin to run{" "}
+          <code className="font-mono">supabase/migrations/008_sharing.sql</code> in the Supabase SQL
+          editor.
+        </div>
+      )}
 
       {!friend && (
-        <>
-          {offers.length > 0 && (
-            <div className="card-panel p-4">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <h2 className="font-semibold">
-                  📨 Trade requests (
-                  {offers.filter((o) => o.status === "pending").length} pending)
-                </h2>
-                {offers.some((o) => o.status !== "pending") && (
-                  <button
-                    className="shrink-0 text-xs text-slate-400 hover:underline"
-                    onClick={clearResolvedOffers}
-                  >
-                    Clear resolved
-                  </button>
-                )}
-              </div>
-              <ul className="divide-y divide-slate-100">
-                {offers
-                  .filter((o, i) => o.status === "pending" || i < 8)
-                  .map((o) => (
-                    <li key={o.id} className="py-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="text-sm">
-                          <span className="font-semibold">
-                            {o.direction === "incoming" ? o.otherName : `To ${o.otherName}`}
-                          </span>{" "}
-                          <span className="text-xs text-slate-400">
-                            {new Date(o.created_at).toLocaleDateString()}
-                          </span>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <span
-                            className={`chip ${
-                              o.status === "pending"
-                                ? "bg-yellow-50 text-yellow-800"
-                                : o.status === "accepted"
-                                  ? "bg-green-100 text-green-700"
-                                  : "bg-slate-100 text-slate-500"
-                            }`}
-                          >
-                            {o.status}
-                          </span>
-                          {o.status !== "pending" && (
-                            <button
-                              aria-label="Clear this trade request"
-                              title="Clear this trade request (removes it for both sides)"
-                              className="flex h-6 w-6 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
-                              onClick={() => clearOffer(o)}
-                            >
-                              ✕
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      <div className="mt-1 grid gap-2 text-xs sm:grid-cols-2">
-                        <OfferSide
-                          label={o.direction === "incoming" ? "You get" : "You give"}
-                          lines={o.give}
-                        />
-                        <OfferSide
-                          label={o.direction === "incoming" ? "You give" : "You get"}
-                          lines={o.get}
-                        />
-                      </div>
-                      {o.message && (
-                        <p className="mt-1 text-xs italic text-slate-500">&ldquo;{o.message}&rdquo;</p>
-                      )}
-                      {o.status === "pending" && (
-                        <div className="mt-2 flex gap-2">
-                          {o.direction === "incoming" ? (
-                            <>
-                              <button
-                                className="btn-primary px-3 py-1 text-xs"
-                                onClick={() => respondToOffer(o, "accepted")}
-                              >
-                                ✓ Accept
-                              </button>
-                              <button
-                                className="btn px-3 py-1 text-xs text-red-600 hover:bg-red-50"
-                                onClick={() => respondToOffer(o, "declined")}
-                              >
-                                Decline
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              className="btn px-3 py-1 text-xs text-slate-500 hover:bg-slate-100"
-                              onClick={() => respondToOffer(o, "withdrawn")}
-                            >
-                              Withdraw
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {o.status === "accepted" && (
-                        <p className="mt-1 text-xs text-green-700">
-                          Deal! Arrange the hand-off in person — the app doesn&apos;t move cards.
-                        </p>
-                      )}
-                      {(o.status === "pending" || o.status === "accepted" || o.messages.length > 0) && (
-                        <div className="mt-2">
-                          <button
-                            className="text-xs font-medium text-poke-blue hover:underline"
-                            onClick={() => {
-                              setOfferChatOpen(offerChatOpen === o.id ? null : o.id);
-                              setOfferChatText("");
-                            }}
-                          >
-                            💬 {o.messages.length} message{o.messages.length === 1 ? "" : "s"}
-                            {offerChatOpen === o.id ? " ▲" : " ▼"}
-                          </button>
-                          {offerChatOpen === o.id && (
-                            <div className="mt-2 space-y-1.5 border-t border-slate-100 pt-2">
-                              {o.messages.map((m) => (
-                                <div
-                                  key={m.id}
-                                  className={`max-w-[85%] rounded-lg p-2 text-xs ${
-                                    m.mine
-                                      ? "ml-auto bg-poke-blue/10 text-slate-800"
-                                      : "bg-slate-50 text-slate-800"
-                                  }`}
-                                >
-                                  <span className="font-semibold">
-                                    {m.mine ? "You" : m.authorName}:
-                                  </span>{" "}
-                                  <span className="whitespace-pre-wrap">{m.body}</span>
-                                </div>
-                              ))}
-                              {(o.status === "pending" || o.status === "accepted") && (
-                                <form
-                                  className="flex gap-2 pt-1"
-                                  onSubmit={(e) => {
-                                    e.preventDefault();
-                                    sendOfferMessage(o);
-                                  }}
-                                >
-                                  <input
-                                    className="input min-w-0 flex-1 text-sm"
-                                    placeholder={
-                                      o.status === "accepted"
-                                        ? "e.g. Saturday at the card shop?"
-                                        : "e.g. Would you add a reverse holo?"
-                                    }
-                                    maxLength={1000}
-                                    value={offerChatText}
-                                    onChange={(e) => setOfferChatText(e.target.value)}
-                                  />
-                                  <button
-                                    className="btn-secondary shrink-0 text-sm"
-                                    disabled={offerChatBusy || !offerChatText.trim()}
-                                  >
-                                    Send
-                                  </button>
-                                </form>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-              </ul>
+        <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-brand-line bg-white px-5 py-[18px]">
+          <button
+            role="switch"
+            aria-checked={sharing}
+            aria-label="Share my collection"
+            onClick={toggleSharing}
+            className={`relative h-[22px] w-[38px] shrink-0 rounded-full transition-colors ${
+              sharing ? "bg-brand-accent" : "bg-brand-line-strong"
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 h-[18px] w-[18px] rounded-full bg-white shadow transition-all ${
+                sharing ? "left-[18px]" : "left-0.5"
+              }`}
+            />
+          </button>
+          <div className="min-w-[280px] flex-1">
+            <div className="text-[14.5px] font-medium">Share my collection</div>
+            <div className="mt-0.5 text-[13px] leading-[1.5] text-brand-ink3">
+              {sharing
+                ? "On — other members can see what you own and can propose trades. Turn it off and you disappear from their lists."
+                : "Off — nobody can see your cards or propose a trade. Turn it on to appear in other members' lists."}
             </div>
+          </div>
+          {renaming ? (
+            <form
+              className="flex shrink-0 gap-2"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setError(null);
+                setNameSaved(false);
+                const res = await fetch("/api/account", {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ displayName: nameDraft }),
+                });
+                const json = await res.json();
+                if (!res.ok) setError(json.error);
+                else {
+                  setMyName(json.displayName);
+                  setNameSaved(true);
+                  setRenaming(false);
+                }
+              }}
+            >
+              <input
+                autoFocus
+                className="w-[150px] rounded-lg border border-brand-line-strong px-2.5 py-1.5 text-[13px] outline-none focus:border-brand-accent"
+                maxLength={30}
+                value={nameDraft}
+                onChange={(e) => {
+                  setNameDraft(e.target.value);
+                  setNameSaved(false);
+                }}
+                placeholder="e.g. AshK"
+              />
+              <button
+                className="shrink-0 whitespace-nowrap rounded-full bg-brand-ink px-3.5 py-1.5 text-[12.5px] font-medium text-brand-canvas disabled:opacity-50"
+                disabled={!nameDraft.trim() || nameDraft.trim() === myName}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                className="shrink-0 text-[12.5px] text-brand-ink4 hover:underline"
+                onClick={() => {
+                  setNameDraft(myName);
+                  setRenaming(false);
+                }}
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <button
+              className="shrink-0 whitespace-nowrap rounded-md bg-brand-sunken px-2.5 py-[5px] font-mono text-[11px] text-brand-ink3 hover:bg-brand-line"
+              onClick={() => setRenaming(true)}
+              title="This is the name other members see — click to change it"
+            >
+              {nameSaved ? "✓ " : ""}You: {myName || "unnamed"} · {myCardCount.toLocaleString()}{" "}
+              cards
+            </button>
           )}
+        </div>
+      )}
 
-          <a href="/trades" className="card-panel block p-4 transition-colors hover:bg-brand-sunken">
-            <h2 className="mb-1 font-semibold">🤝 Trade board</h2>
-            <p className="text-sm text-slate-500">
-              Looking-for and offering posts have their own page now — open the board →
-            </p>
-          </a>
-
-          <div className="card-panel p-4">
-            <h2 className="mb-2 font-semibold">Trading partners ({friends.length})</h2>
-            {friends.length === 0 ? (
-              <p className="text-sm text-slate-400">
-                No one else is sharing their collection yet. Once a friend flips their toggle,
-                they&apos;ll show up here.
-              </p>
-            ) : (
-              <ul className="divide-y divide-slate-100">
-                {friends.map((f) => (
-                  <li key={f.id} className="flex items-center justify-between gap-2 py-2">
-                    <div>
-                      <div className="text-sm font-medium">{f.name}</div>
-                      <div className="text-xs text-slate-400">
-                        {f.cardCount} card{f.cardCount === 1 ? "" : "s"} shared
+      {!friend && (
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_356px]">
+          <div className="flex min-w-0 flex-col gap-3">
+            <div className="overflow-hidden rounded-[18px] border border-brand-line bg-white">
+              <div className="flex items-baseline justify-between gap-3 px-[22px] pb-3 pt-[18px]">
+                <div className="font-display text-[17px] font-bold">Sharing their collection</div>
+                <span className="shrink-0 text-[12.5px] text-brand-ink5">
+                  {friends.length} member{friends.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              {friends.length === 0 ? (
+                <p className="border-t border-brand-panel-alt px-[22px] py-4 text-sm text-brand-ink4">
+                  No one else is sharing their collection yet. Once a friend flips their toggle,
+                  they&apos;ll show up here.
+                </p>
+              ) : (
+                friends.map((f) => (
+                  <div
+                    key={f.id}
+                    className="flex flex-wrap items-center gap-[13px] border-t border-brand-panel-alt px-[22px] py-[13px]"
+                  >
+                    <span
+                      className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
+                      style={{ background: avatarColor(f.id) }}
+                    >
+                      {initialsFor(f.name)}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">{f.name}</div>
+                      <div className="font-mono text-[11.5px] text-brand-ink4">
+                        {f.cardCount.toLocaleString()} card{f.cardCount === 1 ? "" : "s"}
                       </div>
                     </div>
-                    <button className="btn-primary px-3 py-1.5 text-sm" onClick={() => openTrade(f)}>
+                    {palIds.has(f.id) && (
+                      <span className="shrink-0 rounded-[5px] bg-brand-accent-tint px-[7px] py-[3px] font-mono text-[10px] text-brand-accent">
+                        PAL
+                      </span>
+                    )}
+                    <button
+                      className="shrink-0 whitespace-nowrap rounded-full bg-brand-ink px-3.5 py-[7px] text-[12.5px] font-medium text-brand-canvas hover:bg-brand-ink2"
+                      onClick={() => openTrade(f)}
+                    >
                       Browse &amp; trade
                     </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+                  </div>
+                ))
+              )}
+            </div>
 
-          <div className="card-panel p-4">
-            <h2 className="mb-2 font-semibold">Friends&apos; decks ({sharedDecks.length})</h2>
-            <p className="mb-2 text-xs text-slate-500">
-              Decks members chose to share. Share yours from the Decks page (open a deck →
-              Share).
-            </p>
-            {sharedDecks.length === 0 ? (
-              <p className="text-sm text-slate-400">No shared decks yet.</p>
-            ) : (
-              <ul className="divide-y divide-slate-100">
-                {sharedDecks.map((d) => (
-                  <li key={d.id} className="flex items-center justify-between gap-2 py-2">
-                    <div>
-                      <div className="text-sm font-medium">{d.name}</div>
-                      <div className="text-xs text-slate-400">
-                        by {d.ownerName} ·{" "}
-                        {(d.cards ?? []).reduce((s, c) => s + c.quantity, 0)} cards
-                        {d.share_scope === "friends" && (
-                          <span className="ml-1 chip bg-poke-blue/10 text-poke-blue">🤝 pals</span>
+            <div className="rounded-[18px] border border-brand-line bg-white p-[22px]">
+              <div className="mb-1.5 flex items-baseline justify-between gap-3">
+                <div className="font-display text-[17px] font-bold">Decks shared with you</div>
+                <span className="shrink-0 text-[12.5px] text-brand-ink5">
+                  borrowable in battles
+                </span>
+              </div>
+              <p className="mb-[14px] text-[13.5px] leading-[1.55] text-brand-ink3">
+                Pick one of these when you start a battle and you play it as if it were yours —
+                handy when a kid wants a go with a proper deck. Share yours from the Decks page.
+              </p>
+              {sharedDecks.length === 0 ? (
+                <p className="text-sm text-brand-ink4">No shared decks yet.</p>
+              ) : (
+                <div className="grid gap-2.5 sm:grid-cols-2">
+                  {sharedDecks.map((d) => (
+                    <div
+                      key={d.id}
+                      className="flex items-center gap-3 rounded-[14px] border border-brand-line p-[14px]"
+                    >
+                      <div className="aspect-[63/88] w-[34px] shrink-0 overflow-hidden rounded bg-brand-sunken">
+                        {d.cards?.[0]?.card_id && (
+                          <span className="flex h-full w-full items-center justify-center text-[13px]">
+                            🎴
+                          </span>
                         )}
                       </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium">{d.name}</div>
+                        <div className="truncate text-xs text-brand-ink4">
+                          by {d.ownerName} ·{" "}
+                          {(d.cards ?? []).reduce((s, c) => s + c.quantity, 0)} cards
+                          {d.share_scope === "friends" && " · pals only"}
+                        </div>
+                      </div>
+                      <button
+                        className="shrink-0 whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-[13px] py-[7px] text-[12.5px] font-medium hover:bg-brand-sunken"
+                        onClick={() => setViewingDeck(d)}
+                      >
+                        View
+                      </button>
                     </div>
-                    <button
-                      className="btn-secondary px-3 py-1.5 text-sm"
-                      onClick={() => setViewingDeck(d)}
-                    >
-                      View
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </>
+
+          <aside className="flex flex-col gap-3">
+            <div className="rounded-[18px] border border-brand-line bg-white p-5">
+              <div className="mb-[14px] flex items-center justify-between gap-3">
+                <span className="font-mono text-[10.5px] uppercase tracking-[.1em] text-brand-ink5">
+                  Trade requests
+                </span>
+                <span className="shrink-0 rounded-[5px] bg-brand-sunken px-[7px] py-[3px] font-mono text-[10.5px] text-brand-ink3">
+                  {pendingOffers.length} pending
+                </span>
+              </div>
+
+              {offers.length === 0 ? (
+                <p className="text-[13px] leading-[1.55] text-brand-ink4">
+                  Nothing yet. Open someone&apos;s binder above, pick the cards each way, and send
+                  them a request.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2.5">
+                  {offers
+                    .filter((o, i) => o.status === "pending" || i < 8)
+                    .map((o) => (
+                      <OfferCard
+                        key={o.id}
+                        offer={o}
+                        chatOpen={offerChatOpen === o.id}
+                        chatText={offerChatText}
+                        chatBusy={offerChatBusy}
+                        onToggleChat={() => {
+                          setOfferChatOpen(offerChatOpen === o.id ? null : o.id);
+                          setOfferChatText("");
+                        }}
+                        onChatText={setOfferChatText}
+                        onSendChat={() => sendOfferMessage(o)}
+                        onRespond={(s) => respondToOffer(o, s)}
+                        onClear={() => clearOffer(o)}
+                      />
+                    ))}
+                </div>
+              )}
+
+              <p className="mt-3 text-xs leading-[1.5] text-brand-ink5">
+                Values are our price estimates, not an appraisal — you two agree the trade, we just
+                do the arithmetic.
+                {offers.some((o) => o.status !== "pending") && (
+                  <>
+                    {" "}
+                    <button className="underline hover:text-brand-ink3" onClick={clearResolvedOffers}>
+                      Clear resolved
+                    </button>
+                  </>
+                )}
+              </p>
+            </div>
+
+            <PalsSection onPals={setPalIds} />
+          </aside>
+        </div>
       )}
 
       {friend && (
@@ -885,29 +839,247 @@ export default function FriendsPage() {
 
 function OfferSide({ label, lines }: { label: string; lines: OfferLine[] }) {
   return (
-    <div className="rounded bg-slate-50 p-2">
-      <div className="font-bold uppercase tracking-wide text-slate-400">{label}</div>
+    <div>
+      <div className="mb-[5px] font-mono text-[9.5px] uppercase tracking-[.08em] text-brand-ink4">
+        {label}
+      </div>
       {lines.length === 0 ? (
-        <div className="text-slate-400">nothing</div>
+        <div className="text-[12.5px] text-brand-ink5">nothing</div>
       ) : (
-        <ul className="mt-1 space-y-1">
-          {lines.map((l, i) => (
-            <li key={i} className="flex items-center gap-1.5">
+        lines.map((l, i) => (
+          <div key={i} className="flex items-center gap-[9px] py-[3px]">
+            <div className="aspect-[63/88] w-6 shrink-0 overflow-hidden rounded-[3px] bg-brand-line">
               {l.image && (
-                <div className="relative h-10 w-7 shrink-0 overflow-hidden rounded bg-slate-200">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={l.image} alt="" className="h-full w-full object-cover" loading="lazy" />
-                </div>
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={l.image} alt="" className="h-full w-full object-cover" loading="lazy" />
               )}
-              <span className="min-w-0">
-                {l.qty}x {l.label}
-                {l.value != null ? (
-                  <span className="text-slate-400"> ~${l.value.toFixed(2)}</span>
-                ) : null}
+            </div>
+            <span className="min-w-0 flex-1 truncate text-[12.5px]" title={l.label}>
+              {l.qty > 1 ? `${l.qty}× ` : ""}
+              {l.label}
+            </span>
+            {l.value != null && (
+              <span className="shrink-0 font-mono text-[11.5px] text-brand-positive">
+                ${(l.value * l.qty).toFixed(2)}
               </span>
-            </li>
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+/** Sum a side's priced lines. Unpriced cards contribute nothing rather than
+ *  guessing, which is why the fairness note says "on the cards we can price". */
+function linesTotal(lines: OfferLine[]): { total: number; unpriced: number } {
+  let total = 0;
+  let unpriced = 0;
+  for (const l of lines) {
+    if (l.value == null) unpriced += l.qty;
+    else total += l.value * l.qty;
+  }
+  return { total, unpriced };
+}
+
+/** One trade request in the rail, per artboard 13. An incoming request that
+ *  still needs an answer wears the accent border; everything else is quiet. */
+function OfferCard({
+  offer: o,
+  chatOpen,
+  chatText,
+  chatBusy,
+  onToggleChat,
+  onChatText,
+  onSendChat,
+  onRespond,
+  onClear,
+}: {
+  offer: TradeOffer;
+  chatOpen: boolean;
+  chatText: string;
+  chatBusy: boolean;
+  onToggleChat: () => void;
+  onChatText: (v: string) => void;
+  onSendChat: () => void;
+  onRespond: (s: "accepted" | "declined" | "withdrawn") => void;
+  onClear: () => void;
+}) {
+  const incoming = o.direction === "incoming";
+  const live = o.status === "pending";
+  // "give"/"get" are stored from the SENDER's point of view, so an incoming
+  // request's give side is what lands in your binder.
+  const youGet = incoming ? o.give : o.get;
+  const youGive = incoming ? o.get : o.give;
+  const getSum = linesTotal(youGet);
+  const giveSum = linesTotal(youGive);
+  const diff = getSum.total - giveSum.total;
+  const unpriced = getSum.unpriced + giveSum.unpriced;
+
+  return (
+    <div
+      className={`rounded-[14px] p-[15px] ${
+        incoming && live
+          ? "border-[1.5px] border-brand-accent bg-brand-accent-tint"
+          : "border border-brand-line"
+      }`}
+    >
+      <div className="mb-[11px] flex items-center gap-[9px]">
+        <span
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white"
+          style={{ background: avatarColor(o.otherName) }}
+        >
+          {initialsFor(o.otherName)}
+        </span>
+        <span className="min-w-0 truncate text-[13.5px] font-medium">{o.otherName}</span>
+        <span
+          className={`shrink-0 rounded-[5px] px-1.5 py-0.5 font-mono text-[10px] ${
+            incoming ? "bg-brand-accent text-white" : "bg-brand-sunken text-brand-ink3"
+          }`}
+        >
+          {incoming ? "INCOMING" : "OUTGOING"}
+        </span>
+        <span
+          className="ml-auto shrink-0 font-mono text-[10.5px] text-brand-ink4"
+          title={new Date(o.created_at).toLocaleString()}
+        >
+          {shortAgo(o.created_at)}
+        </span>
+        {!live && (
+          <button
+            aria-label="Clear this trade request"
+            title="Clear this trade request (removes it for both sides)"
+            className="shrink-0 text-brand-ink5 hover:text-brand-ink"
+            onClick={onClear}
+          >
+            ✕
+          </button>
+        )}
+      </div>
+
+      {!live && (
+        <div className="mb-2.5 font-mono text-[10px] uppercase tracking-[.07em] text-brand-ink4">
+          {o.status}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2.5">
+        <OfferSide label="You get" lines={youGet} />
+        <OfferSide label="You give" lines={youGive} />
+      </div>
+
+      {o.message && (
+        <div
+          className={`mt-[11px] border-t pt-[11px] text-[12.5px] leading-[1.5] text-brand-ink2 ${
+            incoming && live ? "border-[#D8E0FF]" : "border-brand-line-soft"
+          }`}
+        >
+          &ldquo;{o.message}&rdquo;
+        </div>
+      )}
+
+      <div className="mt-[11px] flex flex-wrap items-center justify-between gap-2">
+        <span
+          className={`shrink-0 font-mono text-[11px] ${
+            Math.abs(diff) <= 3 ? "text-brand-positive" : "text-brand-negative"
+          }`}
+          title={
+            unpriced > 0
+              ? `${unpriced} card${unpriced === 1 ? "" : "s"} have no price on file and aren't counted`
+              : undefined
+          }
+        >
+          {Math.abs(diff) <= 3
+            ? "Within $3 either way"
+            : `$${Math.abs(diff).toFixed(2)} ${diff > 0 ? "your way in" : "your way out"}`}
+          {unpriced > 0 ? " *" : ""}
+        </span>
+        <div className="flex shrink-0 gap-1.5">
+          {(live || o.messages.length > 0 || o.status === "accepted") && (
+            <button
+              className="whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-[13px] py-[7px] text-[12.5px] font-medium hover:bg-brand-sunken"
+              onClick={onToggleChat}
+            >
+              Chat{o.messages.length > 0 ? ` ${o.messages.length}` : ""}
+            </button>
+          )}
+          {live &&
+            (incoming ? (
+              <>
+                <button
+                  className="whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-[13px] py-[7px] text-[12.5px] font-medium text-brand-negative hover:bg-brand-sunken"
+                  onClick={() => onRespond("declined")}
+                >
+                  Decline
+                </button>
+                <button
+                  className="whitespace-nowrap rounded-full bg-brand-ink px-[13px] py-[7px] text-[12.5px] font-medium text-brand-canvas hover:bg-brand-ink2"
+                  onClick={() => onRespond("accepted")}
+                >
+                  Accept
+                </button>
+              </>
+            ) : (
+              <button
+                className="whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-[13px] py-[7px] text-[12.5px] font-medium hover:bg-brand-sunken"
+                onClick={() => onRespond("withdrawn")}
+              >
+                Withdraw
+              </button>
+            ))}
+        </div>
+      </div>
+
+      {o.status === "accepted" && (
+        <p className="mt-2 text-[12px] text-brand-positive">
+          Deal! Arrange the hand-off in person — the app doesn&apos;t move cards.
+        </p>
+      )}
+
+      {chatOpen && (
+        <div className="mt-[11px] flex flex-col gap-1.5 border-t border-brand-line-soft pt-[11px]">
+          {o.messages.length === 0 && (
+            <p className="text-[12px] text-brand-ink5">No messages yet.</p>
+          )}
+          {o.messages.map((m) => (
+            <div
+              key={m.id}
+              className={`max-w-[85%] rounded-[10px] p-2 text-[12px] ${
+                m.mine ? "ml-auto bg-brand-accent/10" : "bg-brand-panel-alt"
+              }`}
+            >
+              <span className="font-medium">{m.mine ? "You" : m.authorName}:</span>{" "}
+              <span className="whitespace-pre-wrap">{m.body}</span>
+            </div>
           ))}
-        </ul>
+          {(o.status === "pending" || o.status === "accepted") && (
+            <form
+              className="flex gap-1.5 pt-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                onSendChat();
+              }}
+            >
+              <input
+                className="min-w-0 flex-1 rounded-full border border-brand-line-strong bg-white px-3 py-1.5 text-[12.5px] outline-none focus:border-brand-accent"
+                placeholder={
+                  o.status === "accepted"
+                    ? "e.g. Saturday at the card shop?"
+                    : "e.g. Would you add a reverse holo?"
+                }
+                maxLength={1000}
+                value={chatText}
+                onChange={(e) => onChatText(e.target.value)}
+              />
+              <button
+                className="shrink-0 whitespace-nowrap rounded-full bg-brand-ink px-3 py-1.5 text-[12.5px] font-medium text-brand-canvas disabled:opacity-50"
+                disabled={chatBusy || !chatText.trim()}
+              >
+                Send
+              </button>
+            </form>
+          )}
+        </div>
       )}
     </div>
   );
@@ -1098,7 +1270,7 @@ function SharedDeckList({ cards }: { cards: DeckCardEntry[] }) {
 
 /** 🤝 Pokémon Pals — mutual friendships a tier above group sharing.
  *  Being pals unlocks direct messages and pals-only deck sharing. */
-function PalsSection() {
+function PalsSection({ onPals }: { onPals?: (ids: Set<string>) => void }) {
   interface PalMsg {
     id: string;
     mine: boolean;
@@ -1139,6 +1311,7 @@ function PalsSection() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load pals");
       setData(json);
+      onPals?.(new Set((json.pals ?? []).map((p: Pal) => p.userId)));
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to load pals");
     }
@@ -1174,146 +1347,164 @@ function PalsSection() {
 
   if (!data.migrated) {
     return (
-      <div className="card-panel p-4">
-        <h2 className="font-semibold">🤝 Pokémon Pals</h2>
-        <p className="mt-1 rounded-lg bg-yellow-50 p-3 text-sm text-yellow-800">
+      <div className="rounded-[18px] bg-brand-sunken p-5">
+        <div className="mb-2 font-mono text-[10.5px] uppercase tracking-[.1em] text-brand-ink4">
+          Pals
+        </div>
+        <p className="text-[13px] leading-[1.55] text-brand-ink2">
           Pals need a one-time database update — ask the admin to run{" "}
-          <code>supabase/migrations/020_pals.sql</code>.
+          <code className="font-mono">supabase/migrations/020_pals.sql</code>.
         </p>
       </div>
     );
   }
 
+  const palPill =
+    "whitespace-nowrap rounded-full bg-brand-ink px-[13px] py-[7px] text-[12.5px] font-medium text-brand-canvas hover:bg-brand-ink2 disabled:opacity-50";
+  const palPillQuiet =
+    "whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-[13px] py-[7px] text-[12.5px] font-medium hover:bg-brand-sunken disabled:opacity-50";
+
   return (
-    <div className="card-panel space-y-3 p-4">
-      <div>
-        <h2 className="font-semibold">
-          🤝 Pokémon Pals ({data.pals.length})
-          {data.incoming.length > 0 && (
-            <span className="ml-2 chip bg-red-50 text-red-700">
-              {data.incoming.length} request{data.incoming.length === 1 ? "" : "s"}
-            </span>
-          )}
-        </h2>
-        <p className="text-xs text-slate-500">
-          Pals are mutual — they unlock direct messages and &ldquo;pals only&rdquo; deck
-          sharing (set per deck on the Decks page).
-        </p>
+    <div className="rounded-[18px] bg-brand-sunken p-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <span className="font-mono text-[10.5px] uppercase tracking-[.1em] text-brand-ink4">
+          {data.incoming.length > 0 ? "Pal requests" : "Pals"}
+        </span>
+        {data.incoming.length > 0 && (
+          <span className="shrink-0 rounded-[5px] bg-brand-accent px-[7px] py-[3px] font-mono text-[10.5px] text-white">
+            {data.incoming.length} new
+          </span>
+        )}
       </div>
 
-      {err && <div className="rounded-lg bg-red-50 p-2 text-sm text-red-700">{err}</div>}
+      {err && <div className="mb-2.5 text-[12.5px] text-brand-negative">{err}</div>}
 
       {data.incoming.map((r) => (
-        <div key={r.id} className="flex items-center justify-between gap-2 rounded-lg bg-poke-blue/5 p-2.5">
-          <span className="text-sm">
-            <b>{r.name}</b> wants to be pals
+        <div key={r.id} className="mb-3 flex items-center gap-[11px]">
+          <span
+            className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+            style={{ background: avatarColor(r.userId) }}
+          >
+            {initialsFor(r.name)}
           </span>
-          <span className="flex shrink-0 gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13.5px] font-medium">{r.name}</div>
+            <div className="text-xs text-brand-ink3">wants to be pals</div>
+          </div>
+          <div className="flex shrink-0 gap-1.5">
             <button
-              className="btn-primary text-xs"
+              className={palPillQuiet}
               disabled={busy}
-              onClick={() => call("/api/friends/requests", jsonInit("PATCH", { id: r.id, action: "accept" }))}
-            >
-              Accept
-            </button>
-            <button
-              className="btn-secondary text-xs"
-              disabled={busy}
-              onClick={() => call("/api/friends/requests", jsonInit("PATCH", { id: r.id, action: "decline" }))}
+              onClick={() =>
+                call("/api/friends/requests", jsonInit("PATCH", { id: r.id, action: "decline" }))
+              }
             >
               Decline
             </button>
-          </span>
+            <button
+              className={palPill}
+              disabled={busy}
+              onClick={() =>
+                call("/api/friends/requests", jsonInit("PATCH", { id: r.id, action: "accept" }))
+              }
+            >
+              Accept
+            </button>
+          </div>
         </div>
       ))}
 
       {data.pals.length === 0 && data.incoming.length === 0 && (
-        <p className="text-sm text-slate-400">No pals yet — send a request below.</p>
+        <p className="text-[13px] leading-[1.55] text-brand-ink3">
+          No pals yet — send a request below.
+        </p>
       )}
 
-      <ul className="divide-y divide-slate-100">
-        {data.pals.map((p) => (
-          <li key={p.id} className="py-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium">{p.name}</span>
-              <span className="flex shrink-0 items-center gap-2">
-                <button
-                  className="btn-secondary text-xs"
-                  onClick={() => {
-                    setOpenThread(openThread === p.id ? null : p.id);
-                    setDraft("");
-                  }}
-                >
-                  💬 {p.messages.length > 0 ? p.messages.length : "Message"}
-                </button>
-                <button
-                  aria-label={`Remove ${p.name} as a pal`}
-                  className="text-slate-400 hover:text-red-600"
-                  disabled={busy}
-                  onClick={() => {
-                    if (confirm(`Remove ${p.name} as a pal?`)) {
-                      call("/api/friends/requests", jsonInit("DELETE", { id: p.id }));
-                    }
-                  }}
-                >
-                  ✕
-                </button>
-              </span>
-            </div>
-            {openThread === p.id && (
-              <div className="mt-2 space-y-2 rounded-lg bg-slate-50 p-2">
-                {p.messages.length === 0 ? (
-                  <p className="text-xs text-slate-400">No messages yet — say hi!</p>
-                ) : (
-                  p.messages.map((m) => (
-                    <div
-                      key={m.id}
-                      className={`max-w-[85%] rounded-lg p-2 text-sm ${
-                        m.mine ? "ml-auto bg-poke-blue/10" : "bg-white"
-                      }`}
-                    >
-                      <div className="text-[10px] text-slate-400">
-                        {m.authorName} · {new Date(m.created_at).toLocaleString()}
-                      </div>
-                      <p className="whitespace-pre-wrap">{m.body}</p>
+      {data.pals.map((p) => (
+        <div key={p.id} className="border-t border-brand-line py-2.5 first:border-t-0">
+          <div className="flex items-center gap-[11px]">
+            <span
+              className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+              style={{ background: avatarColor(p.userId) }}
+            >
+              {initialsFor(p.name)}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{p.name}</span>
+            <button
+              className={palPillQuiet}
+              onClick={() => {
+                setOpenThread(openThread === p.id ? null : p.id);
+                setDraft("");
+              }}
+            >
+              Chat{p.messages.length > 0 ? ` ${p.messages.length}` : ""}
+            </button>
+            <button
+              aria-label={`Remove ${p.name} as a pal`}
+              className="shrink-0 text-brand-ink5 hover:text-brand-negative"
+              disabled={busy}
+              onClick={() => {
+                if (confirm(`Remove ${p.name} as a pal?`)) {
+                  call("/api/friends/requests", jsonInit("DELETE", { id: p.id }));
+                }
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          {openThread === p.id && (
+            <div className="mt-2 flex flex-col gap-1.5 rounded-xl bg-white p-2.5">
+              {p.messages.length === 0 ? (
+                <p className="text-xs text-brand-ink5">No messages yet — say hi!</p>
+              ) : (
+                p.messages.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`max-w-[85%] rounded-[10px] p-2 text-[12.5px] ${
+                      m.mine ? "ml-auto bg-brand-accent/10" : "bg-brand-panel-alt"
+                    }`}
+                  >
+                    <div className="font-mono text-[10px] text-brand-ink5">
+                      {m.authorName} · {shortAgo(m.created_at)}
                     </div>
-                  ))
-                )}
-                <form
-                  className="flex gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (!draft.trim()) return;
-                    call(`/api/friends/pals/${p.id}/messages`, jsonInit("POST", { body: draft }));
-                    setDraft("");
-                  }}
-                >
-                  <input
-                    className="input text-sm"
-                    placeholder={`Message ${p.name}…`}
-                    maxLength={4000}
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                  />
-                  <button className="btn-primary shrink-0 text-sm" disabled={busy || !draft.trim()}>
-                    Send
-                  </button>
-                </form>
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
+                    <p className="whitespace-pre-wrap">{m.body}</p>
+                  </div>
+                ))
+              )}
+              <form
+                className="flex gap-1.5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!draft.trim()) return;
+                  call(`/api/friends/pals/${p.id}/messages`, jsonInit("POST", { body: draft }));
+                  setDraft("");
+                }}
+              >
+                <input
+                  className="min-w-0 flex-1 rounded-full border border-brand-line-strong px-3 py-1.5 text-[12.5px] outline-none focus:border-brand-accent"
+                  placeholder={`Message ${p.name}…`}
+                  maxLength={4000}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                />
+                <button className={palPill} disabled={busy || !draft.trim()}>
+                  Send
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
+      ))}
 
       {data.outgoing.length > 0 && (
-        <div className="text-xs text-slate-500">
+        <div className="mt-2.5 text-xs leading-[1.55] text-brand-ink3">
           Waiting on:{" "}
           {data.outgoing.map((r, i) => (
             <span key={r.id}>
               {i > 0 && " · "}
               {r.name}{" "}
               <button
-                className="text-slate-400 hover:underline"
+                className="text-brand-ink5 hover:underline"
                 disabled={busy}
                 onClick={() => call("/api/friends/requests", jsonInit("DELETE", { id: r.id }))}
               >
@@ -1326,7 +1517,7 @@ function PalsSection() {
 
       {data.candidates.length > 0 && (
         <form
-          className="flex gap-2"
+          className="mt-3 flex gap-1.5"
           onSubmit={(e) => {
             e.preventDefault();
             if (!addPick) return;
@@ -1335,7 +1526,7 @@ function PalsSection() {
           }}
         >
           <select
-            className="input text-sm"
+            className="min-w-0 flex-1 rounded-full border border-brand-line-strong bg-white px-3 py-1.5 text-[12.5px] outline-none focus:border-brand-accent"
             value={addPick}
             onChange={(e) => setAddPick(e.target.value)}
           >
@@ -1346,11 +1537,15 @@ function PalsSection() {
               </option>
             ))}
           </select>
-          <button className="btn-secondary shrink-0 text-sm" disabled={busy || !addPick}>
+          <button className={palPillQuiet} disabled={busy || !addPick}>
             Send
           </button>
         </form>
       )}
+
+      <p className="mt-3 text-xs leading-[1.55] text-brand-ink3">
+        Pals can see decks you&apos;ve shared &ldquo;pals only&rdquo; and unlock direct messages.
+      </p>
     </div>
   );
 }
