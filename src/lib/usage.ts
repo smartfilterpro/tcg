@@ -25,6 +25,7 @@ export async function logAiUsage(
     | "scan"
     | "deck_build"
     | "coach"
+    | "chat"
     | "find_image"
     | "trade_chat"
     | "deck_review"
