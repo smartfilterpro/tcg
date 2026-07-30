@@ -11,6 +11,7 @@ import type {
 } from "@/lib/battle";
 import { FanMark } from "@/components/Logo";
 import { APP_NAME } from "@/lib/branding";
+import { avatarColor, initialsFor } from "@/lib/avatar";
 
 const STATUS_LIST: Array<{ key: StatusCondition; emoji: string; label: string }> = [
   { key: "poisoned", emoji: "☠️", label: "Poison" },
@@ -47,17 +48,26 @@ type Sheet =
   | { kind: "prizes" }
   | { kind: "concede" };
 
+/** The small-caps label above a zone, per artboard 15. */
+function ZoneLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="font-mono text-[9.5px] uppercase tracking-[.08em] text-brand-ink5">
+      {children}
+    </span>
+  );
+}
+
 function CardTile({ card, className }: { card: BattleCard; className: string }) {
   return card.image ? (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={card.image}
       alt={card.name}
-      className={`${className} rounded-md object-cover shadow-sm`}
+      className={`${className} rounded-[6px] object-cover shadow-sm`}
     />
   ) : (
     <div
-      className={`${className} flex items-center justify-center overflow-hidden rounded-md border border-slate-300 bg-slate-100 p-0.5 text-center text-[9px] font-semibold leading-tight text-slate-600 shadow-sm`}
+      className={`${className} flex items-end justify-center overflow-hidden rounded-[6px] border border-brand-line-strong bg-brand-panel-alt p-1 pb-1 text-center text-[8.5px] font-medium leading-[1.25] text-brand-ink2 shadow-sm`}
     >
       {card.name}
     </div>
@@ -77,17 +87,17 @@ function StackTile({
     <button type="button" className="relative shrink-0" onClick={onClick}>
       <CardTile card={stack.face} className={className} />
       {stack.damage > 0 && (
-        <span className="absolute -right-1.5 -top-1.5 flex h-6 min-w-6 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white shadow">
+        <span className="absolute -right-1.5 -top-1.5 flex h-6 min-w-6 items-center justify-center rounded-full bg-brand-negative px-[5px] text-[10.5px] font-bold text-white shadow">
           {stack.damage}
         </span>
       )}
       {stack.attached.length > 0 && (
-        <span className="absolute -bottom-1 -right-1 rounded-full bg-slate-700 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow">
+        <span className="absolute -bottom-[5px] -right-[5px] rounded-full bg-brand-ink2 px-[7px] py-0.5 font-mono text-[9px] font-medium text-white shadow">
           +{stack.attached.length}
         </span>
       )}
       {(stack.status?.length ?? 0) > 0 && (
-        <span className="absolute -left-1 top-0 text-[11px] drop-shadow">
+        <span className="absolute -left-[5px] -top-1 text-xs drop-shadow">
           {(stack.status ?? []).map((s) => STATUS_EMOJI[s] ?? "").join("")}
         </span>
       )}
@@ -109,19 +119,50 @@ function FaceDownPile({
       type="button"
       onClick={onClick}
       disabled={!onClick}
-      className="flex flex-col items-center gap-0.5"
+      className="flex flex-col items-center gap-[3px]"
     >
       {/* A face-down card back. The mark sits behind the count rather than
           beside it, so the pile keeps the same footprint and the number stays
           the thing you read. */}
-      <span className="relative flex aspect-[63/88] w-11 items-center justify-center overflow-hidden rounded-md border border-brand-ink/50 bg-brand-ink text-sm font-bold text-white shadow-sm">
+      <span className="relative flex aspect-[63/88] w-11 items-center justify-center overflow-hidden rounded-[6px] border border-brand-ink/50 bg-brand-ink font-display text-sm font-bold text-white shadow-sm">
         <FanMark size={28} reversed className="absolute opacity-30" />
         <span className="relative">{count}</span>
       </span>
-      <span className="text-[10px] text-slate-500">{label}</span>
+      <span className="text-[10px] text-brand-ink4">{label}</span>
     </button>
   );
 }
+
+/** Turn/state chip. The artboard's three tints: waiting, ready, neutral. */
+function StateChip({
+  tone,
+  children,
+}: {
+  tone: "warm" | "good" | "quiet";
+  children: React.ReactNode;
+}) {
+  const tint =
+    tone === "warm"
+      ? "bg-[#FFF8E1] text-[#7A5A12]"
+      : tone === "good"
+        ? "bg-[#E8F7EC] text-brand-positive"
+        : "bg-brand-sunken text-brand-ink3";
+  return (
+    <span
+      className={`whitespace-nowrap rounded-full px-[11px] py-[5px] font-mono text-[11px] ${tint}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+/** Panel chrome for the two player halves, the stadium and the log. */
+const SIDE_PANEL = "rounded-2xl border border-brand-line bg-white p-4";
+const STRIP_PANEL = "rounded-[14px] border border-brand-line bg-white";
+
+/** The hand-wide actions under your hand. */
+const HAND_CHIP =
+  "whitespace-nowrap rounded-full bg-brand-sunken px-3 py-1.5 font-mono text-[11px] text-brand-ink3 hover:bg-brand-line disabled:opacity-50";
 
 // One damage counter is 10 damage, so these are 1, 2, 3, 5 and 10 counters.
 // Cards count counters, not totals ("30 more damage for each damage counter"),
@@ -285,29 +326,36 @@ export default function BattleBoardPage() {
   const finished = data.status === "finished";
 
   return (
-    <div className="mx-auto max-w-2xl space-y-3 pb-4">
+    <div className="mx-auto max-w-[900px] space-y-3 pb-4">
       <div className="flex items-center justify-between gap-2">
-        <a href="/battles" className="text-sm text-poke-blue hover:underline">
+        <a href="/battles" className="text-sm text-brand-accent hover:underline">
           ← Battles
         </a>
-        <span className="text-xs text-slate-400">code {data.code}</span>
+        <span className="font-mono text-[11.5px] text-brand-ink4">code {data.code}</span>
       </div>
 
       {finished && (
         <div
-          className={`rounded-xl p-4 text-center font-bold ${
-            data.youWon ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-600"
+          className={`rounded-2xl p-4 text-center font-display font-bold ${
+            data.youWon ? "bg-[#E8F7EC] text-brand-positive" : "bg-brand-sunken text-brand-ink3"
           }`}
         >
           🏆 {data.youWon ? "You won!" : `${data.winnerName ?? oppName} wins!`}
-          <div className="mt-2 flex flex-wrap justify-center gap-2 text-sm font-normal">
-            <button className="btn-primary" disabled={busy} onClick={rematch}>
+          <div className="mt-2.5 flex flex-wrap justify-center gap-2 font-body text-[13.5px] font-normal">
+            <button
+              className="whitespace-nowrap rounded-full bg-brand-ink px-[18px] py-2.5 font-medium text-brand-canvas hover:bg-brand-ink2 disabled:opacity-50"
+              disabled={busy}
+              onClick={rematch}
+            >
               {busy ? "Shuffling…" : "🔁 Rematch"}
             </button>
-            <a href="/battles" className="btn-secondary">
+            <a
+              href="/battles"
+              className="whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-[18px] py-2.5 font-medium hover:bg-brand-sunken"
+            >
               Back to battles
             </a>
-            <button className="text-slate-500 hover:underline" onClick={removeBattle}>
+            <button className="text-[12.5px] text-brand-ink4 hover:underline" onClick={removeBattle}>
               Remove battle
             </button>
           </div>
@@ -315,30 +363,37 @@ export default function BattleBoardPage() {
       )}
 
       {/* ===== Opponent side ===== */}
-      <div className="card-panel space-y-2 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-sm font-semibold">{oppName}</div>
-          {!finished &&
-            !view.myTurn && <span className="chip bg-yellow-50 text-yellow-800">their turn</span>}
+      <div className={SIDE_PANEL}>
+        <div className="mb-[14px] flex items-center justify-between gap-3">
+          <div className="flex items-center gap-[11px]">
+            <span
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+              style={{ background: avatarColor(oppName) }}
+            >
+              {initialsFor(oppName)}
+            </span>
+            <span className="text-[14.5px] font-medium">{oppName}</span>
+          </div>
+          {!finished && !view.myTurn && <StateChip tone="warm">their turn</StateChip>}
         </div>
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex gap-2">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex gap-[9px]">
             <FaceDownPile count={opp.handCount} label="hand" />
             <FaceDownPile count={opp.deckCount} label="deck" />
             <FaceDownPile count={opp.prizeCount} label="prizes" />
             <button
               type="button"
-              className="flex flex-col items-center gap-0.5"
+              className="flex flex-col items-center gap-[3px]"
               onClick={() => setViewPile({ title: `${oppName}'s discard`, cards: opp.discard })}
             >
-              <span className="flex aspect-[63/88] w-11 items-center justify-center rounded-md border border-dashed border-slate-300 text-sm font-bold text-slate-500">
+              <span className="flex aspect-[63/88] w-11 items-center justify-center rounded-[6px] border border-dashed border-brand-line-strong font-display text-sm font-bold text-brand-ink4">
                 {opp.discard.length}
               </span>
-              <span className="text-[10px] text-slate-500">discard</span>
+              <span className="text-[10px] text-brand-ink4">discard</span>
             </button>
           </div>
           <div className="flex flex-col items-end gap-1">
-            <span className="text-[10px] uppercase tracking-wide text-slate-400">active</span>
+            <ZoneLabel>active</ZoneLabel>
             {opp.active ? (
               <StackTile
                 stack={opp.active}
@@ -346,30 +401,31 @@ export default function BattleBoardPage() {
                 onClick={() => setSheet({ kind: "oppstack", target: "active" })}
               />
             ) : (
-              <span className="flex aspect-[63/88] w-20 items-center justify-center rounded-md border border-dashed border-slate-300 text-[10px] text-slate-400">
+              <span className="flex aspect-[63/88] w-20 items-center justify-center rounded-[7px] border border-dashed border-brand-line-strong text-[10px] text-brand-ink5">
                 none
               </span>
             )}
           </div>
         </div>
         {opp.bench.length > 0 && (
-          <div className="flex gap-1.5 overflow-x-auto">
-            {opp.bench.map((s, i) => (
-              <StackTile
-                key={s.face.uid}
-                stack={s}
-                className="w-12"
-                onClick={() => setSheet({ kind: "oppstack", target: i })}
-              />
-            ))}
+          <div className="mt-[14px]">
+            <ZoneLabel>bench</ZoneLabel>
+            <div className="mt-[5px] flex gap-[7px] overflow-x-auto">
+              {opp.bench.map((s, i) => (
+                <StackTile
+                  key={s.face.uid}
+                  stack={s}
+                  className="w-12"
+                  onClick={() => setSheet({ kind: "oppstack", target: i })}
+                />
+              ))}
+            </div>
           </div>
         )}
         {opp.played.length > 0 && (
-          <div>
-            <span className="text-[10px] uppercase tracking-wide text-slate-400">
-              played this turn (tap to read)
-            </span>
-            <div className="mt-0.5 flex gap-1.5 overflow-x-auto">
+          <div className="mt-[14px]">
+            <ZoneLabel>played this turn (tap to read)</ZoneLabel>
+            <div className="mt-[5px] flex gap-[7px] overflow-x-auto">
               {opp.played.map((c) => (
                 <button key={c.uid} type="button" className="shrink-0" onClick={() => setZoomCard(c)}>
                   <CardTile card={c} className="w-12" />
@@ -382,19 +438,19 @@ export default function BattleBoardPage() {
 
       {/* ===== Stadium (shared zone) ===== */}
       {view.stadium && (
-        <div className="card-panel flex items-center gap-2 p-2">
+        <div className={`${STRIP_PANEL} flex items-center gap-3 px-[14px] py-[11px]`}>
           <button type="button" onClick={() => setZoomCard(view.stadium!.card)}>
-            <CardTile card={view.stadium.card} className="w-10" />
+            <CardTile card={view.stadium.card} className="w-[34px]" />
           </button>
-          <div className="min-w-0 flex-1 text-xs">
-            <span className="font-semibold">🏟 Stadium: {view.stadium.card.name}</span>{" "}
-            <span className="text-slate-400">
+          <div className="min-w-0 flex-1 text-[13px]">
+            <b className="font-medium">🏟 Stadium: {view.stadium.card.name}</b>{" "}
+            <span className="text-brand-ink5">
               (played by {view.stadium.mine ? "you" : oppName} — tap to read)
             </span>
           </div>
           {!finished && (
             <button
-              className="shrink-0 text-xs text-poke-blue hover:underline"
+              className="shrink-0 whitespace-nowrap text-[12.5px] text-brand-accent hover:underline"
               disabled={busy}
               onClick={() => act({ type: "useStadium" })}
             >
@@ -403,7 +459,7 @@ export default function BattleBoardPage() {
           )}
           {!finished && (
             <button
-              className="shrink-0 text-xs text-red-500 hover:underline"
+              className="shrink-0 whitespace-nowrap text-[12.5px] text-brand-negative hover:underline"
               disabled={busy}
               onClick={() => {
                 if (confirm("Discard the Stadium?")) act({ type: "discardStadium" });
@@ -416,24 +472,29 @@ export default function BattleBoardPage() {
       )}
 
       {/* ===== Log + notices ===== */}
-      {notice && <div className="rounded-lg bg-red-50 p-2 text-center text-xs text-red-700">{notice}</div>}
-      <div className="card-panel p-2">
-        <div ref={logRef} className="h-24 overflow-y-auto text-xs text-slate-600">
+      {notice && (
+        <div className="rounded-[14px] border border-brand-line bg-white p-2.5 text-center text-[12.5px] text-brand-negative">
+          {notice}
+        </div>
+      )}
+      <div className={`${STRIP_PANEL} p-[14px]`}>
+        <div
+          ref={logRef}
+          className="flex max-h-[108px] flex-col gap-[5px] overflow-y-auto text-[12.5px] leading-[1.5] text-brand-ink3"
+        >
           {view.log.map((l, i) => (
-            <div key={i} className="py-0.5">
-              {l.text}
-            </div>
+            <div key={i}>{l.text}</div>
           ))}
         </div>
-        <div className="mt-1 flex items-center justify-between gap-2 border-t border-slate-100 pt-1">
+        <div className="mt-[11px] flex items-center justify-between gap-3 border-t border-brand-line-soft pt-2.5">
           {view.undo ? (
             <button
-              className="chip max-w-[70%] shrink truncate bg-amber-50 text-amber-800"
+              className="max-w-[70%] shrink truncate whitespace-nowrap rounded-full bg-[#FFF8E1] px-[11px] py-[5px] font-mono text-[11px] text-[#7A5A12]"
               disabled={busy}
               onClick={() => act({ type: "undo" })}
               title={`Take back your last move: ${view.undo}`}
             >
-              ↩️ Undo <span className="font-normal opacity-70">{view.undo}</span>
+              ↩️ Undo <span className="opacity-70">{view.undo}</span>
             </button>
           ) : (
             <span />
@@ -441,7 +502,7 @@ export default function BattleBoardPage() {
           <a
             href={`/api/battles/${id}/log`}
             download
-            className="text-[11px] text-slate-400 hover:text-poke-blue hover:underline"
+            className="shrink-0 whitespace-nowrap text-[11.5px] text-brand-ink5 hover:text-brand-accent hover:underline"
             title="Download the whole game log as a text file — including the early turns that have scrolled out of view here"
           >
             ⬇ Export log
@@ -450,53 +511,60 @@ export default function BattleBoardPage() {
       </div>
 
       {/* ===== My side ===== */}
-      <div className="card-panel space-y-2 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-sm font-semibold">{data.myName ?? "You"}</div>
-          <span className="flex items-center gap-1">
+      <div className={SIDE_PANEL}>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-[11px]">
+            <span
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-accent text-[11px] font-bold text-white"
+            >
+              {initialsFor(data.myName ?? "You")}
+            </span>
+            <span className="text-[14.5px] font-medium">{data.myName ?? "You"}</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
             {!finished && view.myTurn && (
-              <span
-                className={`chip ${view.energyUsed ? "bg-slate-100 text-slate-400" : "bg-yellow-50 text-yellow-800"}`}
-              >
+              <StateChip tone={view.energyUsed ? "quiet" : "warm"}>
                 {view.energyUsed ? "⚡ energy used" : "⚡ energy available"}
-              </span>
+              </StateChip>
             )}
-            {!finished && view.myTurn && <span className="chip bg-green-50 text-green-700">your turn</span>}
-          </span>
+            {!finished && view.myTurn && <StateChip tone="good">your turn</StateChip>}
+          </div>
         </div>
+
         {!finished && !me.active && me.bench.length === 0 && (
-          <div className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
+          <div className="mb-3 rounded-[10px] bg-[#FFF8E1] px-[13px] py-[11px] text-[12.5px] leading-[1.55] text-[#7A5A12]">
             <b>Setup:</b> play a Basic Pokémon as your Active and bench any others. No Basic in
             hand? Use <b>Redraw 7</b> below your hand — your Prize cards are already set.
           </div>
         )}
         {!finished && !me.active && me.bench.length > 0 && (
-          <div className="rounded-lg bg-red-50 p-2 text-xs font-semibold text-red-700">
+          <div className="mb-3 rounded-[10px] bg-[#FDF0EE] px-[13px] py-[11px] text-[12.5px] font-medium leading-[1.55] text-brand-negative">
             Choose a new Active — tap a Bench Pokémon, then “Move to Active”.
           </div>
         )}
         {!finished && view.myTurn && view.turnCount === 1 && (
-          <div className="rounded-lg bg-poke-blue/5 p-2 text-xs text-slate-600">
+          <div className="mb-3 rounded-[10px] bg-brand-accent-tint px-[13px] py-[11px] text-[12.5px] leading-[1.55] text-brand-ink2">
             <b>Turn 1:</b> whoever goes first can&apos;t attack or play a Supporter — the app
             won&apos;t stop you, it just keeps score.
           </div>
         )}
-        <div className="flex items-start justify-between gap-2">
+
+        <div className="flex items-start justify-between gap-4">
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wide text-slate-400">active</span>
+            <ZoneLabel>active</ZoneLabel>
             {me.active ? (
               <StackTile
                 stack={me.active}
-                className="w-20"
+                className="w-20 ring-[1.5px] ring-brand-accent"
                 onClick={() => setSheet({ kind: "mystack", target: "active" })}
               />
             ) : (
-              <span className="flex aspect-[63/88] w-20 items-center justify-center rounded-md border border-dashed border-slate-300 text-[10px] text-slate-400">
+              <span className="flex aspect-[63/88] w-20 items-center justify-center rounded-[7px] border border-dashed border-brand-line-strong p-1 text-center text-[10px] text-brand-ink5">
                 tap a hand card
               </span>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-[9px]">
             <FaceDownPile count={me.deckCount} label="deck" onClick={() => setSheet({ kind: "deck" })} />
             <FaceDownPile
               count={me.prizeCount}
@@ -505,25 +573,26 @@ export default function BattleBoardPage() {
             />
             <button
               type="button"
-              className="flex flex-col items-center gap-0.5"
+              className="flex flex-col items-center gap-[3px]"
               onClick={() => setViewPile({ title: "Your discard", cards: me.discard, mine: true })}
             >
-              <span className="flex aspect-[63/88] w-11 items-center justify-center rounded-md border border-dashed border-slate-300 text-sm font-bold text-slate-500">
+              <span className="flex aspect-[63/88] w-11 items-center justify-center rounded-[6px] border border-dashed border-brand-line-strong font-display text-sm font-bold text-brand-ink4">
                 {me.discard.length}
               </span>
-              <span className="text-[10px] text-slate-500">discard</span>
+              <span className="text-[10px] text-brand-ink4">discard</span>
             </button>
           </div>
         </div>
+
         {me.bench.length > 0 && (
-          <div>
-            <span className="text-[10px] uppercase tracking-wide text-slate-400">bench</span>
-            <div className="mt-0.5 flex gap-1.5 overflow-x-auto">
+          <div className="mt-[14px]">
+            <ZoneLabel>bench · {me.bench.length} of 5</ZoneLabel>
+            <div className="mt-[5px] flex gap-[7px] overflow-x-auto">
               {me.bench.map((s, i) => (
                 <StackTile
                   key={s.face.uid}
                   stack={s}
-                  className="w-14"
+                  className="w-[54px]"
                   onClick={() => setSheet({ kind: "mystack", target: i })}
                 />
               ))}
@@ -531,11 +600,9 @@ export default function BattleBoardPage() {
           </div>
         )}
         {me.played.length > 0 && (
-          <div>
-            <span className="text-[10px] uppercase tracking-wide text-slate-400">
-              played this turn (discards when your turn ends)
-            </span>
-            <div className="mt-0.5 flex gap-1.5 overflow-x-auto">
+          <div className="mt-[14px]">
+            <ZoneLabel>played this turn (discards when your turn ends)</ZoneLabel>
+            <div className="mt-[5px] flex gap-[7px] overflow-x-auto">
               {me.played.map((c) => (
                 <button key={c.uid} type="button" className="shrink-0" onClick={() => setZoomCard(c)}>
                   <CardTile card={c} className="w-12" />
@@ -546,27 +613,27 @@ export default function BattleBoardPage() {
         )}
 
         {!finished && (
-          <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
-            {(
-              <>
-                <button
-                  className="btn-secondary text-sm"
-                  disabled={busy}
-                  onClick={() => act({ type: "draw" })}
-                >
-                  🃏 Draw
-                </button>
-                <button
-                  className={`${view.myTurn ? "btn-primary" : "btn-secondary"} text-sm`}
-                  disabled={busy}
-                  onClick={() => act({ type: "endTurn" })}
-                >
-                  End turn
-                </button>
-              </>
-            )}
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-brand-line-soft pt-[14px]">
             <button
-              className="btn-secondary text-sm"
+              className="whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-[18px] py-2.5 text-[13.5px] font-medium hover:bg-brand-sunken disabled:opacity-50"
+              disabled={busy}
+              onClick={() => act({ type: "draw" })}
+            >
+              🃏 Draw
+            </button>
+            <button
+              className={`whitespace-nowrap rounded-full px-[18px] py-2.5 text-[13.5px] font-medium disabled:opacity-50 ${
+                view.myTurn
+                  ? "bg-brand-ink text-brand-canvas hover:bg-brand-ink2"
+                  : "border border-brand-line-strong bg-white hover:bg-brand-sunken"
+              }`}
+              disabled={busy}
+              onClick={() => act({ type: "endTurn" })}
+            >
+              End turn
+            </button>
+            <button
+              className="whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-[18px] py-2.5 text-[13.5px] font-medium hover:bg-brand-sunken disabled:opacity-50"
               disabled={busy}
               onClick={() => act({ type: "flipCoin" })}
             >
@@ -574,7 +641,7 @@ export default function BattleBoardPage() {
             </button>
             {view.phase === "play" && !view.myTurn && (
               <button
-                className="text-xs text-slate-400 hover:underline"
+                className="text-[12.5px] text-brand-ink4 hover:underline"
                 disabled={busy}
                 onClick={() => {
                   if (
@@ -590,7 +657,7 @@ export default function BattleBoardPage() {
               </button>
             )}
             <button
-              className="ml-auto text-xs text-red-500 hover:underline"
+              className="ml-auto whitespace-nowrap text-[12.5px] text-brand-negative hover:underline"
               onClick={() => setSheet({ kind: "concede" })}
             >
               Concede
@@ -598,14 +665,14 @@ export default function BattleBoardPage() {
           </div>
         )}
 
-        <div>
-          <span className="text-[10px] uppercase tracking-wide text-slate-400">
-            your hand ({me.hand.length})
-          </span>
+        <div className="mt-[14px]">
+          <ZoneLabel>your hand ({me.hand.length})</ZoneLabel>
           {me.hand.length === 0 ? (
-            <p className="py-2 text-xs text-slate-400">No cards in hand — draw from your deck.</p>
+            <p className="py-2 text-[12.5px] text-brand-ink5">
+              No cards in hand — draw from your deck.
+            </p>
           ) : (
-            <div className="mt-1 flex gap-1.5 overflow-x-auto pb-1">
+            <div className="mt-1.5 flex gap-[7px] overflow-x-auto pb-1">
               {me.hand.map((c, i) => (
                 <button
                   key={c.uid}
@@ -620,9 +687,9 @@ export default function BattleBoardPage() {
             </div>
           )}
           {!finished && (
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
+            <div className="mt-2.5 flex flex-wrap gap-[7px]">
               <button
-                className="chip bg-slate-100 text-slate-600"
+                className={HAND_CHIP}
                 disabled={busy}
                 onClick={() => act({ type: "redrawSeven" })}
                 title="Shuffle your hand and Prize cards back, draw 7, set 6 prizes again"
@@ -630,14 +697,14 @@ export default function BattleBoardPage() {
                 🔄 Redraw 7
               </button>
               <button
-                className="chip bg-slate-100 text-slate-600"
+                className={HAND_CHIP}
                 disabled={busy || me.hand.length === 0}
                 onClick={() => act({ type: "handToDeckAll" })}
               >
                 🂠 Hand into deck
               </button>
               <button
-                className="chip bg-slate-100 text-slate-600"
+                className={HAND_CHIP}
                 disabled={busy || me.hand.length === 0}
                 onClick={() => act({ type: "handToDeckAll", where: "bottom" })}
                 title="Shuffle your hand and put it on the bottom of your deck, leaving the rest of the deck in order (Vivillon's Grand Wing, Roxanne-style effects)"
@@ -645,7 +712,7 @@ export default function BattleBoardPage() {
                 ⬇️ Hand to bottom
               </button>
               <button
-                className="chip bg-slate-100 text-slate-600"
+                className={HAND_CHIP}
                 disabled={busy || me.hand.length === 0}
                 onClick={() => {
                   if (confirm(`Discard all ${me.hand.length} cards in your hand?`)) {
@@ -660,7 +727,7 @@ export default function BattleBoardPage() {
         </div>
       </div>
 
-      <p className="text-center text-[11px] text-slate-400">
+      <p className="mt-[14px] text-center text-[11.5px] leading-[1.6] text-brand-ink5">
         The app keeps score — Prize cards, the draw each turn, knockouts, poison and burn, and
         the win — and never blocks a play. Calling the rules is yours, just like across a table.
       </p>
@@ -672,7 +739,7 @@ export default function BattleBoardPage() {
           onClick={() => setSheet(null)}
         >
           <div
-            className="max-h-[70vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 sm:rounded-2xl"
+            className="max-h-[70vh] w-full max-w-md overflow-y-auto rounded-t-[20px] bg-brand-canvas p-[18px] sm:rounded-[20px]"
             onClick={(e) => e.stopPropagation()}
           >
             <SheetContent
@@ -888,7 +955,14 @@ function SheetContent({
   zoom: (c: BattleCard) => void;
   openDeckSearch: () => void;
 }) {
-  const row = "block w-full border-b border-slate-100 py-2.5 text-left text-sm";
+  // Per artboard 15b: 13px of vertical room a thumb can actually hit, hairline
+  // separators, and body-sized text — these are the game's real controls, not
+  // a menu to squint at.
+  const row =
+    "block w-full border-b border-brand-line-soft py-[13px] text-left text-sm leading-[1.45] disabled:opacity-50";
+  const rowGroup = "flex items-center gap-[9px] border-b border-brand-line-soft py-[13px] text-sm";
+  const numChip =
+    "rounded-full bg-brand-sunken px-3 py-[5px] font-mono text-[11.5px] font-medium text-brand-ink2 hover:bg-brand-line disabled:opacity-50";
 
   if (sheet.kind === "concede") {
     return (
@@ -921,12 +995,12 @@ function SheetContent({
         <button className={row} disabled={busy} onClick={() => act({ type: "shuffleDeck" })}>
           🔀 Shuffle deck
         </button>
-        <div className="flex items-center gap-2 border-b border-slate-100 py-2.5 text-sm">
+        <div className={rowGroup}>
           <span>🔀 Shuffle all but the top:</span>
           {[1, 2, 3].map((n) => (
             <button
               key={n}
-              className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700"
+              className={numChip}
               disabled={busy}
               onClick={() => act({ type: "shuffleDeck", keepTop: n })}
             >
@@ -939,12 +1013,12 @@ function SheetContent({
             <button className={row} disabled={busy} onClick={openDeckSearch}>
               🔍 Search your deck — take a card, then shuffle
             </button>
-            <div className="flex items-center gap-2 border-b border-slate-100 py-2.5 text-sm">
+            <div className={rowGroup}>
               <span>⛏ Discard from the top:</span>
               {[1, 2, 3].map((n) => (
                 <button
                   key={n}
-                  className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700"
+                  className={numChip}
                   disabled={busy}
                   onClick={() => act({ type: "millDeck", n })}
                 >
@@ -966,7 +1040,7 @@ function SheetContent({
             ✨ Draw (card effect / ability)
           </button>
         )}
-        <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
+        <button className="w-full pt-2.5 text-center text-sm text-brand-ink5" onClick={close}>
           Cancel
         </button>
       </div>
@@ -983,7 +1057,7 @@ function SheetContent({
         <button className={row} disabled={busy} onClick={() => act({ type: "takePrize" })}>
           🏆 Take a Prize card into your hand
         </button>
-        <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
+        <button className="w-full pt-2.5 text-center text-sm text-brand-ink5" onClick={close}>
           Cancel
         </button>
       </div>
@@ -1134,7 +1208,7 @@ function SheetContent({
         >
           📤 Reveal to {oppName} (shows the name in the log)
         </button>
-        <div className="flex items-center gap-2 border-b border-slate-100 py-2.5 text-sm">
+        <div className={rowGroup}>
           <span>🂠 To your deck:</span>
           {(["top", "bottom", "shuffle"] as const).map((where) => (
             <button
@@ -1154,7 +1228,7 @@ function SheetContent({
         >
           🗑 Discard
         </button>
-        <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
+        <button className="w-full pt-2.5 text-center text-sm text-brand-ink5" onClick={close}>
           Cancel
         </button>
       </div>
@@ -1430,7 +1504,7 @@ function SheetContent({
             </button>
           )}
           {stack.attached.some((c) => c.cat === "pokemon" || c.cat == null) && (
-            <div className="flex items-center gap-2 border-b border-slate-100 py-2.5 text-sm">
+            <div className={rowGroup}>
               <span>⬇️ Devolve {stack.face.name} to:</span>
               <button
                 className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700"
@@ -1499,7 +1573,7 @@ function SheetContent({
           </button>
         </>
       )}
-      <button className="w-full py-2.5 text-sm text-slate-400" onClick={close}>
+      <button className="w-full pt-2.5 text-center text-sm text-brand-ink5" onClick={close}>
         Close
       </button>
     </div>
