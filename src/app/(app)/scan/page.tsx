@@ -52,20 +52,19 @@ async function fileToBase64(file: File, maxDim = 1568): Promise<{ data: string; 
   return { data: dataUrl.split(",")[1], mediaType: "image/jpeg" };
 }
 
-const SCAN_STEPS = [
-  `${AI_NAME} is reading the cards in your photo…`,
-  "Finding names and collector numbers…",
-  "Matching against the card database…",
-  "Double-checking sets and rarities…",
-  "Looking up market prices…",
-  "Almost there — big scans take a little longer…",
-];
 
 export default function ScanPage() {
   const router = useRouter();
   const creditState = useCredits();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [scanStep, setScanStep] = useState(0);
+  const [jobId, setJobId] = useState<string | null>(null);
+  /** Real progress: how many cards the model has finished reading, and how
+   *  many it said were in the photo. */
+  const [progress, setProgress] = useState<{ read: number; expected: number | null }>({
+    read: 0,
+    expected: null,
+  });
+  const [partial, setPartial] = useState<Array<{ name: string; num: string | null }>>([]);
   const [phase, setPhase] = useState<"idle" | "scanning" | "review" | "saving" | "done">("idle");
   const [rows, setRows] = useState<ReviewRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -77,21 +76,100 @@ export default function ScanPage() {
   const [photoUploading, setPhotoUploading] = useState<number | null>(null);
   const [scanSeconds, setScanSeconds] = useState<number | null>(null);
 
-  // Rotate through status messages while a scan is running so the page
-  // clearly isn't frozen (scans take 10-30s depending on card count).
+  // Pick up a scan that was already running.
+  //
+  // The case this exists for: the photo goes in, the phone locks, and the
+  // person comes back two minutes later to a fresh scan page. The cards are
+  // sitting on the server, already paid for. Without this they'd be invisible
+  // and the obvious move would be to scan again — paying twice for one photo.
+  useEffect(() => {
+    if (phase !== "idle") return;
+    let live = true;
+    fetch("/api/scan")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        const job = j?.job as { id: string; status: string } | null | undefined;
+        if (!live || !job || job.status !== "running") return;
+        setPhase("scanning");
+        setJobId(job.id);
+        watchJob(job.id, Date.now())
+          .then((results) => results && applyResults(results, Date.now()))
+          .catch((e) => {
+            setError(e instanceof Error ? e.message : "Scan failed");
+            setPhase("idle");
+          });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep the screen awake while a scan runs, where the browser allows it.
+  // Doesn't replace the job — the job is what makes sleeping survivable —
+  // but it stops the common case from happening at all.
   useEffect(() => {
     if (phase !== "scanning") return;
-    setScanStep(0);
-    const interval = setInterval(
-      () => setScanStep((s) => Math.min(s + 1, SCAN_STEPS.length - 1)),
-      3500
-    );
-    return () => clearInterval(interval);
+    let sentinel: { release: () => Promise<void> } | null = null;
+    const nav = navigator as Navigator & {
+      wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> };
+    };
+    nav.wakeLock
+      ?.request("screen")
+      .then((s) => {
+        sentinel = s;
+      })
+      .catch(() => {
+        // Denied, unsupported, or the tab isn't visible. Not worth a word to
+        // the user — the scan survives sleeping either way.
+      });
+    return () => {
+      void sentinel?.release().catch(() => {});
+    };
   }, [phase]);
+
+  /** Watch a scan job until it finishes.
+   *
+   *  Polling, not a stream, and that is the point: a stream dies when the
+   *  phone sleeps or the tab goes to the background, whereas a poll simply
+   *  resumes on the next tick. The scan itself runs server-side regardless,
+   *  so falling asleep mid-scan now costs nothing — the cards are waiting.
+   */
+  async function watchJob(jobId: string, startedAt: number) {
+    for (;;) {
+      const res = await fetch(`/api/scan?job=${encodeURIComponent(jobId)}`);
+      const json = await res.json();
+      const job = json.job as {
+        status: string;
+        expected: number | null;
+        cards: unknown[];
+        error: string | null;
+      } | null;
+
+      if (!job) throw new Error("That scan couldn't be found.");
+      if (job.status === "error") throw new Error(job.error || "Scan failed");
+      if (job.status === "cancelled") return null;
+
+      // Cards read so far — the real numerator behind "4 of 6".
+      setProgress({ read: job.cards?.length ?? 0, expected: job.expected ?? null });
+      setPartial(
+        (job.cards ?? []).map((c) => {
+          const o = c as { name?: string; num?: string | null; detected?: { name?: string } };
+          return { name: o.detected?.name ?? o.name ?? "Reading…", num: o.num ?? null };
+        })
+      );
+
+      if (job.status === "done") return job.cards as ScanMatch[];
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+  }
 
   async function handleFile(file: File) {
     setError(null);
     setPhase("scanning");
+    setProgress({ read: 0, expected: null });
+    setPartial([]);
     setPreview(URL.createObjectURL(file));
     const startedAt = Date.now();
     try {
@@ -103,11 +181,30 @@ export default function ScanPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Scan failed");
-      const results: ScanMatch[] = json.results;
-      if (results.length === 0) {
-        throw new Error("No cards were detected. Try better lighting and make sure the collector numbers are visible.");
+      setJobId(json.jobId);
+      const watched = await watchJob(json.jobId, startedAt);
+      if (!watched) {
+        reset();
+        return;
       }
-      setRows(
+      applyResults(watched, startedAt, file);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Scan failed");
+      setPhase("idle");
+    }
+  }
+
+  /** Turn a finished job's cards into review rows. Shared by a scan that ran
+   *  to completion in front of you and one recovered after a sleep. */
+  function applyResults(results: ScanMatch[], startedAt: number, file?: File) {
+    if (results.length === 0) {
+      setError(
+        "No cards were detected. Try better lighting and make sure the collector numbers are visible."
+      );
+      setPhase("idle");
+      return;
+    }
+    setRows(
         results.map((r, i) => {
           // Learned memory (past member corrections) beats the fresh guess.
           const variant =
@@ -126,20 +223,17 @@ export default function ScanPage() {
           };
         })
       );
-      setScanSeconds(Math.round((Date.now() - startedAt) / 1000));
-      setPhase("review");
-      // Single-card scan with no database image (common for promos): use the
-      // photo just taken as the card's image, automatically.
-      if (results.length === 1 && results[0].match && !results[0].match.imageSmall) {
-        uploadCardPhoto(file).then((url) => {
-          if (url) {
-            setRows((prev) => prev.map((r) => (r.key === 0 ? { ...r, photoUrl: url } : r)));
-          }
-        });
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Scan failed");
-      setPhase("idle");
+    setScanSeconds(Math.round((Date.now() - startedAt) / 1000));
+    setPhase("review");
+    // Single-card scan with no database image (common for promos): use the
+    // photo just taken as the card's image, automatically. Only available on
+    // the live path — a scan recovered after a sleep no longer has the file.
+    if (file && results.length === 1 && results[0].match && !results[0].match.imageSmall) {
+      uploadCardPhoto(file).then((url) => {
+        if (url) {
+          setRows((prev) => prev.map((r) => (r.key === 0 ? { ...r, photoUrl: url } : r)));
+        }
+      });
     }
   }
 
@@ -286,32 +380,76 @@ export default function ScanPage() {
       )}
 
       {phase === "scanning" && (
-        <div className="card-panel p-8 text-center">
+        <div className="card-panel p-6 text-center">
           {preview && (
             <div className="relative mx-auto mb-5 inline-block overflow-hidden rounded-lg">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={preview} alt="scan preview" className="max-h-64 rounded-lg" />
+              <img src={preview} alt="scan preview" className="max-h-56 rounded-lg" />
               <div className="absolute inset-0 bg-poke-dark/20" />
               <div className="scan-beam" />
             </div>
           )}
           <div className="flex items-center justify-center gap-3">
-            <FanMark size={24} className="animate-spin-slow shrink-0" />
-            <span className="text-lg font-semibold">Identifying cards…</span>
+            <FanMark size={22} className="animate-spin-slow shrink-0" />
+            <span className="text-lg font-semibold">Identifying cards</span>
+            {progress.expected != null && (
+              <span className="font-mono text-sm text-slate-500">
+                {progress.read}/{progress.expected}
+              </span>
+            )}
           </div>
-          <p className="mt-2 min-h-5 text-sm text-slate-500 transition-opacity" key={scanStep}>
-            {SCAN_STEPS[scanStep]}
+          <p className="mt-1.5 text-sm text-slate-500">
+            Matching set symbols and collector numbers. You can leave this screen — it keeps
+            going.
           </p>
-          <div className="mx-auto mt-4 flex max-w-48 gap-1">
-            {SCAN_STEPS.map((_, i) => (
-              <div
-                key={i}
-                className={`h-1 flex-1 rounded-full transition-colors duration-500 ${
-                  i <= scanStep ? "bg-poke-red" : "bg-slate-200"
-                }`}
-              />
-            ))}
-          </div>
+
+          {/* A real bar. It used to advance on a 3.5-second timer whatever was
+              happening; each segment is now one card the model has finished
+              reading. */}
+          {progress.expected != null && progress.expected > 0 && (
+            <div className="mx-auto mt-4 flex max-w-64 gap-1">
+              {Array.from({ length: progress.expected }).map((_, i) => (
+                <div
+                  key={i}
+                  className={`h-1 flex-1 rounded-full transition-colors duration-300 ${
+                    i < progress.read ? "bg-poke-red" : "bg-slate-200"
+                  }`}
+                />
+              ))}
+            </div>
+          )}
+
+          {partial.length > 0 && (
+            <div className="mx-auto mt-4 max-w-sm overflow-hidden rounded-lg border border-slate-200 text-left">
+              {partial.map((c, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="text-green-600">✓</span>
+                    <span className="truncate">{c.name}</span>
+                  </span>
+                  {c.num && <span className="shrink-0 font-mono text-xs text-slate-400">{c.num}</span>}
+                </div>
+              ))}
+              {progress.expected != null && progress.read < progress.expected && (
+                <div className="flex items-center gap-2 px-3 py-2 text-sm text-slate-400">
+                  <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-slate-300" />
+                  reading…
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Just "Cancel". It stops the WAITING, not the work: the model is
+              already generating and those tokens are spent either way, so
+              promising "nothing is charged" would be false — and would
+              contradict what /credits tells people. The scan finishes
+              server-side and stays on the job whether or not anyone watches. */}
+          <button className="btn-secondary mt-5 text-sm" onClick={reset}>
+            Cancel
+          </button>
         </div>
       )}
 
