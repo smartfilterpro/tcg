@@ -80,7 +80,10 @@ const EARLY_REFRESH_MS = 60_000;
 
 async function requestToken(scopes: string[]): Promise<string> {
   const basic = Buffer.from(`${clientId()}:${clientSecret()}`).toString("base64");
-  const res = await fetch(`${host()}/identity/v2/oauth2/token`, {
+  // v1. The OAuth endpoint is versioned separately from the Buy APIs it
+  // issues tokens for, and a wrong version here answers 404 with an empty
+  // body — which reads exactly like bad credentials and is not.
+  const res = await fetch(`${host()}/identity/v1/oauth2/token`, {
     method: "POST",
     headers: {
       Authorization: `Basic ${basic}`,
@@ -221,10 +224,16 @@ export async function probeAccess(): Promise<EbayAccess> {
     out.browse = true;
     out.notes.push("Base scope granted — active listings (asking prices) are available.");
   } catch (err) {
-    out.notes.push(
-      `Base token failed: ${err instanceof Error ? err.message : String(err)}. ` +
-        `Usually a wrong or sandbox-vs-production key pair.`
-    );
+    const msg = err instanceof Error ? err.message : String(err);
+    // A 404 here is never the credentials — eBay would have to reach the
+    // endpoint to reject them. It means the token URL itself is wrong.
+    const hint =
+      err instanceof EbayError && err.status === 404
+        ? "A 404 means the token URL is wrong, not the keys."
+        : err instanceof EbayError && err.status === 401
+          ? "Check the key pair, and that a sandbox keyset didn't land in the production slot."
+          : "Check the keys and that Railway redeployed after they were set.";
+    out.notes.push(`Base token failed: ${msg}. ${hint}`);
     return out;
   }
 
