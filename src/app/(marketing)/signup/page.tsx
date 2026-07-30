@@ -47,20 +47,33 @@ export default function SignupPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [verifySent, setVerifySent] = useState(false);
+  const [nextPath, setNextPath] = useState<string | null>(null);
 
   // /signup?plan=pro from the pricing page. The param used to be dropped, so
   // every arrival — including someone who had just clicked "Go Pro" — got the
   // free plan and no way to pay.
   useEffect(() => {
-    const wanted = new URLSearchParams(window.location.search).get("plan");
+    const params = new URLSearchParams(window.location.search);
+    const wanted = params.get("plan");
     if (wanted === "pro" || wanted === "family") setPlan(wanted);
+    const n = params.get("next");
+    // A single leading slash only: "//evil.example" is a protocol-relative
+    // URL and would leave the site.
+    if (n && n.startsWith("/") && !n.startsWith("//")) setNextPath(n);
   }, []);
 
   const paid = plan !== "free";
   /** Where the account lands once it exists. A paid choice goes to Checkout;
    *  the GET form of that route exists precisely so it can be a redirect
-   *  target at the end of a confirmation email. */
-  const destination = paid ? `/api/billing/checkout?plan=${plan}` : "/onboarding";
+   *  target at the end of a confirmation email.
+   *
+   *  ?next= wins over both. Someone who arrived from a family invitation is
+   *  here to answer it, and dropping them on onboarding instead would lose
+   *  the invitation — the link is the only copy of it they have. Restricted
+   *  to internal paths so the parameter can't be used to bounce a new signup
+   *  off to somewhere else entirely. */
+  const next = nextPath;
+  const destination = next ?? (paid ? `/api/billing/checkout?plan=${plan}` : "/onboarding");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

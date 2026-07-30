@@ -49,6 +49,11 @@ function barColor(pct: number): string {
   return pct >= 90 ? "#D8452F" : pct >= 60 ? "#E0A21A" : "#2C5CFF";
 }
 
+interface InviteData {
+  incoming: Array<{ id: string; role: string; token: string; expiresAt: string; from: string }>;
+  sent: Array<{ id: string; email: string; role: string; token: string; expires_at: string }>;
+}
+
 export default function FamilyPage() {
   const [data, setData] = useState<FamilyData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +61,12 @@ export default function FamilyPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"kid" | "parent">("kid");
   const [capDrafts, setCapDrafts] = useState<Record<string, string>>({});
+  const [invites, setInvites] = useState<InviteData>({ incoming: [], sent: [] });
+  // The invitation link, shown once after sending. There is no outbound mail
+  // yet, so this IS the delivery mechanism — hiding it would mean the
+  // invitation quietly went nowhere.
+  const [lastLink, setLastLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -71,9 +82,35 @@ export default function FamilyPage() {
     }
   }, []);
 
+  const loadInvites = useCallback(async () => {
+    try {
+      const res = await fetch("/api/family/invites");
+      if (res.ok) setInvites(await res.json());
+    } catch {}
+  }, []);
+
   useEffect(() => {
     load();
-  }, [load]);
+    loadInvites();
+  }, [load, loadInvites]);
+
+  async function answerInvite(token: string, accept: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/family/invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, accept }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't answer that invitation");
+      await Promise.all([load(), loadInvites()]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't answer that invitation");
+    }
+    setBusy(false);
+  }
 
   async function call(method: string, body: Record<string, unknown>) {
     setBusy(true);
@@ -96,10 +133,51 @@ export default function FamilyPage() {
   if (error && !data) return <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>;
   if (!data) return <p className="text-slate-500">Loading…</p>;
 
+  // Somebody has asked to add this account to their family. Shown before
+  // anything else on the page: it is a request for real control over this
+  // account, so it should not be something you have to go looking for.
+  const incoming = invites.incoming.length > 0 && (
+    <div className="mb-5 overflow-hidden rounded-[18px] border border-brand-accent bg-white">
+      <div className="border-b border-brand-line-soft px-5 py-3 font-display text-[15px] font-bold">
+        {invites.incoming.length === 1 ? "A family invitation" : "Family invitations"}
+      </div>
+      {invites.incoming.map((i) => (
+        <div key={i.id} className="px-5 py-4">
+          <p className="m-0 mb-1 text-[14px]">
+            <b>{i.from}</b> invited you to join their family as a{" "}
+            {i.role === "parent" ? "parent" : "kid"} profile.
+          </p>
+          <p className="m-0 mb-3 text-[12.5px] leading-[1.55] text-brand-ink3">
+            Your credits would come from their shared pool, and a parent could set a monthly
+            limit for you and see what you&apos;ve used. Your collection, decks and trades stay
+            yours, and you can leave whenever you like.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="rounded-full bg-brand-ink px-4 py-2 text-[13px] font-medium text-brand-canvas disabled:opacity-50"
+              disabled={busy}
+              onClick={() => answerInvite(i.token, true)}
+            >
+              Accept
+            </button>
+            <button
+              className="rounded-full border border-brand-line-strong px-4 py-2 text-[13px] font-medium disabled:opacity-50"
+              disabled={busy}
+              onClick={() => answerInvite(i.token, false)}
+            >
+              Decline
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
   if (!data.group) {
     return (
       <div className="max-w-2xl">
         <h2 className="m-0 mb-1 font-display text-2xl font-bold tracking-[-.025em]">Family</h2>
+        {incoming}
         {data.canCreate ? (
           <>
             <p className="mb-4 mt-0 text-[14.5px] text-brand-ink3">
@@ -139,10 +217,13 @@ export default function FamilyPage() {
         <div>
           <h2 className="m-0 mb-1 font-display text-2xl font-bold tracking-[-.025em]">Family</h2>
           <p className="m-0 text-[14.5px] text-brand-ink3">
-            {g.members.length} of 5 profiles used · {g.poolGrant.toLocaleString()} shared credits a month
+            {g.members.length} of 5 profiles used
+            {invites.sent.length > 0 && ` · ${invites.sent.length} invited`} ·{" "}
+            {g.poolGrant.toLocaleString()} shared credits a month
           </p>
         </div>
       </div>
+      {incoming}
       {error && <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
       <div className="mb-4 overflow-hidden rounded-[18px] border border-brand-line bg-brand-panel">
@@ -249,18 +330,36 @@ export default function FamilyPage() {
         })}
       </div>
 
-      {amParent && g.members.length < 5 && (
+      {amParent && g.members.length + invites.sent.length < 5 && (
         <form
           className="mb-4 flex flex-wrap items-end gap-2 rounded-[18px] border border-brand-line bg-brand-panel p-5"
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            if (inviteEmail.trim()) call("POST", { action: "invite", email: inviteEmail, role: inviteRole });
-            setInviteEmail("");
+            if (!inviteEmail.trim()) return;
+            setBusy(true);
+            setError(null);
+            setLastLink(null);
+            try {
+              const res = await fetch("/api/family", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "invite", email: inviteEmail.trim(), role: inviteRole }),
+              });
+              const json = await res.json();
+              if (!res.ok) throw new Error(json.error || "Couldn't send that invitation");
+              setLastLink(json.link ?? null);
+              setInviteEmail("");
+              setCopied(false);
+              await loadInvites();
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Couldn't send that invitation");
+            }
+            setBusy(false);
           }}
         >
           <div className="min-w-[220px] flex-1">
             <label className="mb-1.5 block text-[12.5px] font-medium text-brand-ink3">
-              Add a trainer (they need a free account first)
+              Invite a trainer — they choose whether to join
             </label>
             <input
               type="email"
@@ -280,9 +379,69 @@ export default function FamilyPage() {
             <option value="parent">Parent — full control</option>
           </select>
           <button className="btn-primary" disabled={busy || !inviteEmail.trim()}>
-            {busy ? "Adding…" : "+ Add"}
+            {busy ? "Sending…" : "Send invite"}
           </button>
         </form>
+      )}
+
+      {lastLink && (
+        <div className="mb-4 rounded-[18px] border border-brand-line bg-white p-4">
+          <p className="m-0 mb-2 text-[13.5px] font-medium">
+            Invitation created — send them this link
+          </p>
+          <p className="m-0 mb-3 text-[12.5px] leading-[1.55] text-brand-ink3">
+            They join only when they open it and agree. Nothing has changed on their account
+            yet, and the link stops working after 14 days.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-[10px] bg-brand-sunken px-3 py-2 font-mono text-[12px]">
+              {lastLink}
+            </code>
+            <button
+              className="btn-secondary shrink-0 text-[13px]"
+              onClick={() => {
+                navigator.clipboard?.writeText(lastLink).then(
+                  () => setCopied(true),
+                  () => setCopied(false)
+                );
+              }}
+            >
+              {copied ? "Copied ✓" : "Copy link"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {invites.sent.length > 0 && (
+        <div className="mb-4 overflow-hidden rounded-[18px] border border-brand-line bg-brand-panel">
+          <div className="border-b border-brand-line-soft px-5 py-3 font-display text-[15px] font-bold">
+            Waiting on a reply
+          </div>
+          {invites.sent.map((i) => (
+            <div
+              key={i.id}
+              className="flex flex-wrap items-center gap-3 border-b border-brand-panel-alt px-5 py-3 text-[13.5px] last:border-b-0"
+            >
+              <span className="min-w-0 flex-1 truncate">{i.email}</span>
+              <span className="font-mono text-[11.5px] text-brand-ink4">
+                {i.role === "parent" ? "parent" : "kid"}
+              </span>
+              <button
+                className="text-[12.5px] text-brand-ink5 underline hover:text-brand-negative"
+                onClick={async () => {
+                  await fetch("/api/family/invites", {
+                    method: "DELETE",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ id: i.id }),
+                  });
+                  loadInvites();
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          ))}
+        </div>
       )}
 
       <p className="text-[12.5px] leading-relaxed text-brand-ink5">
