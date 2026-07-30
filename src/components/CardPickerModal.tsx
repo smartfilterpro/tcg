@@ -192,7 +192,7 @@ export default function CardPickerModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
-        className="card-panel flex max-h-[85vh] w-full max-w-2xl flex-col p-4"
+        className="card-panel flex max-h-[85vh] w-full max-w-[min(64rem,94vw)] flex-col p-4 sm:p-5"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Search gets a full-width row on phones; controls wrap below it */}
@@ -234,7 +234,7 @@ export default function CardPickerModal({
             Type a card name or number to search the full card database.
           </p>
         )}
-        <div className="grid flex-1 grid-cols-3 gap-3 overflow-y-auto sm:grid-cols-4">
+        <div className="grid flex-1 grid-cols-3 gap-3 overflow-y-auto sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7">
           {results.map((card) => (
             <button
               key={card.id}

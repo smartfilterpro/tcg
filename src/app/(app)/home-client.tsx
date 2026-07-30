@@ -658,7 +658,7 @@ export default function CollectionPage({
           onClick={() => setSelected(null)}
         >
           <div
-            className="card-panel relative mx-auto my-6 w-full max-w-md p-5"
+            className="card-panel relative mx-auto my-6 w-full max-w-[min(46rem,94vw)] p-5"
             onClick={(e) => e.stopPropagation()}
           >
             <button

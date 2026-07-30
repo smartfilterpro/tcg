@@ -208,7 +208,7 @@ function SavedGradeModal({
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-brand-ink/60 p-4" onClick={onClose}>
       <div
-        className="mx-auto my-4 max-w-2xl rounded-2xl bg-brand-canvas p-4 shadow-xl sm:p-5"
+        className="mx-auto my-4 w-full max-w-[min(60rem,94vw)] rounded-2xl bg-brand-canvas p-4 shadow-xl sm:p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-3 flex items-start justify-between gap-3">

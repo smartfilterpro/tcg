@@ -764,7 +764,7 @@ export default function BattleBoardPage() {
           onClick={() => setViewPile(null)}
         >
           <div
-            className="mx-auto my-6 w-[92%] max-w-md rounded-2xl bg-white p-4"
+            className="mx-auto my-6 w-[92%] max-w-[min(56rem,94vw)] rounded-2xl bg-white p-4 sm:p-5"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-2 flex items-center justify-between">
@@ -780,7 +780,7 @@ export default function BattleBoardPage() {
                 <p className="mb-2 text-xs text-slate-400">
                   Tap a card to read it{viewPile.mine ? " — “↩ hand” recovers it (card effects)" : ""}.
                 </p>
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-8">
                   {viewPile.cards.map((c, i) => (
                     <div key={c.uid}>
                       <button type="button" className="w-full" onClick={() => setZoomCard(c)}>
@@ -814,7 +814,7 @@ export default function BattleBoardPage() {
           onClick={() => setDeckSearch(null)}
         >
           <div
-            className="mx-auto my-6 w-[92%] max-w-md rounded-2xl bg-white p-4"
+            className="mx-auto my-6 w-[92%] max-w-[min(56rem,94vw)] rounded-2xl bg-white p-4 sm:p-5"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-1 flex items-center justify-between">
@@ -839,7 +839,7 @@ export default function BattleBoardPage() {
                 when a card effect says not to shuffle)
               </span>
             </label>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-8">
               {deckSearch.map((c) => (
                 <div key={c.uid}>
                   <button type="button" className="w-full" onClick={() => setZoomCard(c)}>
