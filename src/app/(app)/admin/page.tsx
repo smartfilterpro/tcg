@@ -1864,6 +1864,8 @@ function PriceSyncPanel() {
       imagesFilled: number;
       idsFilled: number;
       skippedAmbiguous: number;
+      indexedCards: number;
+      rateLimited: boolean;
       done: boolean;
       error: string | null;
     } | null;
@@ -1927,6 +1929,22 @@ function PriceSyncPanel() {
             {st.imagesFilled.toLocaleString()} images, {st.idsFilled.toLocaleString()} ids filled
             {st.skippedAmbiguous > 0 && ` · ${st.skippedAmbiguous} skipped as ambiguous`}
           </p>
+          {/* Zero matches with cards streaming past is the signature of a
+              broken index, and looks identical to "their data is missing"
+              unless the index size is on screen. */}
+          {st.cardsSeen > 50 && st.idsFilled === 0 && (
+            <p className="m-0 mb-1 text-xs text-brand-negative">
+              {st.indexedCards === 0
+                ? "None of our cards were indexed — the catalogue is empty or migration 033 hasn't run."
+                : `${st.indexedCards.toLocaleString()} of our cards are indexed but nothing matched — names or numbers are formatted differently than expected.`}
+            </p>
+          )}
+          {st.rateLimited && (
+            <p className="m-0 mb-1 text-xs text-brand-warning">
+              Paused on their per-minute limit — wait a minute and press again. Progress is
+              saved.
+            </p>
+          )}
           <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-brand-sunken">
             <span className="block h-full bg-brand-accent" style={{ width: `${pct}%` }} />
           </div>
