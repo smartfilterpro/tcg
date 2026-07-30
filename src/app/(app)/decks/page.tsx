@@ -729,6 +729,17 @@ const BUILD_STEPS = [
   "Still working — big collections take a few minutes…",
 ];
 
+/** What each format actually means, shown under the picker. "Standard" and
+ *  "Expanded" are tournament jargon a newer player has no reason to know,
+ *  and the native <select> can't explain its own options. */
+const FORMAT_NOTES: Record<string, string> = {
+  any: "🃏 Anything goes: every card you own is allowed. The format for playing with friends at home.",
+  standard:
+    "🏆 Standard: only cards from recent sets — what official tournaments play. Older cards rotate out each year, so some of your collection may be excluded.",
+  expanded:
+    "📚 Expanded: the bigger official format — recent sets plus older ones going back to Black & White (2011). More of your collection is legal here.",
+};
+
 /** The in-flight build's ticket, persisted so a page refresh (or Safari
  *  reloading a backgrounded tab) can resume watching the same build. */
 const JOB_STORAGE_KEY = "pokedeck-build-job";
@@ -1054,6 +1065,10 @@ export default function DecksPage() {
             )}
           </div>
         </div>
+        {/* Spell the chosen format out — "Standard" and "Expanded" are
+            tournament jargon, and a native <select> can't carry
+            descriptions on its options. */}
+        <p className="mb-0 mt-1.5 text-xs text-slate-500">{FORMAT_NOTES[format] ?? ""}</p>
         {building && (
           <div className="mt-2 flex items-center gap-2">
             <FanMark size={16} className="animate-spin-slow shrink-0" />
