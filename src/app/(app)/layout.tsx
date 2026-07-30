@@ -1,10 +1,12 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { getUserAndProfile } from "@/lib/auth";
 import { APP_NAME, FAN_DISCLAIMER } from "@/lib/branding";
 import { FanMark, Wordmark } from "@/components/Logo";
 import HeaderCredits from "@/components/HeaderCredits";
 import AppNav from "@/components/AppNav";
 import TrainerChat from "@/components/TrainerChat";
+import UpgradeReturn from "@/components/UpgradeReturn";
 import { initialsFor } from "@/lib/avatar";
 
 /** The signed-in app shell, per App Screens artboard 02: dark bar with the
@@ -117,7 +119,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
       </header>
       {/* pb leaves room for the chat launcher so it never sits on the footer */}
-      <main className="mx-auto max-w-[1060px] px-4 py-7 sm:px-6">{children}</main>
+      <main className="mx-auto max-w-[1060px] px-4 py-7 sm:px-6">
+        {/* Suspense because it reads the query string, which opts the subtree
+            out of static rendering — the boundary keeps that contained to
+            the banner instead of the whole shell. */}
+        <Suspense fallback={null}>
+          <UpgradeReturn />
+        </Suspense>
+        {children}
+      </main>
       <TrainerChat />
       <footer className="mx-auto max-w-[1060px] px-4 pb-24 pt-2 text-center text-xs text-slate-400 sm:px-6">
         <div>
