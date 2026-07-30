@@ -154,6 +154,23 @@ a list of answers already given.
 - If the REQUEST names a specific Pokémon, type, archetype or strategy, obey
   the request. It always wins over variety — a player asking for another
   Charizard build wants another Charizard build.
+- Archetype words are requests too: combo, control, mill, stall, spread,
+  turbo, toolbox each name a specific way a deck WINS, not a flavour. A
+  combo deck wins by assembling specific pieces that do something together
+  that neither does alone — a damage-modifier stack on a big attacker is
+  aggro, not combo, no matter how much arithmetic it involves.
+- When an archetype is requested, hunt for it in the DATA before deciding
+  the collection can't do it: read the text and atk columns looking for
+  abilities and effects that interlock — energy acceleration feeding an
+  expensive attacker, self-damage enabling a revenge attack, bench
+  manipulation plus spread damage. The pieces are often on cards whose
+  names you don't recognise; the columns are how you find them.
+- If the collection cannot support the requested archetype, DO NOT build
+  something else and present it as the request. Relabelling is the one
+  unforgivable answer: the player finds out mid-game. The FIRST sentence of
+  the strategy must say plainly "your collection can't support a true X deck
+  yet" and name the kinds of cards that would change that; then say what you
+  built instead and why it's the nearest honest neighbour.
 - Otherwise, build around a main attacker line that is NOT the core of any
   deck they already have. A different attacker, and where the collection
   allows it a different type and a different style of deck (a fast low-cost
@@ -169,7 +186,7 @@ a list of answers already given.
 - Give it a name that isn't a near-copy of one they already have.
 
 UPGRADE SUGGESTIONS (missing_suggestions):
-The collection JSON is the COMPLETE truth of what the player owns — check it
+The collection table is the COMPLETE truth of what the player owns — check it
 before every suggestion, and also check YOUR OWN deck list: never suggest a
 card the deck already runs at 4 copies, and when the deck runs some copies,
 phrase the suggestion as going from N to M. Never suggest basic energy. The
@@ -183,9 +200,13 @@ it fixes and what it would replace. Prefer impactful, reasonably-priced
 staples over chase rares unless the deck truly needs them.
 
 EXPLAINING THE DECK:
-Tailor to the player's play style profile and experience level when provided.
 The strategy write-up should cover: the win condition, the ideal opening turns,
-what to search for first, and how the deck wants to trade prizes.`;
+what to search for first, and how the deck wants to trade prizes. Use the
+player's play style profile and experience level to make real choices (which
+line to build, how much risk to accept, how much rules detail to explain) —
+then mention the profile only where it changed a concrete decision. Never
+compliment the player or tell them the deck suits them; a strategy note is
+an instruction manual, not a sales pitch.`;
 
 /** POST: start a deck build. Returns { jobId } immediately. */
 export async function POST(req: Request) {
@@ -379,12 +400,18 @@ export async function POST(req: Request) {
           ].join("\t");
 
         const trim = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "…" : s);
-        const extrasFor = (bd: CardBattleData | null) => {
-          const text = bd?.rules?.length
-            ? trim(bd.rules.join(" "), 180)
-            : bd?.abilities?.length
-              ? trim(bd.abilities.map((a) => `${a.name}: ${a.text}`).join(" | "), 180)
-              : undefined;
+        const extrasFor = (bd: CardBattleData | null, pokemon = false) => {
+          // For a Pokémon, the ability IS the card — it's what makes it an
+          // engine piece, a lock, a combo enabler. The rules text on a
+          // Pokémon is ex/V boilerplate ("when Knocked Out, take 2 prizes"),
+          // and preferring it buried every ability under 180 chars of
+          // information the model already knows. Trainers are the opposite:
+          // their rules text is their entire effect.
+          const ability = bd?.abilities?.length
+            ? trim(bd.abilities.map((a) => `${a.name}: ${a.text}`).join(" | "), 180)
+            : undefined;
+          const rules = bd?.rules?.length ? trim(bd.rules.join(" "), 180) : undefined;
+          const text = pokemon ? (ability ?? rules) : (rules ?? ability);
           const atk = bd?.attacks?.length
             ? trim(
                 bd.attacks
@@ -405,8 +432,7 @@ export async function POST(req: Request) {
         //
         // Trainers and Special Energy come first because their names lie and
         // their text is short — the original reason text was fetched at all.
-        // Pokémon follow, biggest HP first, since the attacker is what makes
-        // one deck different from another.
+        // Pokémon follow: ability carriers first, then by HP.
         // Lowered from 450,000 with the switch to TSV. A bare card is 145
         // bytes as JSON and 54 as a table row, so this smaller budget still
         // lists MORE cards than the old one did — cost down and pool coverage
@@ -420,6 +446,15 @@ export async function POST(req: Request) {
           const pa = isPokemon(a.supertype) ? 1 : 0;
           const pb = isPokemon(b.supertype) ? 1 : 0;
           if (pa !== pb) return pa - pb;
+          // Abilities outrank hit points. "Biggest HP first" starved every
+          // support Pokémon of its text, so the model could read the big
+          // attackers and nothing else — and built the same big-basic pile
+          // whatever was asked of it, because attackers were the only cards
+          // it could see the words on. Ability Pokémon are the material
+          // combo and engine decks are made from; they carry text first.
+          const aa = a.bd?.abilities?.length ? 1 : 0;
+          const ab = b.bd?.abilities?.length ? 1 : 0;
+          if (aa !== ab) return ab - aa;
           return (parseInt(b.hp ?? "0") || 0) - (parseInt(a.hp ?? "0") || 0);
         });
 
@@ -466,7 +501,7 @@ export async function POST(req: Request) {
         const spent = { poke: 0, other: 0 };
         const carriesText = new Set<string>();
         for (const c of kept) {
-          const { text, atk } = extrasFor(c.bd);
+          const { text, atk } = extrasFor(c.bd, isPokemon(c.supertype));
           if (!text && !atk) continue;
           const cost = (text?.length ?? 0) + (atk?.length ?? 0) + 16;
           const bucket = isPokemon(c.supertype) ? "poke" : "other";
@@ -477,7 +512,7 @@ export async function POST(req: Request) {
 
         const leanCollection = kept.map(({ bd, ...c }) => {
           if (!carriesText.has(c.id)) return c;
-          const { text, atk } = extrasFor(bd);
+          const { text, atk } = extrasFor(bd, isPokemon(c.supertype));
           return { ...c, ...(text ? { text } : {}), ...(atk ? { atk } : {}) };
         });
         // Split into a STABLE prefix and a VARIABLE tail so the prefix can be
