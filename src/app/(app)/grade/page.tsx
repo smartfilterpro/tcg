@@ -583,14 +583,37 @@ export default function GradePage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Grading failed");
+      // The grade is a job now, like a scan: the model runs for half a
+      // minute and a locked phone used to kill the request while the credits
+      // were already spent. Poll rather than await — a poll just resumes on
+      // the next tick after a sleep.
+      const result = await watchGradeJob(json.jobId);
       setGradeSeconds(Math.round((Date.now() - startedAt) / 1000));
-      setReport(json.report);
-      setValue(json.value ?? null);
-      saveGrade(json.report, json.value ?? null, f.measurement, { front: f, back: b });
+      setReport(result.report);
+      setValue(result.value ?? null);
+      saveGrade(result.report, result.value ?? null, f.measurement, { front: f, back: b });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Grading failed");
     }
     setGrading(false);
+  }
+
+  async function watchGradeJob(
+    jobId: string
+  ): Promise<{ report: GradeReport; value: GradeValue | null }> {
+    for (;;) {
+      const res = await fetch(`/api/grade?job=${encodeURIComponent(jobId)}`);
+      const json = await res.json();
+      const job = json.job as {
+        status: string;
+        result: { report: GradeReport; value: GradeValue | null } | null;
+        error: string | null;
+      } | null;
+      if (!job) throw new Error("That grading run couldn't be found.");
+      if (job.status === "error") throw new Error(job.error || "Grading failed");
+      if (job.status === "done" && job.result) return job.result;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   }
 
   function reset() {
@@ -601,6 +624,55 @@ export default function GradePage() {
     setBack(null);
     setSaveState("idle");
   }
+
+  // Pick up a grade already running — the phone locked, the person came
+  // back, and the report is sitting on the server, paid for. Without this
+  // the obvious move is to grade again and pay twice.
+  //
+  // The flattened previews are gone with the old page state, so the report
+  // renders without them; the saved-report history has its own copies.
+  useEffect(() => {
+    let live = true;
+    fetch("/api/grade")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        const job = j?.job as { id: string; status: string } | null | undefined;
+        if (!live || !job || job.status !== "running") return;
+        setGrading(true);
+        watchGradeJob(job.id)
+          .then((result) => {
+            if (!live) return;
+            setReport(result.report);
+            setValue(result.value ?? null);
+          })
+          .catch((e) => live && setError(e instanceof Error ? e.message : "Grading failed"))
+          .finally(() => live && setGrading(false));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep the screen awake while a grade runs, where the browser allows it.
+  // The job survives sleep either way; this just avoids the round trip.
+  useEffect(() => {
+    if (!grading) return;
+    let sentinel: { release: () => Promise<void> } | null = null;
+    const nav = navigator as Navigator & {
+      wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> };
+    };
+    nav.wakeLock
+      ?.request("screen")
+      .then((sen) => {
+        sentinel = sen;
+      })
+      .catch(() => {});
+    return () => {
+      void sentinel?.release().catch(() => {});
+    };
+  }, [grading]);
 
   async function deleteGrade(id: string) {
     await fetch(`/api/grade/reports?id=${id}`, { method: "DELETE" });

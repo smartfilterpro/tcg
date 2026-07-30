@@ -4,6 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { GRADING_SYSTEM, GRADE_SCHEMA, type GradeReport } from "@/lib/grading";
 import { centeringCapBack, type CenteringMeasurement } from "@/lib/cardGeometry";
 import { computeGradeValue, parseRange, type GradedPrices, type GradeValue } from "@/lib/gradeValue";
@@ -159,30 +160,26 @@ async function lookupValue(
 
 /** POST: grade a card from flattened front + back images, corner close-ups,
  *  and software-measured centering. */
-export async function POST(req: Request) {
-  try {
-    const { user, profile } = await requireUser();
-    const body = (await req.json()) as { front?: SideInput; back?: SideInput; fee?: number };
-    const front = normalizeSide(body.front);
-    const back = normalizeSide(body.back);
-    if (!front.card?.data || !back.card?.data) {
-      return NextResponse.json(
-        { error: "Both a front and a back photo are needed to grade." },
-        { status: 400 }
-      );
-    }
-    const fee =
-      typeof body.fee === "number" && body.fee >= 0 && body.fee <= 500 ? body.fee : DEFAULT_FEE_USD;
+/** The grade itself, detached from the request that started it.
+ *
+ *  Same shape as the scan runner and for the same reason: the model runs for
+ *  half a minute, phones lock, and the person has already paid. Everything
+ *  thrown here lands on the job row where the client will find it. */
+async function runGrade(opts: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  userId: string;
+  front: ReturnType<typeof normalizeSide>;
+  back: ReturnType<typeof normalizeSide>;
+  fee: number;
+}): Promise<{ report: GradeReport; value: unknown }> {
+  const { supabase, userId, front, back, fee } = opts;
+  {
 
-    const supabase = await createClient();
-    const budget = await checkCredits(user, profile);
-    if (!budget.ok) {
-      return NextResponse.json({ error: budget.message }, { status: 429 });
-    }
-
+    // POST verified both images exist before starting the job; the type
+    // doesn't carry that knowledge across the call.
     const content: Array<Record<string, unknown>> = [
       { type: "text", text: "FRONT of the card, flattened (card only, camera angle removed):" },
-      imageBlock(front.card),
+      imageBlock(front.card!),
     ];
     for (const c of front.corners) {
       content.push({ type: "text", text: `Close-up — front ${c.label ?? "corner"}:` });
@@ -192,7 +189,7 @@ export async function POST(req: Request) {
       type: "text",
       text: "BACK of the card, flattened (card only, camera angle removed):",
     });
-    content.push(imageBlock(back.card));
+    content.push(imageBlock(back.card!));
     for (const c of back.corners) {
       content.push({ type: "text", text: `Close-up — back ${c.label ?? "corner"}:` });
       content.push(imageBlock(c));
@@ -225,37 +222,24 @@ export async function POST(req: Request) {
     });
     const response = await stream.finalMessage();
 
-    await logAiUsage(supabase, user.id, "grade", MODEL, response.usage);
+    await logAiUsage(supabase, userId, "grade", MODEL, response.usage);
 
     if (response.stop_reason === "refusal") {
-      return NextResponse.json(
-        { error: "Those photos couldn't be processed — try different ones." },
-        { status: 422 }
-      );
+      throw new Error("Those photos couldn't be processed — try different ones.");
     }
     const textBlock = response.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") {
-      return NextResponse.json(
-        { error: "The grading ran out of room — please try again." },
-        { status: 422 }
-      );
+      throw new Error("The grading ran out of room — please try again.");
     }
     let report: GradeReport;
     try {
       report = JSON.parse(textBlock.text) as GradeReport;
     } catch {
-      return NextResponse.json(
-        { error: "The grading came back malformed — please try again." },
-        { status: 422 }
-      );
+      throw new Error("The grading came back malformed — please try again.");
     }
     if (!report.is_card) {
-      return NextResponse.json(
-        {
-          error:
-            "That doesn't look like the front and back of a trading card — try again with clear photos of one card.",
-        },
-        { status: 422 }
+      throw new Error(
+        "That doesn't look like the front and back of a trading card — try again with clear photos of one card."
       );
     }
 
@@ -272,8 +256,72 @@ export async function POST(req: Request) {
       }
     }
 
-    const value = await lookupValue(supabase, user.id, report, fee);
-    return NextResponse.json({ report, value });
+    const value = await lookupValue(supabase, userId, report, fee);
+    return { report, value };
+  }
+}
+
+/** POST → { jobId } immediately; the grade continues server-side.
+ *  GET ?job=<id> → the job's state; GET with no id → the newest running
+ *  job, which is how a phone that slept finds its way back. */
+export async function POST(req: Request) {
+  try {
+    const { user, profile } = await requireUser();
+    const body = (await req.json()) as { front?: SideInput; back?: SideInput; fee?: number };
+    const front = normalizeSide(body.front);
+    const back = normalizeSide(body.back);
+    if (!front.card?.data || !back.card?.data) {
+      return NextResponse.json(
+        { error: "Both a front and a back photo are needed to grade." },
+        { status: 400 }
+      );
+    }
+    const fee =
+      typeof body.fee === "number" && body.fee >= 0 && body.fee <= 500 ? body.fee : DEFAULT_FEE_USD;
+
+    const supabase = await createClient();
+    const budget = await checkCredits(user, profile);
+    if (!budget.ok) {
+      return NextResponse.json({ error: budget.message }, { status: 429 });
+    }
+
+    const admin = createAdminClient();
+    const { data: job, error: jobErr } = await admin
+      .from("grade_jobs")
+      .insert({ user_id: user.id, status: "running" })
+      .select("id")
+      .single();
+    if (jobErr || !job) {
+      return NextResponse.json(
+        {
+          error: /grade_jobs/.test(jobErr?.message ?? "")
+            ? "Grading needs a one-time database update — run supabase/migrations/035_grade_jobs.sql."
+            : "Couldn't start the grade.",
+        },
+        { status: 500 }
+      );
+    }
+    const jobId = job.id as string;
+
+    void runGrade({ supabase, userId: user.id, front, back, fee })
+      .then(async (result) => {
+        await admin
+          .from("grade_jobs")
+          .update({ status: "done", result, updated_at: new Date().toISOString() })
+          .eq("id", jobId);
+      })
+      .catch(async (err) => {
+        await admin
+          .from("grade_jobs")
+          .update({
+            status: "error",
+            error: err instanceof Error ? err.message : "Grading failed",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+      });
+
+    return NextResponse.json({ jobId });
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
@@ -283,5 +331,26 @@ export async function POST(req: Request) {
       { error: err instanceof Error ? err.message : "Grading failed" },
       { status: 500 }
     );
+  }
+}
+
+export async function GET(req: Request) {
+  try {
+    const { user } = await requireUser();
+    const supabase = await createClient();
+    const id = new URL(req.url).searchParams.get("job");
+    let q = supabase
+      .from("grade_jobs")
+      .select("id, status, result, error, created_at")
+      .eq("user_id", user.id);
+    q = id ? q.eq("id", id) : q.eq("status", "running");
+    const { data, error } = await q.order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (error) return NextResponse.json({ job: null, migrated: false });
+    return NextResponse.json({ job: data ?? null, migrated: true });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return NextResponse.json({ job: null }, { status: 500 });
   }
 }
