@@ -23,7 +23,6 @@ import GradeReportView, { gradeColor } from "@/components/GradeReportView";
 import type { SavedGrade } from "@/app/api/grade/reports/route";
 import { FanMark } from "@/components/Logo";
 import { APP_NAME } from "@/lib/branding";
-import { ACTION_ESTIMATES } from "@/lib/credits";
 
 const GRADE_STEPS = [
   "Flattening the card and measuring its borders…",
@@ -671,7 +670,7 @@ export default function GradePage() {
                 disabled={!front || !back || grading}
                 onClick={grade}
               >
-                {grading ? "Grading…" : `Grade my card · ${ACTION_ESTIMATES.grade} credits`}
+                {grading ? "Grading…" : "Grade my card"}
               </button>
             )}
             {grading && (

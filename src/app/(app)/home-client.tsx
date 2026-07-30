@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
 import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
-import { ACTION_ESTIMATES } from "@/lib/credits";
 import { uploadCardPhoto } from "@/lib/photos";
 import { matchesSearch } from "@/lib/text";
 
@@ -494,7 +493,7 @@ export default function CollectionPage({
             + Add by search
           </button>
           <Link href="/scan" className="btn-primary">
-            Bulk scan · {ACTION_ESTIMATES.scan} cr
+            Bulk scan
           </Link>
         </div>
       </div>

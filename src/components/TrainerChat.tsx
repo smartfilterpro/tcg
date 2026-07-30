@@ -9,7 +9,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
-import { ACTION_ESTIMATES } from "@/lib/credits";
 import { FanMark } from "@/components/Logo";
 import Markdown from "@/components/Markdown";
 import { OutOfCreditsNote } from "@/components/CreditLock";
@@ -147,7 +146,7 @@ export default function TrainerChat() {
             <div className="min-w-0 flex-1">
               <div className="font-display text-[15px] font-bold leading-tight">{AI_NAME}</div>
               <div className="text-[11.5px] text-brand-ink4">
-                Knows your cards and decks · {ACTION_ESTIMATES.chat} credits a question
+                Knows your cards and decks
               </div>
             </div>
             {msgs.length > 0 && (

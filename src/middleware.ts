@@ -27,6 +27,9 @@ const PUBLIC_PATHS = [
   // the token through a security-definer function and shows nothing for a
   // dead one; accepting still requires signing in.
   "/family/join",
+  // What things cost is a question people ask before signing up, so the
+  // reference page answers it without an account.
+  "/credits",
   "/terms",
 ];
 

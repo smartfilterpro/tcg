@@ -8,7 +8,6 @@
 // on, and how much runway is left. No opaque percentages either.
 
 import { useEffect, useState } from "react";
-import { ACTION_ESTIMATES } from "@/lib/credits";
 import { BOOST_LIST, BOOSTS_NOTE } from "@/lib/boosts";
 import { AI_NAME } from "@/lib/branding";
 
@@ -298,9 +297,9 @@ export default function CreditsMeter() {
                 Buy credits
               </button>
             </div>
-            <div className="text-[11px] text-brand-ink5">
-              Typical: bulk scan {ACTION_ESTIMATES.scan} cr · deck build {ACTION_ESTIMATES.deck_build} cr
-            </div>
+            <a href="/credits" className="text-[11px] text-brand-ink5 underline">
+              What things cost
+            </a>
           </div>
         </div>
       </div>
@@ -333,7 +332,7 @@ export function BulkScanNudge({ cards }: { cards: number }) {
         href="/scan"
         className="rounded-full bg-brand-canvas px-5 py-2.5 text-sm font-medium text-brand-ink"
       >
-        Try a bulk scan · {ACTION_ESTIMATES.scan} cr
+        Try a bulk scan
       </a>
     </div>
   );
