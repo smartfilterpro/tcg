@@ -2,7 +2,7 @@
 // FAQ. Rendered inside the landing page and standalone at /pricing.
 
 import Link from "next/link";
-import { BOOSTS, CREDIT_COSTS, CREDIT_COSTS_NOTE, FAQS, TIERS } from "@/lib/marketing";
+import { BOOSTS, BOOSTS_NOTE, CREDIT_COSTS, CREDIT_COSTS_NOTE, FAQS, TIERS } from "@/lib/marketing";
 import { AI_NAME } from "@/lib/branding";
 
 export function PricingSection() {
@@ -132,11 +132,12 @@ export function PricingSection() {
                     </div>
                   </div>
                 ))}
-                <p className="mb-0 mt-1.5 flex items-start gap-2.5 text-[13px] leading-[1.55] text-brand-ink3">
-                  <span>
-                    <b className="font-display">Auto-boost</b> — top up automatically when you drop
-                    below 50 credits, with a monthly ceiling you set. Off by default.
-                  </span>
+                {/* The mock advertised auto-boost here. It needs off-session
+                    Stripe charging, which doesn't exist yet, so promising it
+                    on the pricing page would be selling something we can't
+                    deliver. This says something true instead. */}
+                <p className="mb-0 mt-1.5 text-[13px] leading-[1.55] text-brand-ink3">
+                  {BOOSTS_NOTE}
                 </p>
               </div>
             </div>

@@ -70,6 +70,33 @@ async function handleSubscription(admin: ReturnType<typeof createAdminClient>, s
     .eq("id", userId);
 }
 
+/** Write one credit_ledger row, exactly once, keyed by (user, reason, ref).
+ *
+ *  NOT an upsert. The unique index behind that guarantee is partial —
+ *  `... (user_id, reason, ref_id) where ref_id is not null` — and Postgres
+ *  will only infer a partial index for ON CONFLICT if the statement repeats
+ *  the index predicate, which PostgREST's `onConflict=` has no way to send.
+ *  So every upsert here failed with 42P10 no matter what the data was, and
+ *  because neither call inspected the returned error, both failed silently:
+ *  a paid boost credited nothing, and a refund clawed nothing back.
+ *
+ *  Plain insert needs no conflict target at all, so the partial index does
+ *  its job: the second attempt at the same (user, reason, ref) raises 23505
+ *  and is the redelivery we wanted to ignore. Anything else is a real fault
+ *  and must be loud — this is money. */
+async function grantOnce(
+  admin: ReturnType<typeof createAdminClient>,
+  row: { user_id: string; delta: number; reason: string; ref_id: string }
+): Promise<void> {
+  const { error } = await admin.from("credit_ledger").insert(row);
+  if (error && error.code !== "23505") {
+    console.error(
+      `BILLING: ${row.reason} of ${row.delta} credits failed for ${row.user_id} ` +
+        `(ref ${row.ref_id}): ${error.message}`
+    );
+  }
+}
+
 async function handleCheckoutCompleted(admin: ReturnType<typeof createAdminClient>, session: Obj) {
   const meta = (session.metadata as Obj) ?? null;
   if (str(session.mode) === "payment" && str(meta?.kind) === "boost") {
@@ -88,12 +115,12 @@ async function handleCheckoutCompleted(admin: ReturnType<typeof createAdminClien
 
     const credits = Number(str(meta?.credits)) || 0;
     if (credits > 0) {
-      await admin
-        .from("credit_ledger")
-        .upsert(
-          [{ user_id: userId, delta: credits, reason: "boost", ref_id: sessionId }],
-          { onConflict: "user_id,reason,ref_id", ignoreDuplicates: true }
-        );
+      await grantOnce(admin, {
+        user_id: userId,
+        delta: credits,
+        reason: "boost",
+        ref_id: sessionId,
+      });
     }
   }
   // mode=subscription sessions need nothing here: the subscription events
@@ -117,17 +144,12 @@ async function handleRefund(admin: ReturnType<typeof createAdminClient>, charge:
     .eq("status", "completed");
   // The claw-back mirrors the grant, keyed to the same session so a
   // redelivered refund event can't double-debit.
-  await admin.from("credit_ledger").upsert(
-    [
-      {
-        user_id: purchase.user_id as string,
-        delta: -(purchase.credits as number),
-        reason: "boost_refund",
-        ref_id: (purchase.stripe_checkout_session as string) ?? paymentIntent,
-      },
-    ],
-    { onConflict: "user_id,reason,ref_id", ignoreDuplicates: true }
-  );
+  await grantOnce(admin, {
+    user_id: purchase.user_id as string,
+    delta: -(purchase.credits as number),
+    reason: "boost_refund",
+    ref_id: (purchase.stripe_checkout_session as string) ?? paymentIntent,
+  });
 }
 
 export async function POST(req: Request) {

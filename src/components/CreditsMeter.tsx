@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { ACTION_ESTIMATES } from "@/lib/credits";
+import { BOOST_LIST, BOOSTS_NOTE } from "@/lib/boosts";
 import { AI_NAME } from "@/lib/branding";
 
 export interface CreditsInfo {
@@ -59,15 +60,13 @@ function spendSummary(c: CreditsInfo): string {
  *  the mock is deliberately absent until the server can actually do it —
  *  a toggle that silently does nothing is worse than none. */
 export function BoostSheet({ balance, onClose }: { balance: number | null; onClose: () => void }) {
-  const [pack, setPack] = useState("750");
+  // One source for the packs — this list used to be hand-copied from
+  // BOOST_PACKS, and drifted the moment the packs were repriced.
+  const packs = BOOST_LIST;
+  const [pack, setPack] = useState(packs.find((p) => p.best)?.id ?? packs[0].id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const packs = [
-    { id: "250", credits: "250 credits", note: `≈ 60–120 ${AI_NAME} actions`, price: "$3", best: false },
-    { id: "750", credits: "750 credits", note: "Best value — a whole new set", price: "$8", best: true },
-    { id: "1500", credits: "1,500 credits", note: "For the shoebox in the closet", price: "$19", best: false },
-  ];
   const chosen = packs.find((p) => p.id === pack)!;
 
   async function buy() {
@@ -150,7 +149,8 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
         </button>
         {error && <p className="mt-2 text-sm text-brand-negative">{error}</p>}
         <p className="mb-0 mt-2.5 text-center text-[11.5px] leading-[1.5] text-brand-ink5">
-          One-off charge, no subscription change. Refundable within 14 days if unused.
+          {BOOSTS_NOTE} One-off charge, no subscription change. Refundable within 14 days if
+          unused.
         </p>
       </div>
     </div>

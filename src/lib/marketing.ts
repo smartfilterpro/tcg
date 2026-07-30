@@ -2,7 +2,7 @@
 // tables the landing and pricing pages render. Copy that is just sentences
 // lives in the components.
 
-import { BOOST_PACKS } from "@/lib/stripe";
+import { BOOST_LIST, BOOSTS_NOTE } from "@/lib/boosts";
 import { MONTHLY_GRANT, SIGNUP_GRANT } from "@/lib/credits";
 
 /** Hand-measured, hand-updated — the owner's decision over wiring these to
@@ -111,18 +111,9 @@ export const TIERS: Tier[] = [
   },
 ];
 
-export const BOOSTS = Object.entries(BOOST_PACKS).map(([pack, spec]) => ({
-  pack,
-  credits: `${spec.credits.toLocaleString()} credits`,
-  price: `$${(spec.cents / 100).toFixed(0)}`,
-  note:
-    pack === "250"
-      ? "A weekend of scanning"
-      : pack === "750"
-        ? "Best value — a whole new set"
-        : "Shoebox amnesty",
-  best: pack === "750",
-}));
+export const BOOSTS = BOOST_LIST.map((b) => ({ pack: b.id, ...b }));
+
+export { BOOSTS_NOTE };
 
 export const FAQS = [
   {

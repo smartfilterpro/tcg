@@ -26,13 +26,7 @@ export const PLAN_PRODUCTS: Record<"pro" | "family", { productName: string; cent
 
 /** One-off boost packs. Sold with ad-hoc price_data, so no Stripe product
  *  needs to exist for them. */
-export const BOOST_PACKS: Record<string, { credits: number; cents: number; label: string }> = {
-  "250": { credits: 250, cents: 300, label: "250 credits" },
-  "750": { credits: 750, cents: 800, label: "750 credits (best value)" },
-  // Was 2,000 credits at the same $19 — $20 of AI against $18.15 net, so the
-  // biggest pack was the only one sold at a loss. 1,500 leaves ~$3.15.
-  "1500": { credits: 1500, cents: 1900, label: "1,500 credits" },
-};
+export { BOOST_PACKS } from "@/lib/boosts";
 
 /** Flatten nested params into Stripe's bracket form encoding:
  *  { line_items: [{ price: "x", quantity: 1 }] }
