@@ -475,7 +475,7 @@ export default function CollectionPage() {
             </span>
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button className="btn-secondary" onClick={refreshPrices} disabled={refreshing}>
             {refreshing ? "Refreshing…" : "↻ Refresh prices"}
           </button>
@@ -492,9 +492,9 @@ export default function CollectionPage() {
       <BulkScanNudge cards={totals.cards} />
 
       {/* Artboard 02: one wrapping row — search pill, then chip-style selects. */}
-      <div className="mb-3.5 flex flex-wrap gap-2">
+      <div className="mb-3.5 flex flex-wrap items-center gap-2">
         <input
-          className="min-w-[200px] max-w-[420px] flex-[1_1_240px] rounded-full border border-brand-line-strong bg-white px-4 py-2.5 text-sm outline-none placeholder:text-brand-ink5 focus:border-brand-accent focus:ring-[3px] focus:ring-brand-accent/15"
+          className="min-w-[150px] flex-[1_1_180px] rounded-full border border-brand-line-strong bg-white px-4 py-2.5 text-sm outline-none placeholder:text-brand-ink5 focus:border-brand-accent focus:ring-[3px] focus:ring-brand-accent/15"
           type="search"
           placeholder="🔍 Search your cards by name…"
           value={search}
@@ -509,7 +509,7 @@ export default function CollectionPage() {
         ].map((f) => (
           <select
             key={f.all}
-            className={`max-w-[46vw] cursor-pointer rounded-full border bg-white px-3.5 py-2.5 text-[13px] outline-none ${
+            className={`max-w-[46vw] shrink-0 cursor-pointer rounded-full border bg-white px-3 py-2.5 text-[13px] outline-none ${
               f.value ? "border-brand-accent text-brand-accent" : "border-brand-line-strong text-brand-ink2"
             }`}
             value={f.value}
@@ -522,7 +522,7 @@ export default function CollectionPage() {
           </select>
         ))}
         <select
-          className="max-w-[46vw] cursor-pointer rounded-full border border-brand-line-strong bg-white px-3.5 py-2.5 text-[13px] text-brand-ink2 outline-none"
+          className="max-w-[46vw] shrink-0 cursor-pointer rounded-full border border-brand-line-strong bg-white px-3 py-2.5 text-[13px] text-brand-ink2 outline-none"
           value={sort}
           onChange={(e) => setSort(e.target.value as SortKey)}
         >
@@ -551,7 +551,7 @@ export default function CollectionPage() {
           return (
           <button
             key={group.card.id}
-            className="card-panel group relative overflow-hidden p-2 text-left transition-transform hover:-translate-y-0.5 hover:shadow-md"
+            className="group relative overflow-hidden rounded-xl border border-brand-line bg-white p-2 text-left transition-shadow hover:shadow-[0_8px_20px_-14px_rgba(22,23,27,.5)]"
             onClick={() => openDetail(item)}
           >
             {group.quantity > 1 && (
@@ -573,7 +573,7 @@ export default function CollectionPage() {
             {hasImage(item) ? (
               // Fixed card aspect ratio — user-taken photos (arbitrary shapes)
               // otherwise distort the grid
-              <div className="aspect-[63/88] w-full overflow-hidden rounded">
+              <div className="aspect-[63/88] w-full overflow-hidden rounded-[7px]">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={item.card.image_small!}
@@ -584,17 +584,17 @@ export default function CollectionPage() {
                 />
               </div>
             ) : (
-              <div className="flex aspect-[63/88] flex-col items-center justify-center gap-1 rounded bg-slate-100 text-center text-xs text-slate-400">
+              <div className="flex aspect-[63/88] flex-col items-center justify-center gap-1 rounded-[7px] bg-brand-sunken text-center text-xs text-brand-ink5">
                 <span className="text-xl">📷</span>
                 No image — tap to add a photo
               </div>
             )}
-            <div className="mt-2 truncate text-sm font-semibold">{item.card.name}</div>
-            <div className="truncate text-xs text-slate-500">
+            <div className="mt-2 truncate text-[13.5px] font-medium">{item.card.name}</div>
+            <div className="truncate text-[11.5px] text-brand-ink4">
               {item.card.set_name} · #{item.card.number}
             </div>
             {group.maxPrice != null && (
-              <div className="mt-1 font-mono text-[11.5px] font-medium text-brand-positive">
+              <div className="mt-[3px] font-mono text-[11.5px] font-medium text-brand-positive">
                 {/* A range when the finishes differ — one number would be
                     wrong for every finish but one. */}
                 ${group.minPrice!.toFixed(2)}

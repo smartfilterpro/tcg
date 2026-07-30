@@ -23,15 +23,15 @@ export default function HeaderCredits() {
   return (
     <>
       <span
-        className={`flex shrink-0 items-center gap-2 rounded-full border py-1 pl-2.5 pr-1 ${
+        className={`flex shrink-0 items-center gap-2 rounded-full border py-1.5 pl-3 pr-2 ${
           empty ? "border-brand-highlight bg-brand-highlight" : "border-dark-line3 bg-dark-tile"
         }`}
       >
-        <span className={`font-mono text-[11.5px] ${empty ? "text-brand-ink" : "text-white"}`}>
-          {credits.balance.toLocaleString()} cr
+        <span className={`font-mono text-xs ${empty ? "text-brand-ink" : "text-white"}`}>
+          {credits.balance.toLocaleString()} credits
         </span>
         <button
-          className="rounded-full bg-brand-highlight px-2.5 py-0.5 text-[11.5px] font-medium text-brand-ink"
+          className="rounded-full bg-brand-highlight px-3 py-1 text-xs font-medium text-brand-ink"
           onClick={() => setBoost(true)}
         >
           Boost
