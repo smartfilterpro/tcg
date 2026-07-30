@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requestOrigin } from "@/lib/requestOrigin";
 import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -42,7 +43,7 @@ export async function POST(req: Request) {
       user.email ?? null,
       (profile?.stripe_customer as string | null) ?? null
     );
-    const origin = req.headers.get("origin") ?? new URL(req.url).origin;
+    const origin = requestOrigin(req);
     const priceId = await planPriceId(plan);
 
     const session = await stripeFetch("/checkout/sessions", {

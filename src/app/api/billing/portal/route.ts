@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requestOrigin } from "@/lib/requestOrigin";
 import { requireUser, AuthError } from "@/lib/auth";
 import { stripeEnabled, stripeFetch, StripeError } from "@/lib/stripe";
 
@@ -23,7 +24,7 @@ export async function POST(req: Request) {
         { status: 404 }
       );
     }
-    const origin = req.headers.get("origin") ?? new URL(req.url).origin;
+    const origin = requestOrigin(req);
     const session = await stripeFetch("/billing_portal/sessions", {
       params: { customer, return_url: `${origin}/` },
     });
