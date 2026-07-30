@@ -155,7 +155,38 @@ export default function TermsPage() {
           </p>
         </Section>
 
-        <Section title="10. Limitation of liability">
+        <Section title="10. Payments, credits and refunds">
+          <p>
+            Paid plans and credit boosts are billed through Stripe. We never see or store your
+            card details.
+          </p>
+          <p>
+            <b>Payments are final.</b> Subscription charges and boost purchases are not
+            refundable. You may cancel a subscription at any time and you keep access until the
+            end of the billing period you have already paid for; cancelling part-way through a
+            period does not produce a partial refund.
+          </p>
+          <p>
+            Credits are a prepaid allowance for running AI features. They have no cash value,
+            cannot be exchanged for money, and cannot be transferred to another account. Credits
+            included with a subscription end when that subscription ends. Credits bought as a
+            boost remain on your account and stay usable, including on the free plan. Deleting
+            your account forfeits all remaining credits of either kind, and they are not
+            reimbursed.
+          </p>
+          <p>
+            A request that fails before it reaches the AI provider is not charged. A request that
+            fails part-way through has already consumed the resources it is billed for, and that
+            consumption is not refunded. We do not guarantee any particular result, grade,
+            valuation, or deck from any request.
+          </p>
+          <p>
+            Nothing in this section limits any rights you have under consumer law that cannot be
+            waived by agreement. Where such rights apply, they apply regardless of the above.
+          </p>
+        </Section>
+
+        <Section title="11. Limitation of liability">
           <p>
             TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SERVICE, ITS OPERATOR, AND
             ADMINISTRATORS SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
@@ -170,7 +201,7 @@ export default function TermsPage() {
           </p>
         </Section>
 
-        <Section title="11. Indemnification">
+        <Section title="12. Indemnification">
           <p>
             You agree to defend, indemnify, and hold harmless the Service, its operator, and
             administrators from claims, damages, and expenses (including reasonable
@@ -179,7 +210,7 @@ export default function TermsPage() {
           </p>
         </Section>
 
-        <Section title="12. Changes, suspension, and termination of the Service">
+        <Section title="13. Changes, suspension, and termination of the Service">
           <p>
             We may modify or discontinue any part of the Service at any time. We may update
             these Terms; when we do, you may be asked to accept the updated Terms to keep
@@ -187,7 +218,7 @@ export default function TermsPage() {
           </p>
         </Section>
 
-        <Section title="13. General">
+        <Section title="14. General">
           <p>
             These Terms are the entire agreement about the Service. If any provision is found
             unenforceable, the rest remain in effect. Failure to enforce a provision is not a

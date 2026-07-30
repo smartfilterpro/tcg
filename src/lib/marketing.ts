@@ -120,7 +120,7 @@ export const FAQS = [
   },
   {
     q: "What happens if I cancel?",
-    a: "Cancel any time from billing and you keep access to the end of the cycle you've paid for. Your monthly credits end with the plan; boost credits you bought stay on your account and keep working on the free plan. Deleting your account forfeits any credits left, including boosts. If a purchase went wrong, email us — we sort those out case by case.",
+    a: "Cancel any time from billing and you keep access to the end of the cycle you've paid for — there's no partial refund for the rest of it. Your monthly credits end with the plan; boost credits you bought stay on your account and keep working on the free plan. Payments are final, and deleting your account forfeits any credits left, including boosts.",
   },
   {
     q: "Is this affiliated with Pokémon?",

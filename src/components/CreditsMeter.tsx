@@ -152,8 +152,8 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
         </button>
         {error && <p className="mt-2 text-sm text-brand-negative">{error}</p>}
         <p className="mb-0 mt-2.5 text-center text-[11.5px] leading-[1.5] text-brand-ink5">
-          {BOOSTS_NOTE} One-off charge, no subscription change — and these stay yours if you
-          later cancel your plan.
+          {BOOSTS_NOTE} One-off charge, no subscription change. Credits are added straight away
+          and the payment is final; they stay yours if you later cancel your plan.
         </p>
       </div>
     </div>

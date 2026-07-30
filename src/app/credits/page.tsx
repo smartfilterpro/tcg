@@ -75,12 +75,13 @@ export default function CreditsPage() {
           from any particular request.
         </p>
         <p className="m-0 text-[14px] leading-[1.65] text-brand-ink2">
-          That said, if something breaks badly or a run misfires in a way that clearly isn&apos;t
-          your doing,{" "}
+          Payments are final — subscriptions and boosts aren&apos;t refunded, and credits have no
+          cash value. If something is genuinely broken,{" "}
           <Link href="/support" className="underline">
             tell us
-          </Link>{" "}
-          — we put credits back by hand more often than not.
+          </Link>
+          : we&apos;d rather fix the thing that failed than argue about a few credits, but that
+          is us choosing to, not something you&apos;re owed.
         </p>
       </div>
 
@@ -115,7 +116,8 @@ export default function CreditsPage() {
           <li>
             <b>Cancelling keeps you on the plan until the end of the cycle you&apos;ve paid
             for.</b>{" "}
-            Nothing changes before then.
+            Nothing changes before then, and there&apos;s no partial refund for the rest of the
+            cycle — you keep the access instead.
           </li>
           <li>
             <b>Monthly credits end with the plan.</b> The allowance comes with the subscription
