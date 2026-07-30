@@ -57,11 +57,21 @@ export async function POST(req: Request) {
       messages: [
         {
           role: "user",
-          content: `THE PLAYER'S DECK (JSON):\n${JSON.stringify({
-            name: deck.name,
-            strategy: deck.strategy,
-            cards: deck.cards,
-          })}\n\nPLAYER'S QUESTION: ${question.trim()}`,
+          // Lines, not JSON. A 60-card deck as JSON repeats "name",
+          // "quantity", "category", "card_id" and "reason" on every entry —
+          // 57% of this payload was field names and punctuation.
+          content:
+            `THE PLAYER'S DECK — "${deck.name ?? "Untitled"}"\n` +
+            (deck.strategy ? `Their notes: ${deck.strategy}\n` : "") +
+            `Cards, one per line, as: qty name [category] — why it's in the deck\n` +
+            (deck.cards ?? [])
+              .map(
+                (c) =>
+                  `${c.quantity}x ${c.name} [${c.category}]` +
+                  (c.reason ? ` — ${c.reason}` : "")
+              )
+              .join("\n") +
+            `\n\nPLAYER'S QUESTION: ${question.trim()}`,
         },
       ],
     });
