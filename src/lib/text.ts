@@ -10,6 +10,23 @@ export function normalizeForSearch(s: string): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
+/** Compact relative time for timestamps that sit beside a name — "2h",
+ *  "yesterday", "3 days", the shapes the artboards use. Falls back to a date
+ *  once something is old enough that "47 days" stops being informative. */
+export function shortAgo(iso: string, now: Date = new Date()): string {
+  const then = new Date(iso);
+  const mins = Math.round((now.getTime() - then.getTime()) / 60000);
+  if (!Number.isFinite(mins)) return "";
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  if (days === 1) return "yesterday";
+  if (days < 14) return `${days} days`;
+  return then.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 /** Token-based, punctuation/accent-blind matching: every word of the query
  *  must appear somewhere in the combined fields — in any order, and words
  *  can hit different fields ("pikachu 151" matches name + set name). */

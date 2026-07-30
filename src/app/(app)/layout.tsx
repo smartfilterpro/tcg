@@ -4,18 +4,7 @@ import { APP_NAME, FAN_DISCLAIMER } from "@/lib/branding";
 import { FanMark, Wordmark } from "@/components/Logo";
 import HeaderCredits from "@/components/HeaderCredits";
 import AppNav from "@/components/AppNav";
-
-function initialsOf(name: string | null | undefined, email: string | null | undefined): string {
-  const source = (name ?? "").trim() || (email ?? "").split("@")[0];
-  const parts = source.split(/[\s._-]+/).filter(Boolean);
-  return (
-    parts
-      .map((w) => w[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase() || "T"
-  );
-}
+import { initialsFor } from "@/lib/avatar";
 
 /** The signed-in app shell, per App Screens artboard 02: dark bar with the
  *  nav sitting on its full height, the active item underlined in the
@@ -74,7 +63,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-brand-accent text-[12.5px] font-bold text-white"
               title={auth.profile?.email ?? undefined}
             >
-              {initialsOf(auth.profile?.display_name, auth.profile?.email)}
+              {initialsFor(auth.profile?.display_name, auth.profile?.email)}
             </span>
             <Link
               href="/support"
