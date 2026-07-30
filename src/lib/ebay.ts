@@ -188,6 +188,48 @@ export async function ebayFetch(
 
 /* ----------------------------------------------------------------- probe */
 
+/** What a configured credential looks like, without printing it.
+ *
+ *  "invalid_client" tells you the pair was rejected and nothing about why,
+ *  and the three ways to get here are indistinguishable from the outside:
+ *  a sandbox keyset in the production slot, the two values swapped, or an
+ *  OAuth *access token* pasted where a keyset credential belongs. Each has
+ *  a visible signature that doesn't require revealing the value. */
+export interface CredentialShape {
+  set: boolean;
+  length: number;
+  /** eBay stamps PRD or SBX into both halves of a keyset. */
+  looksLike: "production" | "sandbox" | "access-token" | "unknown";
+  /** Enough to recognise, not enough to use. */
+  hint: string;
+  /** True if the stored value had leading/trailing whitespace. We trim it,
+   *  but a value that needed trimming was probably pasted carelessly. */
+  hadWhitespace: boolean;
+  /** The Cert ID starts with PRD-/SBX-; the App ID carries it mid-string. */
+  startsWithMarker: boolean;
+}
+
+function shapeOf(raw: string): CredentialShape {
+  const value = raw.trim();
+  // The API Explorer's generated token. Long, and starts with this marker.
+  const isAccessToken = value.startsWith("v^") || value.length > 200;
+  const looksLike = isAccessToken
+    ? "access-token"
+    : /PRD-/i.test(value)
+      ? "production"
+      : /SBX-/i.test(value)
+        ? "sandbox"
+        : "unknown";
+  return {
+    set: value.length > 0,
+    length: value.length,
+    looksLike,
+    hint: value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : "(too short to show)",
+    hadWhitespace: raw !== value,
+    startsWithMarker: /^(PRD|SBX)-/i.test(value),
+  };
+}
+
 export interface EbayAccess {
   configured: boolean;
   /** Browse — active listings. Any production keyset has this. */
@@ -196,8 +238,42 @@ export interface EbayAccess {
   insights: boolean;
   environment: "production" | "sandbox";
   marketplace: string;
+  credentials: { clientId: CredentialShape; clientSecret: CredentialShape };
   /** Human-readable outcome per check, for the admin panel. */
   notes: string[];
+}
+
+/** Faults visible without calling eBay at all. */
+function credentialComplaints(
+  id: CredentialShape,
+  secret: CredentialShape,
+  env: "production" | "sandbox"
+): string[] {
+  const out: string[] = [];
+  for (const [name, s] of [
+    ["EBAY_CLIENT_ID", id],
+    ["EBAY_CLIENT_SECRET", secret],
+  ] as const) {
+    if (s.looksLike === "access-token") {
+      out.push(
+        `${name} looks like a generated OAuth application token, not a keyset ` +
+          `credential. Those expire in hours and are for eBay's API Explorer — ` +
+          `this needs the App ID / Cert ID from Application Keys.`
+      );
+    } else if (s.looksLike === "sandbox" && env === "production") {
+      out.push(`${name} is a SANDBOX credential but EBAY_ENV is production.`);
+    } else if (s.looksLike === "production" && env === "sandbox") {
+      out.push(`${name} is a PRODUCTION credential but EBAY_ENV is sandbox.`);
+    }
+    if (s.hadWhitespace) out.push(`${name} had surrounding whitespace (trimmed, but check it).`);
+  }
+  // Shape, not length: the Cert ID *begins* PRD-/SBX-, while the App ID
+  // carries the same marker in the middle of a dash-separated name. A value
+  // starting with the marker in the client-id slot means they were swapped.
+  if (id.set && secret.set && id.startsWithMarker && !secret.startsWithMarker) {
+    out.push("EBAY_CLIENT_ID and EBAY_CLIENT_SECRET look swapped — the Cert ID goes in SECRET.");
+  }
+  return out;
 }
 
 /** What this keyset can actually do, right now.
@@ -206,13 +282,19 @@ export interface EbayAccess {
  *  endpoint refuses a scope the application was never granted, so asking for
  *  it IS the check. */
 export async function probeAccess(): Promise<EbayAccess> {
+  const environment = host() === HOSTS.sandbox ? "sandbox" : "production";
+  const credentials = {
+    clientId: shapeOf(process.env.EBAY_CLIENT_ID ?? ""),
+    clientSecret: shapeOf(process.env.EBAY_CLIENT_SECRET ?? ""),
+  };
   const out: EbayAccess = {
     configured: ebayEnabled(),
     browse: false,
     insights: false,
-    environment: host() === HOSTS.sandbox ? "sandbox" : "production",
+    environment,
     marketplace: marketplace(),
-    notes: [],
+    credentials,
+    notes: credentialComplaints(credentials.clientId, credentials.clientSecret, environment),
   };
   if (!out.configured) {
     out.notes.push("EBAY_CLIENT_ID / EBAY_CLIENT_SECRET are not set.");
@@ -227,8 +309,11 @@ export async function probeAccess(): Promise<EbayAccess> {
     const msg = err instanceof Error ? err.message : String(err);
     // A 404 here is never the credentials — eBay would have to reach the
     // endpoint to reject them. It means the token URL itself is wrong.
-    const hint =
-      err instanceof EbayError && err.status === 404
+    // If something specific was already spotted in the credentials, don't
+    // follow it with generic advice that sends the reader somewhere else.
+    const hint = out.notes.length
+      ? "See the credential problems above."
+      : err instanceof EbayError && err.status === 404
         ? "A 404 means the token URL is wrong, not the keys."
         : err instanceof EbayError && err.status === 401
           ? "Check the key pair, and that a sandbox keyset didn't land in the production slot."
