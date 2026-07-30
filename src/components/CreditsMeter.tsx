@@ -37,6 +37,7 @@ const REASON_LABELS: Record<string, string> = {
   grade: "Grading reports",
   boost_refund: "Refunds",
   admin_grant: "Added by support",
+  plan_expired: "Plan ended",
   admin_adjustment: "Support adjustment",
 };
 

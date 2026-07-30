@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ensureCustomer, stripeEnabled, stripeFetch, StripeError } from "@/lib/stripe";
+import { expirePlanCredits } from "@/lib/credits";
 
 export const maxDuration = 30;
 
@@ -57,10 +58,17 @@ export async function POST() {
             billing_anchor: null,
           })
           .eq("id", user.id);
+        // Same rule as the webhook: the monthly allowance ends with the
+        // plan, anything bought or granted outright stays.
+        const expired = await expirePlanCredits(admin, user.id, `sync:${customer}`);
         return NextResponse.json({
           ok: true,
           plan: "free",
-          message: "Stripe has no active subscription for you, so the plan is back to Free.",
+          message:
+            "Stripe has no active subscription for you, so the plan is back to Free." +
+            (expired > 0
+              ? ` ${expired.toLocaleString()} plan credits ended with it; any boost credits you bought are still here.`
+              : ""),
         });
       }
       return NextResponse.json({

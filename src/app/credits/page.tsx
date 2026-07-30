@@ -107,6 +107,35 @@ export default function CreditsPage() {
         </ul>
       </div>
 
+      <div className={`${PANEL} mb-5`}>
+        <h2 className="m-0 mb-3 font-display text-[19px] font-bold tracking-[-.02em]">
+          If you cancel, or leave
+        </h2>
+        <ul className="m-0 list-disc space-y-2 pl-5 text-[14px] leading-[1.6] text-brand-ink2">
+          <li>
+            <b>Cancelling keeps you on the plan until the end of the cycle you&apos;ve paid
+            for.</b>{" "}
+            Nothing changes before then.
+          </li>
+          <li>
+            <b>Monthly credits end with the plan.</b> The allowance comes with the subscription
+            and goes with it — whatever&apos;s left over on the last day isn&apos;t carried into
+            the free plan.
+          </li>
+          <li>
+            <b>Boost credits are yours and stay.</b> You bought those separately, so they survive
+            a cancellation and keep working on the free plan. Spending draws on the monthly
+            allowance first and boosts last, so a plan ending can&apos;t take credits you paid
+            cash for.
+          </li>
+          <li>
+            <b>Deleting your account forfeits any remaining credits, including boosts.</b> We
+            don&apos;t reimburse them. If you have boost credits left and think you might come
+            back, cancel instead of deleting — cancelling keeps them.
+          </li>
+        </ul>
+      </div>
+
       <p className="text-[13px] leading-[1.6] text-brand-ink5">
         Running low doesn&apos;t lock you out of {APP_NAME} — only new AI requests pause.{" "}
         <Link href="/pricing" className="underline">

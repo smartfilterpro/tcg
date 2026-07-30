@@ -412,6 +412,14 @@ export default function AccountPage() {
           </button>
         ) : (
           <div className="flex flex-col gap-2">
+            {/* Said at the point of no return, not buried in a policy page.
+                Someone with boost credits left should find this out here,
+                while cancelling instead is still an option. */}
+            <p className="m-0 text-[12.5px] leading-[1.55] text-brand-ink2">
+              This also forfeits any credits left on the account, <b>including boost credits you
+              paid for</b> — they aren&apos;t reimbursed. If you might come back, cancel your plan
+              instead: cancelling keeps your boosts.
+            </p>
             <label className="text-[12.5px] text-brand-ink2">
               Type <b className="font-mono">{data.email}</b> to confirm.
             </label>

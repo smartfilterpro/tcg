@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllRows } from "@/lib/fetchAll";
 import { AI_NAME } from "@/lib/branding";
 
 /** One-time signup grant (≈ $1 of AI). Never refills — it sits there until
@@ -199,11 +200,89 @@ async function sumDeltas(
   userIds: string[],
   opts?: { since?: Date; negativeOnly?: boolean }
 ): Promise<number> {
-  let q = admin.from("credit_ledger").select("delta").in("user_id", userIds);
-  if (opts?.since) q = q.gte("created_at", opts.since.toISOString());
-  if (opts?.negativeOnly) q = q.lt("delta", 0);
-  const { data } = await q;
-  return (data ?? []).reduce((s, r) => s + (r.delta as number), 0);
+  // Paged. PostgREST caps a response at 1,000 rows, and the ledger gains a
+  // row per AI call — a few months of real use passes a thousand, at which
+  // point an unpaged sum silently stops counting the rest and the balance
+  // is simply wrong. Ordered totally so paging can't drop or repeat rows.
+  const { data } = await fetchAllRows<{ delta: number }>(() => {
+    let q = admin
+      .from("credit_ledger")
+      .select("delta")
+      .in("user_id", userIds)
+      .order("created_at")
+      .order("id");
+    if (opts?.since) q = q.gte("created_at", opts.since.toISOString());
+    if (opts?.negativeOnly) q = q.lt("delta", 0);
+    return q;
+  });
+  return data.reduce((s, r) => s + (r.delta ?? 0), 0);
+}
+
+/** Credits that were BOUGHT or GIVEN outright, and survive a plan ending.
+ *
+ *  A monthly allowance is rent: it comes with the subscription and goes with
+ *  it. A boost is property — someone paid cash for those credits separately,
+ *  and taking them back because a subscription lapsed would be keeping money
+ *  for nothing. Admin grants sit on the same side: they were given to make
+ *  something right, and expiring them would undo the apology.
+ */
+const PERSISTENT_REASONS = new Set([
+  "boost",
+  "boost_refund",
+  "admin_grant",
+  "admin_adjustment",
+]);
+
+/** End-of-subscription clean-up: monthly credits go, bought credits stay.
+ *
+ *  Spending draws down the monthly allowance FIRST and boosts last, which is
+ *  the reading that favours the person who paid: you never lose a boost you
+ *  bought because a plan you also paid for happened to expire. Concretely
+ *  the surviving balance is whatever remains of the persistent credits, and
+ *  the rest is written off with an explicit ledger row rather than by
+ *  deleting history.
+ *
+ *  Returns how many credits were removed. Idempotent through `ref`: a
+ *  redelivered cancellation cannot expire the same credits twice.
+ */
+export async function expirePlanCredits(
+  admin: SupabaseClient,
+  userId: string,
+  ref: string
+): Promise<number> {
+  const { data } = await fetchAllRows<{ delta: number; reason: string }>(() =>
+    admin
+      .from("credit_ledger")
+      .select("delta, reason")
+      .eq("user_id", userId)
+      .order("created_at")
+      .order("id")
+  );
+
+  const balance = data.reduce((s, r) => s + (r.delta ?? 0), 0);
+  if (balance <= 0) return 0;
+
+  const persistent = data
+    .filter((r) => PERSISTENT_REASONS.has(r.reason))
+    .reduce((s, r) => s + (r.delta ?? 0), 0);
+
+  // Can't survive more than is actually there, and can't be negative.
+  const surviving = Math.max(0, Math.min(balance, persistent));
+  const toExpire = balance - surviving;
+  if (toExpire <= 0) return 0;
+
+  const { error } = await admin.from("credit_ledger").insert({
+    user_id: userId,
+    delta: -toExpire,
+    reason: "plan_expired",
+    ref_id: ref,
+  });
+  // 23505 is the redelivery we wanted to ignore; anything else is real.
+  if (error && error.code !== "23505") {
+    console.error(`credit expiry failed for ${userId}: ${error.message}`);
+    return 0;
+  }
+  return error ? 0 : toExpire;
 }
 
 export interface CreditStatus {
