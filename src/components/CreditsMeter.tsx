@@ -1,9 +1,11 @@
 "use client";
 
 // The credits meter (replaces the old percentage AiMeter) and the boost
-// sheet. One credit is one cent of AI, and the meter's job is to make that
-// legible: the count, the dollar equivalent, and where they went — no
-// opaque percentages.
+// sheet. A credit still maps to a cent of real cost internally — that is what
+// keeps the ledger auditable — but the meter deliberately does NOT say so.
+// Quoting the balance in dollars makes the whole allowance sound like pocket
+// change; what the user needs to read is the count, what it has been spent
+// on, and how much runway is left. No opaque percentages either.
 
 import { useEffect, useState } from "react";
 import { ACTION_ESTIMATES } from "@/lib/credits";

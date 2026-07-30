@@ -26,7 +26,6 @@ export const CREDIT_COSTS = [
   { action: "Deck review", cost: "5–15 credits" },
   { action: "Coach reply", cost: "1–3 credits" },
   { action: "Grading report", cost: "8–15 credits" },
-  { action: "Practice battle vs the bot", cost: "Free" },
 ] as const;
 
 export const CREDIT_COSTS_NOTE =
@@ -56,16 +55,16 @@ export const TIERS: Tier[] = [
     price: "$0",
     per: "forever",
     credits: `${SIGNUP_GRANT} credits, one time`,
-    creditsNote: "≈ $1 of Trainer AI — a few bulk scans and your first deck build",
+    creditsNote: "Enough for a few bulk scans and your first deck build",
     featured: false,
     dark: false,
     features: [
       f("Unlimited cards and decks"),
       f("Add cards by database search"),
       f("Collection value + weekly price refresh"),
-      f("CSV export"),
+      f("Two-player battles"),
+      f("CSV export", false),
       f("Ongoing Trainer AI credits", false),
-      f("Grading, AI battles, coaching", false),
     ],
     cta: "Start free",
     href: "/signup",
@@ -84,9 +83,8 @@ export const TIERS: Tier[] = [
       f("Bulk camera scanning, 20+ cards a shot"),
       f("Trainer AI deck building + coaching"),
       f("Card grading reports"),
-      f("Practice battles against the bot"),
       f("Daily price refresh"),
-      f("Claude Cowork export + API link"),
+      f("CSV export of your whole collection"),
     ],
     cta: "Go Pro",
     href: "/signup?plan=pro",

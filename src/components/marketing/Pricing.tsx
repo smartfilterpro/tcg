@@ -3,6 +3,7 @@
 
 import Link from "next/link";
 import { BOOSTS, CREDIT_COSTS, CREDIT_COSTS_NOTE, FAQS, TIERS } from "@/lib/marketing";
+import { AI_NAME } from "@/lib/branding";
 
 export function PricingSection() {
   return (
@@ -88,9 +89,10 @@ export function PricingSection() {
             <div className="min-w-[280px] flex-[1_1_320px]">
               <h3 className="m-0 mb-2 font-display text-[23px] font-bold tracking-[-.02em]">What a credit is</h3>
               <p className="m-0 mb-[18px] text-[14.5px] leading-[1.6] text-brand-ink3 [text-wrap:pretty]">
-                One credit is one cent of AI. We show you the count, the cost and the history — no
-                mystery tokens, no surprise bill. Run out and nothing breaks: your collection, decks
-                and trades keep working.
+                Credits are what {AI_NAME} runs on. Each request costs what it actually takes to
+                run — the table below is what to expect — and every charge shows in your history.
+                No mystery tokens, no surprise bill. Run out and nothing breaks: your collection,
+                decks and trades keep working.
               </p>
               <div className="flex flex-col gap-px overflow-hidden rounded-xl border border-brand-line">
                 {CREDIT_COSTS.map((c, i) => (
