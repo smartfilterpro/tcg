@@ -48,7 +48,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <>
       <header className="sticky top-0 z-40 bg-brand-ink text-white shadow">
-        <div className="flex items-stretch gap-3 px-4 sm:gap-5 sm:px-6">
+        <div className="mx-auto flex max-w-[1060px] items-stretch gap-3 px-4 sm:gap-5 sm:px-6">
           <Link
             href="/"
             className="flex shrink-0 items-center gap-2.5 py-3.5"

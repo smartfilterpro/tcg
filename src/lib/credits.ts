@@ -141,12 +141,27 @@ async function ensureGrants(
       ref_id: cycleRef(cycleStart(family ? family.ownerAnchorIso : anchorIso)),
     });
   }
-  // upsert + ignoreDuplicates rides on the unique index — a racing request
-  // inserts nothing and errors nothing.
-  await admin
-    .from("credit_ledger")
-    .upsert(rows, { onConflict: "user_id,reason,ref_id", ignoreDuplicates: true })
-    .then(() => {});
+  // Plain inserts, with the duplicate swallowed — NOT an upsert.
+  //
+  // The upsert this replaces asked for ON CONFLICT (user_id, reason, ref_id),
+  // but that index is partial (WHERE ref_id IS NOT NULL). Postgres rejects a
+  // conflict target that doesn't carry the index's predicate, which PostgREST
+  // has no way to express, so every grant failed with 42P10 — and because the
+  // call ended in `.then(() => {})`, which discards the error Supabase returns
+  // rather than throws, it failed *silently*. New accounts were quietly never
+  // given their signup credits and read as "out of credits" before spending
+  // anything.
+  //
+  // Inserting and treating 23505 as success needs no conflict target at all,
+  // so it works against the partial index exactly as intended: the second
+  // attempt at the same (user, reason, ref) is a no-op. Anything else is a
+  // real fault and gets logged instead of vanishing.
+  for (const row of rows) {
+    const { error } = await admin.from("credit_ledger").insert(row);
+    if (error && error.code !== "23505") {
+      console.error(`credit grant failed (${row.reason}):`, error.message);
+    }
+  }
 }
 
 async function sumDeltas(

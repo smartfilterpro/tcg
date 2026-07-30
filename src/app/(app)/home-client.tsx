@@ -501,15 +501,15 @@ export default function CollectionPage() {
           onChange={(e) => setSearch(e.target.value)}
         />
         {[
-          { value: supertypeFilter, set: setSupertypeFilter, all: "All card types", opts: facets.supertypes.map((v) => ({ v, label: v })) },
-          { value: typeFilter, set: setTypeFilter, all: "All energy types", opts: facets.types.map((v) => ({ v, label: v })) },
+          { value: supertypeFilter, set: setSupertypeFilter, all: "All types", opts: facets.supertypes.map((v) => ({ v, label: v })) },
+          { value: typeFilter, set: setTypeFilter, all: "All energy", opts: facets.types.map((v) => ({ v, label: v })) },
           { value: setFilter, set: setSetFilter, all: "All sets", opts: facets.sets.map((v) => ({ v, label: v })) },
           { value: rarityFilter, set: setRarityFilter, all: "All rarities", opts: facets.rarities.map((v) => ({ v, label: v })) },
           { value: variantFilter, set: setVariantFilter, all: "All finishes", opts: facets.variants.map((v) => ({ v, label: variantLabel(v) })) },
         ].map((f) => (
           <select
             key={f.all}
-            className={`max-w-[46vw] shrink-0 cursor-pointer rounded-full border bg-white px-3 py-2.5 text-[13px] outline-none ${
+            className={`w-[124px] shrink-0 cursor-pointer truncate rounded-full border bg-white px-3 py-2.5 text-[13px] outline-none ${
               f.value ? "border-brand-accent text-brand-accent" : "border-brand-line-strong text-brand-ink2"
             }`}
             value={f.value}
@@ -522,7 +522,7 @@ export default function CollectionPage() {
           </select>
         ))}
         <select
-          className="max-w-[46vw] shrink-0 cursor-pointer rounded-full border border-brand-line-strong bg-white px-3 py-2.5 text-[13px] text-brand-ink2 outline-none"
+          className="w-[124px] shrink-0 cursor-pointer truncate rounded-full border border-brand-line-strong bg-white px-3 py-2.5 text-[13px] text-brand-ink2 outline-none"
           value={sort}
           onChange={(e) => setSort(e.target.value as SortKey)}
         >
