@@ -11,6 +11,8 @@ import {
 } from "@/lib/types";
 import { AI_NAME } from "@/lib/branding";
 import { avatarColor, initialsFor } from "@/lib/avatar";
+import { formatFriendCode, friendLink, normalizeFriendCode } from "@/lib/friendCode";
+import QrCode from "@/components/QrCode";
 import { matchesSearch, shortAgo } from "@/lib/text";
 
 interface PostCardRef {
@@ -1295,13 +1297,18 @@ function PalsSection({ onPals }: { onPals?: (ids: Set<string>) => void }) {
     pals: Pal[];
     incoming: PalReq[];
     outgoing: PalReq[];
-    candidates: Array<{ userId: string; name: string }>;
+    myCode: string | null;
+    allowRequests: boolean;
+    codesReady: boolean;
   }
 
   const [data, setData] = useState<PalsData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [addPick, setAddPick] = useState("");
+  const [codeDraft, setCodeDraft] = useState("");
+  const [showQr, setShowQr] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [sent, setSent] = useState<string | null>(null);
   const [openThread, setOpenThread] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
 
@@ -1319,11 +1326,23 @@ function PalsSection({ onPals }: { onPals?: (ids: Set<string>) => void }) {
 
   useEffect(() => {
     load();
+    // A friend link lands here as /friends?add=CODE. Fill the box rather than
+    // sending straight away: a link you followed shouldn't fire off a request
+    // before you've seen whose it is.
+    const add = new URLSearchParams(window.location.search).get("add");
+    if (add && normalizeFriendCode(add)) {
+      setCodeDraft(formatFriendCode(normalizeFriendCode(add)));
+      // Drop it from the URL so a refresh or a shared screenshot of the
+      // address bar doesn't keep re-offering someone else's code.
+      window.history.replaceState({}, "", window.location.pathname);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function call(input: RequestInfo, init: RequestInit) {
-    if (busy) return;
+  /** Resolves true only when the request actually succeeded, so callers can
+   *  tell "sent" from "the server said no". */
+  async function call(input: RequestInfo, init: RequestInit): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     setErr(null);
     try {
@@ -1331,10 +1350,13 @@ function PalsSection({ onPals }: { onPals?: (ids: Set<string>) => void }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Request failed");
       await load();
+      setBusy(false);
+      return true;
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Request failed");
+      setBusy(false);
+      return false;
     }
-    setBusy(false);
   }
 
   const jsonInit = (method: string, body: unknown): RequestInit => ({
@@ -1342,6 +1364,21 @@ function PalsSection({ onPals }: { onPals?: (ids: Set<string>) => void }) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+
+  /** Built in the browser so it always carries the host the user is actually
+   *  on — a link baked server-side picks up the proxy's hostname instead. */
+  const myLink = (code: string | null) =>
+    code ? friendLink(window.location.origin, code) : "";
+
+  async function copy(text: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(what);
+      setTimeout(() => setCopied(null), 2000);
+    } catch {
+      setErr(`Couldn't copy — it's ${text}`);
+    }
+  }
 
   if (!data) return null;
 
@@ -1515,33 +1552,129 @@ function PalsSection({ onPals }: { onPals?: (ids: Set<string>) => void }) {
         </div>
       )}
 
-      {data.candidates.length > 0 && (
-        <form
-          className="mt-3 flex gap-1.5"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!addPick) return;
-            call("/api/friends/requests", jsonInit("POST", { toUserId: addPick }));
-            setAddPick("");
+      {/* Add someone — by code only. There is no list to pick from any more:
+          you reach a person because they gave you their code, not because
+          they happen to have an account. */}
+      <form
+        className="mt-3 flex gap-1.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const code = normalizeFriendCode(codeDraft);
+          if (!code) {
+            setErr("Friend codes are 8 characters, like 7K4Q-M9XZ.");
+            return;
+          }
+          setSent(null);
+          call("/api/friends/requests", jsonInit("POST", { code })).then(() => {
+            setCodeDraft("");
+            setSent("Request sent — they'll see it on their Friends page.");
+          });
+        }}
+      >
+        <input
+          className="min-w-0 flex-1 rounded-full border border-brand-line-strong bg-white px-3 py-1.5 font-mono text-[12.5px] uppercase tracking-[.08em] outline-none placeholder:font-body placeholder:normal-case placeholder:tracking-normal placeholder:text-brand-ink5 focus:border-brand-accent"
+          placeholder="Enter a friend code…"
+          value={codeDraft}
+          maxLength={12}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(e) => {
+            setCodeDraft(e.target.value);
+            setSent(null);
           }}
+        />
+        <button className={palPillQuiet} disabled={busy || !normalizeFriendCode(codeDraft)}>
+          Add
+        </button>
+      </form>
+      {sent && <p className="mt-1.5 text-[12px] text-brand-positive">{sent}</p>}
+
+      {/* Your own code, to hand out. */}
+      <div className="mt-3 rounded-[14px] bg-white p-3.5">
+        <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[.1em] text-brand-ink5">
+          Your friend code
+        </div>
+        {data.codesReady && data.myCode ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-[19px] font-medium tracking-[.12em]">
+                {formatFriendCode(data.myCode)}
+              </span>
+              <button
+                type="button"
+                className="ml-auto shrink-0 rounded-full border border-brand-line-strong px-2.5 py-1 text-[11.5px] font-medium hover:bg-brand-sunken"
+                onClick={() => copy(formatFriendCode(data.myCode), "code")}
+              >
+                {copied === "code" ? "Copied" : "Copy"}
+              </button>
+              <button
+                type="button"
+                className="shrink-0 rounded-full border border-brand-line-strong px-2.5 py-1 text-[11.5px] font-medium hover:bg-brand-sunken"
+                onClick={() => copy(myLink(data.myCode), "link")}
+              >
+                {copied === "link" ? "Copied" : "Copy link"}
+              </button>
+              <button
+                type="button"
+                className="shrink-0 rounded-full border border-brand-line-strong px-2.5 py-1 text-[11.5px] font-medium hover:bg-brand-sunken"
+                onClick={() => setShowQr(!showQr)}
+              >
+                {showQr ? "Hide QR" : "QR"}
+              </button>
+            </div>
+            {showQr && (
+              <div className="mt-3 flex flex-col items-center gap-1.5">
+                <QrCode
+                  value={myLink(data.myCode)}
+                  size={184}
+                  title="Scan to add me as a pal"
+                  className="rounded-lg"
+                />
+                <span className="text-[11.5px] text-brand-ink4">
+                  Point a phone camera at this to open the request.
+                </span>
+              </div>
+            )}
+            <p className="mb-0 mt-2 text-[11.5px] leading-[1.5] text-brand-ink4">
+              Share this with someone you actually know. Anyone holding it can ask to be your pal —
+              you still choose whether to accept.
+            </p>
+          </>
+        ) : (
+          <p className="mb-0 text-[12.5px] leading-[1.55] text-brand-ink3">
+            Friend codes need a one-time database update — ask the admin to run{" "}
+            <code className="font-mono">supabase/migrations/028_friend_codes.sql</code>.
+          </p>
+        )}
+      </div>
+
+      {/* The master switch. Reciprocal: off means you can't send either. */}
+      <label className="mt-3 flex items-start gap-2.5 text-[12.5px] leading-[1.5] text-brand-ink3">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={data.allowRequests}
+          disabled={busy || !data.codesReady}
+          onClick={() =>
+            call("/api/friends/requests", jsonInit("PATCH", { allowRequests: !data.allowRequests }))
+          }
+          className={`relative mt-0.5 h-[22px] w-[38px] shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+            data.allowRequests ? "bg-brand-accent" : "bg-brand-line-strong"
+          }`}
         >
-          <select
-            className="min-w-0 flex-1 rounded-full border border-brand-line-strong bg-white px-3 py-1.5 text-[12.5px] outline-none focus:border-brand-accent"
-            value={addPick}
-            onChange={(e) => setAddPick(e.target.value)}
-          >
-            <option value="">Send a pal request to…</option>
-            {data.candidates.map((c) => (
-              <option key={c.userId} value={c.userId}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <button className={palPillQuiet} disabled={busy || !addPick}>
-            Send
-          </button>
-        </form>
-      )}
+          <span
+            className={`absolute top-0.5 h-[18px] w-[18px] rounded-full bg-white shadow transition-all ${
+              data.allowRequests ? "left-[18px]" : "left-0.5"
+            }`}
+          />
+        </button>
+        <span>
+          <b className="font-medium text-brand-ink">Let others add me</b> —{" "}
+          {data.allowRequests
+            ? "on. Someone with your code can send you a request."
+            : "off. Your code won't work for anyone, and you can't send requests either."}
+        </span>
+      </label>
 
       <p className="mt-3 text-xs leading-[1.55] text-brand-ink3">
         Pals can see decks you&apos;ve shared &ldquo;pals only&rdquo; and unlock direct messages.

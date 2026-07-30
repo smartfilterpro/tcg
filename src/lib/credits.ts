@@ -17,11 +17,23 @@ import { AI_NAME } from "@/lib/branding";
  *  used, however long that takes. */
 export const SIGNUP_GRANT = 100;
 
-/** Monthly grants by plan. Family is pooled across the whole group. */
+/** Monthly grants by plan. Family is pooled across the whole group.
+ *
+ *  Sized so every paid tier clears its own AI bill at FULL consumption, not
+ *  just at typical consumption. Family used to grant 2,000: $20 of AI against
+ *  $18.15 of net revenue after card fees, so a household that actually used
+ *  what it bought cost $1.85 a month to serve — and the loss only appeared
+ *  once the plan was used as advertised, which is the worst way for a pricing
+ *  bug to behave. 1,500 leaves ~$3.15, in line with Pro's ~$3.44.
+ *
+ *  It also fixes the ladder. At 2,000 credits Family sold them at roughly
+ *  half Pro's rate per dollar, so a heavy solo user was better off buying
+ *  Family for themselves. Family is still the cheaper way to buy credits —
+ *  3x Pro's allowance for about twice the price — just not an arbitrage. */
 export const MONTHLY_GRANT: Record<string, number> = {
   free: 0,
   pro: 500,
-  family: 2000,
+  family: 1500,
 };
 
 /** Endpoints that warm shared caches (card text read during a battle or deck
