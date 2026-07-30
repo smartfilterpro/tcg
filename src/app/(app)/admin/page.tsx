@@ -783,6 +783,9 @@ export default function AdminPage() {
           <h3 className="mb-1 mt-4 text-sm font-semibold">🎟️ Give credits</h3>
           <GrantCreditsPanel />
 
+          <h3 className="mb-1 mt-4 text-sm font-semibold">🩹 Fill price &amp; image gaps</h3>
+          <PriceSyncPanel />
+
           <h3 className="mb-1 mt-4 text-sm font-semibold">💰 Price freshness</h3>
           <PriceRefreshPanel info={analytics.priceRefresh ?? null} />
 
@@ -1839,6 +1842,114 @@ function GrantCreditsPanel() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+
+/** Walk the catalogue against Pokémon Price Tracker, filling what's missing.
+ *
+ *  Bounded per press rather than run to completion: ~20,500 cards at one
+ *  credit each is slightly more than a day's allowance, so a full pass is
+ *  several presses (or several days) and the state remembers where it got to. */
+function PriceSyncPanel() {
+  const [info, setInfo] = useState<{
+    enabled: boolean;
+    budget: { used: number; cap: number; remainingUpstream: number | null };
+    state: {
+      sets: unknown[];
+      setIndex: number;
+      cardsSeen: number;
+      pricesFilled: number;
+      imagesFilled: number;
+      idsFilled: number;
+      skippedAmbiguous: number;
+      done: boolean;
+      error: string | null;
+    } | null;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/price-sync");
+      if (res.ok) setInfo(await res.json());
+    } catch {}
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function run(restart = false) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/price-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxSets: 12, restart }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Sync failed");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sync failed");
+    }
+    setBusy(false);
+  }
+
+  if (!info) return <p className="text-xs text-brand-ink5">Loading…</p>;
+  if (!info.enabled) {
+    return (
+      <p className="text-xs text-brand-ink5">
+        Needs <code className="font-mono">POKEMONPRICETRACKER_API_KEY</code> in Railway.
+      </p>
+    );
+  }
+
+  const st = info.state;
+  const total = st?.sets?.length ?? 0;
+  const pct = total > 0 ? Math.round(((st?.setIndex ?? 0) / total) * 100) : 0;
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-white p-3">
+      <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+        Fills in cards that have <b>no price</b> and <b>no picture</b>, and records the
+        TCGplayer id every bulk dataset joins on. Never overwrites a price or image we already
+        have, and never touches member photos or admin-locked art.
+      </p>
+      {st && total > 0 && (
+        <>
+          <p className="m-0 mb-1 text-xs">
+            Set {st.setIndex} of {total} ({pct}%) · {st.cardsSeen.toLocaleString()} cards seen ·{" "}
+            <b>{st.pricesFilled.toLocaleString()} prices</b>,{" "}
+            {st.imagesFilled.toLocaleString()} images, {st.idsFilled.toLocaleString()} ids filled
+            {st.skippedAmbiguous > 0 && ` · ${st.skippedAmbiguous} skipped as ambiguous`}
+          </p>
+          <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-brand-sunken">
+            <span className="block h-full bg-brand-accent" style={{ width: `${pct}%` }} />
+          </div>
+        </>
+      )}
+      <p className="m-0 mb-2 font-mono text-[11px] text-brand-ink5">
+        {info.budget.used.toLocaleString()} of {info.budget.cap.toLocaleString()} credits used
+        today
+        {info.budget.remainingUpstream != null &&
+          ` · ${info.budget.remainingUpstream.toLocaleString()} left upstream`}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button className="btn-primary text-sm" disabled={busy} onClick={() => run(false)}>
+          {busy ? "Syncing…" : st?.done ? "Run again" : "Sync next 12 sets"}
+        </button>
+        {st && !st.done && (
+          <button className="btn-secondary text-sm" disabled={busy} onClick={() => run(true)}>
+            Start over
+          </button>
+        )}
+      </div>
+      {st?.error && <p className="mb-0 mt-2 text-xs text-brand-negative">{st.error}</p>}
+      {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
     </div>
   );
 }
