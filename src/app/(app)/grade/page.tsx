@@ -47,6 +47,10 @@ const CAPTURE_PANEL = "rounded-2xl border border-brand-line bg-white p-4";
 const OUTLINE_PILL =
   "whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-[15px] py-2 text-[12.5px] font-medium hover:bg-brand-sunken";
 
+const MIGRATION_NOTE =
+  "Your saved grades are NOT gone — the database is missing a one-time update. " +
+  "Ask the admin to run supabase/migrations/024_grade_reports.sql.";
+
 /** One photo: empty slot, or the cropper plus its live flattened preview. */
 function SidePanel({
   label,
@@ -273,6 +277,7 @@ export default function GradePage() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [history, setHistory] = useState<SavedGrade[] | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [openGrade, setOpenGrade] = useState<SavedGrade | null>(null);
   const urlsRef = useRef<string[]>([]);
 
@@ -292,9 +297,19 @@ export default function GradePage() {
     try {
       const res = await fetch("/api/grade/reports");
       const json = await res.json();
+      // Surface load failures loudly — a failed fetch must never look like an
+      // empty history. Without the res.ok check this swallowed every error and
+      // rendered "no saved grades", which is indistinguishable from losing them.
+      if (!res.ok) throw new Error(json.error || "load failed");
       setHistory(json.grades ?? []);
-    } catch {
+      setHistoryError(json.migrated === false ? MIGRATION_NOTE : null);
+    } catch (e) {
       setHistory([]);
+      setHistoryError(
+        `Couldn't load your grading history just now — your saved grades are NOT gone. (${
+          e instanceof Error ? e.message : "load failed"
+        }) Refresh in a moment.`
+      );
     }
   }, []);
 
@@ -563,6 +578,12 @@ export default function GradePage() {
                 Add a photo of the front and the back, check the corner handles sit on the card,
                 then grade it. The report lands here.
               </p>
+            </div>
+          )}
+
+          {historyError && (
+            <div className="rounded-[14px] border border-[#F0DFA8] bg-[#FFF8E1] px-[17px] py-[15px] text-[13px] leading-[1.6] text-[#7A5A12]">
+              {historyError}
             </div>
           )}
 
