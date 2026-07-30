@@ -953,7 +953,32 @@ export default function AdminPage() {
             >
               ⬇ CSV — for a spreadsheet
             </a>
+            {/* Paged, because photos are heavy — 100 reports is roughly
+                50–100 MB. The offset is in the filename so batches don't
+                overwrite each other in the downloads folder. */}
+            <a
+              href="/api/admin/grade-export?format=zip&only=labelled&limit=100"
+              download
+              className="rounded-full border border-brand-line-strong bg-white px-4 py-2 text-[13px] font-medium hover:bg-brand-sunken"
+            >
+              ⬇ ZIP — labelled + photos (first 100)
+            </a>
+            <a
+              href="/api/admin/grade-export?format=zip&limit=100"
+              download
+              className="rounded-full border border-brand-line-strong bg-white px-4 py-2 text-[13px] font-medium hover:bg-brand-sunken"
+            >
+              ⬇ ZIP — everything + photos (first 100)
+            </a>
           </div>
+          <p className="mb-0 mt-2 text-[11.5px] text-brand-ink5">
+            The ZIP carries the actual photos as{" "}
+            <code className="font-mono">images/&lt;id&gt;-front.jpg</code> alongside{" "}
+            <code className="font-mono">examples.jsonl</code>, so each row&apos;s pictures are
+            matched by name with no lookup. For later batches add{" "}
+            <code className="font-mono">&amp;offset=100</code>, <code className="font-mono">200</code>{" "}
+            and so on to the URL.
+          </p>
           <p className="mb-0 mt-2.5 text-[11.5px] text-brand-ink5">
             User ids are replaced with a stable pseudonym, so you can split train/test without
             the same person landing in both, and without carrying identities into a dataset.
