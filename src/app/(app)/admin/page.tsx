@@ -116,10 +116,10 @@ interface UserUsage {
 
 function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-lg bg-slate-50 p-2.5">
+    <div className="rounded-xl bg-brand-panel-alt p-[14px]">
       <div className="text-lg font-bold leading-tight">{value}</div>
-      <div className="text-[11px] text-slate-500">{label}</div>
-      {sub && <div className="text-[10px] text-slate-400">{sub}</div>}
+      <div className="text-[11px] text-brand-ink4">{label}</div>
+      {sub && <div className="text-[10px] text-brand-ink5">{sub}</div>}
     </div>
   );
 }
@@ -474,19 +474,33 @@ export default function AdminPage() {
     return "card API";
   }
 
-  if (loading) return <p className="text-slate-500">Loading…</p>;
+  if (loading) return <p className="text-brand-ink3">Loading…</p>;
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    // Full content column. This page used to cap itself at max-w-2xl, which
+    // left it a 672px strip under a 1060px header — and squeezed the business
+    // dashboard, whose table alone needs 560px before padding.
+    <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold">Admin</h1>
-        <p className="text-sm text-slate-500">Analytics, members, card images, and support.</p>
+        <h1 className="font-display text-[26px] font-bold tracking-[-.025em]">Admin</h1>
+        <p className="mt-[3px] max-w-[70ch] text-sm leading-[1.6] text-brand-ink3">
+          The business view, members and their AI spend, card images awaiting review, and support
+          tickets.
+        </p>
       </div>
 
-      {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-      {message && <div className="rounded-lg bg-green-50 p-3 text-sm text-green-800">{message}</div>}
+      {error && (
+        <div className="rounded-[14px] border border-brand-line bg-white px-[17px] py-[15px] text-[13px] leading-[1.6] text-brand-negative">
+          {error}
+        </div>
+      )}
+      {message && (
+        <div className="rounded-[14px] border border-brand-line bg-white px-[17px] py-[15px] text-[13px] leading-[1.6] text-brand-positive">
+          {message}
+        </div>
+      )}
 
-      <div className="no-scrollbar flex gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1">
+      <div className="no-scrollbar flex gap-1 overflow-x-auto rounded-full bg-brand-sunken p-1">
         {(
           [
             ["analytics", "📊 Analytics"],
@@ -497,8 +511,10 @@ export default function AdminPage() {
         ).map(([key, label]) => (
           <button
             key={key}
-            className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-              tab === key ? "bg-white shadow-sm" : "text-slate-500 hover:text-slate-700"
+            className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-[13px] font-medium transition-colors ${
+              tab === key
+                ? "bg-white text-brand-ink shadow-sm"
+                : "text-brand-ink4 hover:text-brand-ink"
             }`}
             onClick={() => switchTab(key)}
           >
@@ -510,8 +526,8 @@ export default function AdminPage() {
       {tab === "members" && (
       <>
       <div className="card-panel p-4">
-        <h2 className="mb-2 font-semibold">Invite a friend</h2>
-        <p className="mb-2 text-xs text-slate-500">
+        <h2 className="mb-2 font-display text-[17px] font-bold">Invite a friend</h2>
+        <p className="mb-2 text-xs text-brand-ink4">
           Adds their email to the allow-list. Then just send them the app link — they&apos;ll
           create their own password on the login page.
         </p>
@@ -529,12 +545,12 @@ export default function AdminPage() {
       </div>
 
       <div className="card-panel p-4">
-        <h2 className="mb-2 font-semibold">Members ({users.length})</h2>
-        <p className="mb-1 text-xs text-slate-400">
+        <h2 className="mb-2 font-display text-[17px] font-bold">Members ({users.length})</h2>
+        <p className="mb-1 text-xs text-brand-ink5">
           AI usage = scans, deck builds, and coach questions. Costs are estimates at standard
           API rates.
         </p>
-        <ul className="divide-y divide-slate-100">
+        <ul className="divide-y divide-brand-line-soft">
           {users.map((u) => (
             <li
               key={u.id}
@@ -542,11 +558,11 @@ export default function AdminPage() {
             >
               <div>
                 <div className="text-sm font-medium">{u.display_name || u.email}</div>
-                <div className="text-xs text-slate-400">
+                <div className="text-xs text-brand-ink5">
                   {u.email} · joined {new Date(u.created_at).toLocaleDateString()} · last login{" "}
                   {formatLastLogin(lastSignIn[u.id])}
                 </div>
-                <div className="text-xs text-slate-500">
+                <div className="text-xs text-brand-ink4">
                   {usage[u.id] ? (
                     <>
                       🤖 {usage[u.id].calls} AI call{usage[u.id].calls === 1 ? "" : "s"} ·{" "}
@@ -560,7 +576,7 @@ export default function AdminPage() {
                   )}{" "}
                   ·{" "}
                   {u.role === "admin" ? (
-                    <span className="text-slate-400">no monthly cap</span>
+                    <span className="text-brand-ink5">no monthly cap</span>
                   ) : (
                     <span
                       className={
@@ -590,14 +606,14 @@ export default function AdminPage() {
                 </span>
                 {u.role !== "admin" && (
                   <button
-                    className="btn text-xs text-slate-500 hover:bg-slate-100"
+                    className="btn text-xs text-brand-ink4 hover:bg-slate-100"
                     onClick={() => setAiBudget(u)}
                   >
                     AI limit
                   </button>
                 )}
                 <button
-                  className="btn text-xs text-slate-500 hover:bg-slate-100"
+                  className="btn text-xs text-brand-ink4 hover:bg-slate-100"
                   onClick={() => resetPassword(u.id, u.email)}
                 >
                   Reset password
@@ -634,7 +650,7 @@ export default function AdminPage() {
 
       {tab === "analytics" && analytics && (
         <div className="card-panel p-4">
-          <h2 className="mb-2 font-semibold">📊 Analytics</h2>
+          <h2 className="mb-2 font-display text-[17px] font-bold">📊 Analytics</h2>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <StatTile label="Members" value={String(analytics.community.members)} />
             <StatTile label="Cards tracked" value={analytics.community.totalCards.toLocaleString()} />
@@ -661,7 +677,7 @@ export default function AdminPage() {
               then on.
             </p>
           ) : analytics.scansAllTime.scans === 0 ? (
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-brand-ink5">
               No scans recorded yet — stats collect from each saved scan.
             </p>
           ) : (
@@ -734,7 +750,7 @@ export default function AdminPage() {
               is kept, with its flattened card photos.
             </p>
           ) : (analytics.grading?.total ?? 0) === 0 ? (
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-brand-ink5">
               No cards graded yet — stats appear once members use the grading page.
             </p>
           ) : (
@@ -752,7 +768,7 @@ export default function AdminPage() {
                 />
               </div>
               {(analytics.grading?.distribution ?? []).length > 0 && (
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-brand-ink4">
                   {(analytics.grading?.distribution ?? [])
                     .map((d) => `${d.label}: ${d.count}`)
                     .join(" · ")}
@@ -775,7 +791,7 @@ export default function AdminPage() {
               scan tracks whether the holo / reverse holo / normal call was right.
             </p>
           ) : (analytics.finish?.samples ?? 0) === 0 ? (
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-brand-ink5">
               No data yet — stats appear as members save (or correct) scanned cards.
             </p>
           ) : (
@@ -791,7 +807,7 @@ export default function AdminPage() {
                 ))}
               </div>
               {analytics.finish!.confusions.length > 0 && (
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-brand-ink4">
                   Most common mix-ups:{" "}
                   {analytics.finish!.confusions
                     .map((c) => `called ${c.from}, was actually ${c.to} (×${c.count})`)
@@ -805,14 +821,14 @@ export default function AdminPage() {
 
       {tab === "support" && (
       <div className="card-panel p-4">
-        <h2 className="mb-2 font-semibold">
+        <h2 className="mb-2 font-display text-[17px] font-bold">
           🎫 Support tickets ({tickets.filter((t) => t.status !== "resolved").length} active)
         </h2>
         {tickets.length === 0 ? (
-          <p className="text-sm text-slate-400">No tickets — smooth sailing. 🎉</p>
+          <p className="text-sm text-brand-ink5">No tickets — smooth sailing. 🎉</p>
         ) : (
           <>
-            <ul className="divide-y divide-slate-100">
+            <ul className="divide-y divide-brand-line-soft">
               {tickets
                 .filter((t) => showResolved || t.status !== "resolved")
                 .map((t) => (
@@ -826,7 +842,7 @@ export default function AdminPage() {
                         }}
                       >
                         <div className="truncate text-sm font-medium">{t.subject}</div>
-                        <div className="text-xs text-slate-400">
+                        <div className="text-xs text-brand-ink5">
                           {t.authorName} · updated {new Date(t.updated_at).toLocaleDateString()} ·{" "}
                           {t.messages.length} message{t.messages.length === 1 ? "" : "s"}
                         </div>
@@ -842,7 +858,7 @@ export default function AdminPage() {
                       </select>
                     </div>
                     {ticketExpanded === t.id && (
-                      <div className="mt-2 space-y-2 border-t border-slate-100 pt-2">
+                      <div className="mt-2 space-y-2 border-t border-brand-line-soft pt-2">
                         {t.messages.map((m) => (
                           <div
                             key={m.id}
@@ -850,7 +866,7 @@ export default function AdminPage() {
                               m.isAdmin ? "ml-6 bg-poke-blue/10" : "mr-6 bg-slate-50"
                             }`}
                           >
-                            <div className="text-xs font-semibold text-slate-500">
+                            <div className="text-xs font-semibold text-brand-ink4">
                               {m.authorName}
                               {m.isAdmin && " (admin)"} · {new Date(m.created_at).toLocaleString()}
                             </div>
@@ -882,7 +898,7 @@ export default function AdminPage() {
             </ul>
             {tickets.some((t) => t.status === "resolved") && (
               <button
-                className="mt-1 text-xs text-slate-400 hover:underline"
+                className="mt-1 text-xs text-brand-ink5 hover:underline"
                 onClick={() => setShowResolved(!showResolved)}
               >
                 {showResolved ? "Hide" : "Show"}{" "}
@@ -896,8 +912,8 @@ export default function AdminPage() {
 
       {tab === "cards" && (
       <div className="card-panel p-4">
-        <h2 className="mb-2 font-semibold">🖼 Card image review ({reviewRows.length})</h2>
-        <p className="mb-2 text-xs text-slate-500">
+        <h2 className="mb-2 font-display text-[17px] font-bold">🖼 Card image review ({reviewRows.length})</h2>
+        <p className="mb-2 text-xs text-brand-ink4">
           Cards with no picture, or with photos submitted by members. Picking an image locks
           it — only an admin can change it afterwards. Wrong picture on some other card?
           Search for it below to fix it directly.
@@ -921,7 +937,7 @@ export default function AdminPage() {
           {reviewQuery && (
             <button
               type="button"
-              className="btn shrink-0 text-sm text-slate-500 hover:bg-slate-100"
+              className="btn shrink-0 text-sm text-brand-ink4 hover:bg-slate-100"
               onClick={() => {
                 setReviewQuery("");
                 setReviewSearchDraft("");
@@ -933,7 +949,7 @@ export default function AdminPage() {
           )}
         </form>
         {reviewQuery && (
-          <p className="mb-2 text-xs text-slate-500">
+          <p className="mb-2 text-xs text-brand-ink4">
             Showing search results for &ldquo;{reviewQuery}&rdquo; — every matching card in
             the database, whatever its current image.
           </p>
@@ -956,7 +972,7 @@ export default function AdminPage() {
         />
         {reviewRows.length === 0 ? (
           reviewQuery ? (
-            <div className="space-y-2 text-sm text-slate-500">
+            <div className="space-y-2 text-sm text-brand-ink4">
               <p>No card records match that search.</p>
               <p className="text-xs">
                 Deck entries are just names — a picture needs a card record to live on. If a
@@ -972,10 +988,10 @@ export default function AdminPage() {
               </button>
             </div>
           ) : (
-            <p className="text-sm text-slate-400">Nothing to review — every card has art. 🎉</p>
+            <p className="text-sm text-brand-ink5">Nothing to review — every card has art. 🎉</p>
           )
         ) : (
-          <ul className="divide-y divide-slate-100">
+          <ul className="divide-y divide-brand-line-soft">
             {reviewRows.map(({ card, candidates }) => (
               <li key={card.id} className="py-3">
                 <div className="flex items-start gap-3">
@@ -1003,7 +1019,7 @@ export default function AdminPage() {
                         <span className="chip bg-red-50 text-red-700">no image</span>
                       )}
                     </div>
-                    <div className="text-xs text-slate-400">
+                    <div className="text-xs text-brand-ink5">
                       {card.set_name || "Unknown set"}
                       {card.number ? ` · #${card.number}` : ""} ·{" "}
                       <span title={card.id}>{cardSource(card.id)}</span>
@@ -1021,7 +1037,7 @@ export default function AdminPage() {
                               />
                             </div>
                             {cand.uploadedByEmail && (
-                              <div className="mt-0.5 truncate text-[10px] text-slate-400">
+                              <div className="mt-0.5 truncate text-[10px] text-brand-ink5">
                                 {cand.uploadedByEmail}
                               </div>
                             )}
@@ -1062,7 +1078,7 @@ export default function AdminPage() {
                       </button>
                       {card.image_locked && (
                         <button
-                          className="btn px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
+                          className="btn px-2 py-1 text-xs text-brand-ink4 hover:bg-slate-100"
                           disabled={reviewBusy === card.id}
                           onClick={() => unlockCard(card.id)}
                         >
@@ -1081,11 +1097,11 @@ export default function AdminPage() {
 
       {tab === "members" && (
       <div className="card-panel p-4">
-        <h2 className="mb-2 font-semibold">Pending invites ({invites.length})</h2>
+        <h2 className="mb-2 font-display text-[17px] font-bold">Pending invites ({invites.length})</h2>
         {invites.length === 0 ? (
-          <p className="text-sm text-slate-400">No pending invites.</p>
+          <p className="text-sm text-brand-ink5">No pending invites.</p>
         ) : (
-          <ul className="divide-y divide-slate-100">
+          <ul className="divide-y divide-brand-line-soft">
             {invites.map((inv) => (
               <li key={inv.id} className="flex items-center justify-between py-2">
                 <div className="text-sm">{inv.email}</div>
@@ -1174,7 +1190,7 @@ function CardImportPanel() {
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-brand-ink4">
         Downloads every Pokémon card into our own database, with prices. Cards normally
         arrive one at a time as people scan or search for them, so anything nobody has
         touched is invisible to search and to the deck builder. Safe to run more than once —
@@ -1183,7 +1199,7 @@ function CardImportPanel() {
       </p>
 
       {state && (
-        <div className="text-xs text-slate-500">
+        <div className="text-xs text-brand-ink4">
           {state.written.toLocaleString()} cards written
           {state.totalCount ? ` of ${state.totalCount.toLocaleString()}` : ""}
           {pct != null && ` (${pct}%)`}
@@ -1213,7 +1229,7 @@ function CardImportPanel() {
         </button>
         {busy && (
           <button
-            className="text-xs text-slate-500 hover:underline"
+            className="text-xs text-brand-ink4 hover:underline"
             onClick={() => {
               stop.current = true;
             }}
@@ -1222,7 +1238,7 @@ function CardImportPanel() {
           </button>
         )}
         {!busy && state && !done && (
-          <button className="text-xs text-slate-400 hover:underline" onClick={() => run(true)}>
+          <button className="text-xs text-brand-ink5 hover:underline" onClick={() => run(true)}>
             Start over from the beginning
           </button>
         )}
@@ -1270,7 +1286,7 @@ function BusinessDashboard() {
   }, []);
 
   if (error) return <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>;
-  if (!data) return <div className="card-panel p-4 text-sm text-slate-500">Loading the business view…</div>;
+  if (!data) return <div className="card-panel p-4 text-sm text-brand-ink4">Loading the business view…</div>;
 
   const k = data.kpis;
   const maxBar = Math.max(...data.months.map((m) => Math.max(m.revenue, m.cost)), 0.01);
@@ -1474,7 +1490,7 @@ function PriceRefreshPanel({
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+      <div className="flex flex-wrap items-center gap-3 text-xs text-brand-ink4">
         {current?.ranAt ? (
           <span>
             Last run {new Date(current.ranAt).toLocaleString()}: checked {current.checked ?? 0},
@@ -1500,7 +1516,7 @@ function PriceRefreshPanel({
         <p className="text-xs text-red-600">⚠️ Last run failed: {current.error}</p>
       )}
       {current?.pt && (
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-brand-ink4">
           PokeTrace: {current.pt.priced} priced, {current.pt.matched} newly matched
           {current.pt.unmatched > 0 && `, ${current.pt.unmatched} no match`} (
           {current.pt.requests} of the daily 250 requests used
