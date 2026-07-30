@@ -39,10 +39,15 @@ export interface CardBox {
  *  hundred thousand pixels. */
 const WORK_DIM = 512;
 
-/** A card is 63:88 ≈ 0.716 upright, or 1.396 on its side. Generous either
- *  way — a phone held at an angle foreshortens, and the overlay only has to
- *  be recognisable. */
-const ASPECT_TOLERANCE = 0.34;
+/** A card is 63:88 ≈ 0.716 upright, or 1.396 on its side.
+ *
+ *  0.18, not 0.34. At 0.34 a roughly SQUARE blob passes — |1.0 − 0.716| =
+ *  0.284 — and a 2×2 block of cards that merged into one blob is roughly
+ *  square. So the loose tolerance was the thing letting the worst kind of
+ *  detection through: one huge box over four cards, which looks like a
+ *  confident answer and is nonsense. 0.18 still covers a card foreshortened
+ *  by a phone held at an angle (0.54–0.90) and rejects the square. */
+const ASPECT_TOLERANCE = 0.18;
 
 /** A card is a solid rectangle, so its blob should nearly fill its own
  *  bounding box. This is what rejects hands, shadows, table edges and the
@@ -105,6 +110,30 @@ export function detectCards(source: RGBAImage, tolerance = 54): CardBox[] {
     const db = img.data[p + 2] - bg[2];
     if (Math.sqrt(dr * dr + dg * dg + db * db) > tolerance) fg[i] = 1;
   }
+
+  // Shrink the foreground by one pixel before labelling.
+  //
+  // Cards laid out in a block are separated by a gap of a millimetre or two,
+  // which at this working size is one or two pixels — and a single bridging
+  // pixel, from a shadow or a compression artefact, welds two cards into one
+  // blob. Eroding first breaks those bridges. Solid card interiors lose only
+  // their outermost pixel, which the bounding box doesn't miss.
+  const eroded = new Uint8Array(total);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      if (
+        fg[i] &&
+        fg[i - 1] &&
+        fg[i + 1] &&
+        fg[i - w] &&
+        fg[i + w]
+      ) {
+        eroded[i] = 1;
+      }
+    }
+  }
+  fg.set(eroded);
 
   // Flood fill with an explicit stack. Recursion would blow the stack on a
   // blob of 50,000 pixels, which is an ordinary card at this size.

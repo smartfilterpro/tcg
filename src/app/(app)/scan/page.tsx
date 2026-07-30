@@ -28,6 +28,7 @@ interface ReviewRow {
   photoUrl: string | null; // user-taken photo, used when the DB has no image
   originalCardId: string | null; // the scan's auto-match, to measure accuracy
   predictedVariant: string | null; // the finish the scanner suggested, to learn from edits
+  owned: number; // copies already in the collection before this scan
 }
 
 /** Downscale a photo client-side so uploads stay fast and under limits.
@@ -42,7 +43,7 @@ interface ReviewRow {
 async function fileToBase64(
   file: File,
   maxDim = 1568
-): Promise<{ data: string; mediaType: string; boxes: CardBox[] }> {
+): Promise<{ data: string; mediaType: string; boxes: CardBox[]; crops: string[] }> {
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
   const w = Math.round(bitmap.width * scale);
@@ -64,10 +65,73 @@ async function fileToBase64(
     // Detection is decoration. A failure here must never stop a scan.
   }
 
+  // Cut each detected card out of the photo.
+  //
+  // Better than drawing boxes on the whole picture, which is what the first
+  // version did: on a phone the photo is thumbnail-sized, so six outlines on
+  // it are six slivers with unreadable labels. One tile per card shows each
+  // one big enough to recognise, which is the point of showing them at all.
+  const crops: string[] = [];
+  for (const b of boxes) {
+    const cw = Math.max(1, Math.round(b.w * w));
+    const ch = Math.max(1, Math.round(b.h * h));
+    const out = document.createElement("canvas");
+    // Capped: these are thumbnails, and a full-resolution crop per card
+    // would be several megabytes of data URLs held in React state.
+    const s = Math.min(1, 220 / Math.max(cw, ch));
+    out.width = Math.max(1, Math.round(cw * s));
+    out.height = Math.max(1, Math.round(ch * s));
+    out
+      .getContext("2d")!
+      .drawImage(
+        canvas,
+        Math.round(b.x * w),
+        Math.round(b.y * h),
+        cw,
+        ch,
+        0,
+        0,
+        out.width,
+        out.height
+      );
+    crops.push(out.toDataURL("image/jpeg", 0.8));
+  }
+
   const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
-  return { data: dataUrl.split(",")[1], mediaType: "image/jpeg", boxes };
+  return { data: dataUrl.split(",")[1], mediaType: "image/jpeg", boxes, crops };
 }
 
+
+/** The one-line verdict above the results.
+ *
+ *  Assembled from the confidences we already have. The artboard shows this
+ *  as prose — "Five matched cleanly. One needs your eyes — the collector
+ *  number was cut off." — which reads like something a model wrote, and it
+ *  would be daft to pay for a second model call to say what the data
+ *  already says. */
+function scanSummary(rows: ReviewRow[]): string {
+  const total = rows.length;
+  const unsure = rows.filter((r) => !r.card || r.detected.confidence === "low");
+  const clean = total - unsure.length;
+
+  if (total === 0) return "";
+  if (unsure.length === 0) {
+    return total === 1 ? "Matched cleanly." : `All ${clean} matched cleanly.`;
+  }
+  if (clean === 0) {
+    return unsure.length === 1
+      ? "This one needs your eyes — check the name and number before saving."
+      : `None matched cleanly — check each one before saving.`;
+  }
+  // Why it's unsure, when we can say. A missing collector number is the
+  // usual cause and the one the reader can actually do something about.
+  const why = unsure.every((r) => !r.detected.collectorNumber)
+    ? " — the collector number wasn't readable"
+    : "";
+  return unsure.length === 1
+    ? `${clean} matched cleanly. One needs your eyes${why}.`
+    : `${clean} matched cleanly. ${unsure.length} need your eyes${why}.`;
+}
 
 export default function ScanPage() {
   const router = useRouter();
@@ -84,6 +148,8 @@ export default function ScanPage() {
   /** Card outlines found in the photo before it was even sent. Cosmetic: a
    *  card the detector misses is still read by the model. */
   const [boxes, setBoxes] = useState<CardBox[]>([]);
+  /** Each detected card, cut out of the photo. */
+  const [crops, setCrops] = useState<string[]>([]);
   const [phase, setPhase] = useState<"idle" | "scanning" | "review" | "saving" | "done">("idle");
   const [rows, setRows] = useState<ReviewRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -195,11 +261,13 @@ export default function ScanPage() {
     setProgress({ read: 0, expected: null });
     setPartial([]);
     setBoxes([]);
+    setCrops([]);
     setPreview(URL.createObjectURL(file));
     const startedAt = Date.now();
     try {
-      const { data, mediaType, boxes: found } = await fileToBase64(file);
+      const { data, mediaType, boxes: found, crops: cut } = await fileToBase64(file);
       setBoxes(found);
+      setCrops(cut);
       // A denominator before the model has said anything. Replaced by its
       // own count the moment that arrives — the model is the authority on
       // how many cards there are, this is just a head start.
@@ -250,6 +318,7 @@ export default function ScanPage() {
             photoUrl: null,
             originalCardId: r.match?.id ?? null,
             predictedVariant: r.match ? variant : null,
+            owned: r.owned ?? 0,
           };
         })
       );
@@ -274,6 +343,10 @@ export default function ScanPage() {
   function removeRow(key: number) {
     setRows((prev) => prev.filter((r) => r.key !== key));
   }
+
+  /** Rows the reader should look at before saving: no match at all, or a
+   *  match the scanner wasn't confident about. */
+  const unsureRows = rows.filter((r) => !r.card || r.detected.confidence === "low");
 
   async function save() {
     const valid = rows.filter((r) => r.card && r.quantity > 0);
@@ -411,43 +484,62 @@ export default function ScanPage() {
 
       {phase === "scanning" && (
         <div className="card-panel p-6 text-center">
-          {preview && (
-            <div className="relative mx-auto mb-5 inline-block overflow-hidden rounded-lg">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={preview} alt="scan preview" className="max-h-56 rounded-lg" />
-              <div className="absolute inset-0 bg-poke-dark/20" />
-              <div className="scan-beam" />
-              {/* Outlines found locally, before the photo was sent. They fill
-                  in as the model names each card — box i belongs to card i,
-                  since both run in reading order. Percentages, so they track
-                  the image at whatever size it rendered. */}
-              {boxes.map((b, i) => (
-                <div
-                  key={i}
-                  className={`absolute rounded-[3px] border-2 transition-colors duration-300 ${
-                    i < progress.read
-                      ? "border-poke-red bg-poke-red/10"
-                      : "border-white/70"
-                  }`}
-                  style={{
-                    left: `${b.x * 100}%`,
-                    top: `${b.y * 100}%`,
-                    width: `${b.w * 100}%`,
-                    height: `${b.h * 100}%`,
-                  }}
-                >
-                  {partial[i] && (
-                    <span className="absolute inset-x-0 bottom-0 truncate bg-poke-red px-1 py-px text-[8px] font-medium leading-tight text-white">
-                      {partial[i].name}
-                    </span>
-                  )}
-                </div>
-              ))}
+          {/* One tile per detected card, cut out of the photo.
+              ────────────────────────────────────────────────────────────
+              Names are attached ONLY when the detector found exactly as many
+              cards as the model read. Pairing tile i with card i is an
+              assumption, and when it is wrong it is wrong loudly: the first
+              build of this labelled a bottom-row Pawmi as "Bayleef" and drew
+              one box over four cards, because three boxes were zipped against
+              six names. A silent tile is a small loss; a confident wrong
+              caption is a bug someone has to notice to distrust. */}
+          {crops.length > 0 ? (
+            <div className="mx-auto mb-4 grid max-w-md grid-cols-3 gap-2 sm:grid-cols-4">
+              {crops.map((src, i) => {
+                const named = crops.length === partial.length ? partial[i] : null;
+                const read = crops.length === partial.length ? i < progress.read : false;
+                return (
+                  <div key={i} className="relative">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={src}
+                      alt={named ? named.name : `Detected card ${i + 1}`}
+                      className={`aspect-[63/88] w-full rounded-md object-cover ring-2 transition ${
+                        read ? "ring-poke-red" : "opacity-70 ring-slate-200"
+                      }`}
+                    />
+                    {named && (
+                      <span className="absolute inset-x-0 bottom-0 truncate rounded-b-md bg-poke-red/90 px-1 py-0.5 text-[10px] font-medium leading-tight text-white">
+                        {named.name}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
+          ) : (
+            preview && (
+              <div className="relative mx-auto mb-5 inline-block overflow-hidden rounded-lg">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={preview} alt="scan preview" className="max-h-56 rounded-lg" />
+                <div className="absolute inset-0 bg-poke-dark/20" />
+                <div className="scan-beam" />
+              </div>
+            )
           )}
-          {boxes.length > 0 && progress.read === 0 && (
-            <p className="mb-2 -mt-3 font-mono text-[11px] uppercase tracking-wide text-slate-400">
-              {boxes.length} detected
+          {crops.length > 0 && progress.read === 0 && (
+            <p className="mb-3 font-mono text-[11px] uppercase tracking-wide text-slate-400">
+              {crops.length} detected
+            </p>
+          )}
+          {/* The detector and the model disagreed on how many cards are in
+              the photo. Said plainly rather than papered over — the model is
+              the one that decides what gets saved. */}
+          {crops.length > 0 && progress.expected != null && crops.length !== progress.expected && (
+            <p className="mb-3 text-[11.5px] text-slate-400">
+              Found {crops.length} outline{crops.length === 1 ? "" : "s"}, reading{" "}
+              {progress.expected} card{progress.expected === 1 ? "" : "s"} — the list below is
+              what counts.
             </p>
           )}
           <div className="flex items-center justify-center gap-3">
@@ -516,18 +608,21 @@ export default function ScanPage() {
 
       {(phase === "review" || phase === "saving") && (
         <div>
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-sm font-semibold">
-              {rows.length} card{rows.length === 1 ? "" : "s"} detected
+          <div className="mb-1 flex items-baseline justify-between gap-3">
+            <p className="text-lg font-semibold">
+              {rows.length} card{rows.length === 1 ? "" : "s"} read
               {scanSeconds != null && (
-                <span className="font-normal text-slate-400"> in {scanSeconds}s</span>
-              )}{" "}
-              — review before saving
+                <span className="ml-1.5 text-sm font-normal text-slate-400">in {scanSeconds}s</span>
+              )}
             </p>
             <button className="btn-secondary text-xs" onClick={reset}>
               Start over
             </button>
           </div>
+          {/* Composed, not generated. Every fact in this sentence is already
+              in the results — spending a second model call to write it would
+              cost credits to say something we can assemble for free. */}
+          <p className="mb-3 text-sm text-slate-600">{scanSummary(rows)}</p>
           <p className="mb-3 -mt-1 text-[11px] text-slate-400">
             💡 Double-check the finish: <b>Holo</b> = only the artwork shines ·{" "}
             <b>Reverse Holo</b> = everything <i>but</i> the artwork shines ·{" "}
@@ -536,7 +631,15 @@ export default function ScanPage() {
 
           <div className="space-y-3">
             {rows.map((row) => (
-              <div key={row.key} className="card-panel flex gap-3 p-3">
+              <div
+                key={row.key}
+                id={`scan-row-${row.key}`}
+                className={`card-panel flex gap-3 p-3 ${
+                  !row.card || row.detected.confidence === "low"
+                    ? "ring-1 ring-amber-300"
+                    : ""
+                }`}
+              >
                 {row.card?.imageSmall || row.photoUrl ? (
                   <div className="aspect-[63/88] w-20 shrink-0 self-start overflow-hidden rounded">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -556,6 +659,19 @@ export default function ScanPage() {
                     <span className="font-semibold">
                       {row.card ? row.card.name : `“${row.detected.name}” — not found`}
                     </span>
+                    {/* The thing someone sorting a pile actually wants to
+                        know: is this one I already have, and how many will I
+                        have after saving? Counted server-side during the
+                        scan, so it costs no extra request. */}
+                    {row.card && (
+                      <span
+                        className={`chip ${
+                          row.owned > 0 ? "bg-slate-100 text-slate-600" : "bg-green-100 text-green-800"
+                        }`}
+                      >
+                        {row.owned > 0 ? `×${row.owned + row.quantity} now` : "new"}
+                      </span>
+                    )}
                     <span className={`chip ${confidenceChip[row.detected.confidence]}`}>
                       {row.detected.confidence === "high" ? "✓ confident" : `⚠ ${row.detected.confidence} confidence`}
                     </span>
@@ -654,8 +770,30 @@ export default function ScanPage() {
             >
               {phase === "saving"
                 ? "Saving…"
-                : `Add ${rows.filter((r) => r.card).reduce((s, r) => s + r.quantity, 0)} card(s) to collection`}
+                : (() => {
+                    const n = rows.filter((r) => r.card).reduce((sum, r) => sum + r.quantity, 0);
+                    return `Add ${n} card${n === 1 ? "" : "s"} to collection`;
+                  })()}
             </button>
+            {/* Named rather than implied. "Add 5" next to six rows is
+                confusing until you notice which one it left out, so say
+                which one and take them to it. */}
+            {unsureRows.length > 0 && (
+              <button
+                className="mt-1.5 w-full py-2 text-center text-sm text-slate-500 underline"
+                onClick={() => {
+                  const first = unsureRows[0];
+                  document
+                    .getElementById(`scan-row-${first.key}`)
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  setPickerRow(first);
+                }}
+              >
+                {unsureRows.length === 1
+                  ? `Fix “${unsureRows[0].detected.name}” first`
+                  : `Fix the ${unsureRows.length} unsure ones first`}
+              </button>
+            )}
           </div>
         </div>
       )}

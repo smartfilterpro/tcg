@@ -42,6 +42,11 @@ export interface ScanMatch {
   /** Finish learned from past member corrections of this card — takes
    *  precedence over the scanner's own guess when present. */
   suggestedVariant?: string | null;
+  /** How many of this card the scanner's owner already had, before this
+   *  scan. Drives "NEW" versus "×3 NOW" on the results screen — the one
+   *  thing someone reviewing a pile actually wants to know, and free to
+   *  answer while we're already holding the matched ids. */
+  owned?: number;
 }
 
 export interface CollectionItem {
