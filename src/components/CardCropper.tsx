@@ -49,12 +49,16 @@ export default function CardCropper({
   onChange,
   onRedetect,
   detected,
+  actions,
 }: {
   photo: LoadedPhoto;
   quad: Quad;
   onChange: (q: Quad) => void;
   onRedetect: () => void;
   detected: boolean;
+  /** Sits beside Auto-detect, so the artboard's pair of buttons is one row
+   *  even though Retake belongs to the caller. */
+  actions?: React.ReactNode;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<number | null>(null);
@@ -150,8 +154,18 @@ export default function CardCropper({
         {dragging != null && <Loupe photo={photo} point={quad[dragging]} side={loupeSide} />}
       </div>
 
-      <div className="mt-2 space-y-1">
-        <p className="text-[11px] leading-relaxed text-slate-500">
+      <div className="mt-2.5 space-y-2">
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-[13px] py-[7px] text-[12.5px] font-medium hover:bg-brand-sunken"
+            onClick={onRedetect}
+          >
+            ✧ Auto-detect
+          </button>
+          {actions}
+        </div>
+        <p className="text-[11px] leading-relaxed text-brand-ink4">
           {detected
             ? "Corners found automatically. "
             : "Couldn't find the card automatically. "}
@@ -159,9 +173,6 @@ export default function CardCropper({
           right on the corner tip. The shaded area is thrown away; only what&apos;s inside the blue
           outline gets measured.
         </p>
-        <button className="btn-secondary px-2 py-1 text-xs" onClick={onRedetect}>
-          ↻ Auto-detect again
-        </button>
       </div>
     </div>
   );
