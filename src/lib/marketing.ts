@@ -5,17 +5,10 @@
 import { BOOST_LIST, BOOSTS_NOTE } from "@/lib/boosts";
 import { MONTHLY_GRANT, SIGNUP_GRANT } from "@/lib/credits";
 
-/** Hand-measured, hand-updated — the owner's decision over wiring these to
- *  live telemetry. The as-of date renders next to them, and the disclaimer
- *  is not optional: without it these read as guarantees. */
-export const STATS = [
-  { value: "97%", label: "of scanned cards matched correctly, first try" },
-  { value: "3.4s", label: "average time to add one card, start to saved" },
-  { value: "20+", label: "cards read from a single photo" },
-] as const;
-
-export const STATS_ASOF = "July 2026";
-export const STATS_DISCLAIMER = `Measured on our own test scans, ${STATS_ASOF} — updated by hand as the scanner improves. Your photos, lighting and cards will vary.`;
+// STATS / STATS_ASOF / STATS_DISCLAIMER lived here as hand-measured
+// constants. They are measured from scan_events now — see lib/liveStats.ts.
+// A hand-maintained number decays: it stops moving while the thing it
+// describes keeps changing, and nobody remembers to edit it.
 
 /** What actions typically cost. Ranges, not fixed prices: the ledger debits
  *  what each call actually cost (1 credit = 1¢ of AI), so the honest table
