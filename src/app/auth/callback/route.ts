@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { requestOrigin } from "@/lib/requestOrigin";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { EmailOtpType } from "@supabase/supabase-js";
 
@@ -39,21 +40,22 @@ export async function GET(request: Request) {
   // verification email an open redirect.
   const next = /^\/(?!\/)/.test(nextParam) ? nextParam : "/";
 
+  const origin = requestOrigin(request);
   const supabase = await createClient();
 
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
       await stampTosFromMetadata(supabase);
-      return NextResponse.redirect(new URL(next, url.origin));
+      return NextResponse.redirect(new URL(next, origin));
     }
   } else if (tokenHash && type) {
     const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
     if (!error) {
       await stampTosFromMetadata(supabase);
-      return NextResponse.redirect(new URL(next, url.origin));
+      return NextResponse.redirect(new URL(next, origin));
     }
   }
 
-  return NextResponse.redirect(new URL("/login?error=link", url.origin));
+  return NextResponse.redirect(new URL("/login?error=link", origin));
 }
