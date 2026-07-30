@@ -795,6 +795,9 @@ export default function AdminPage() {
           <h3 className="mb-1 mt-4 text-sm font-semibold">📚 Card catalogue</h3>
           <CardImportPanel />
 
+          <h3 className="mb-1 mt-4 text-sm font-semibold">🖼️ Mirror card art</h3>
+          <MirrorArtPanel />
+
           <h3 className="mb-1 mt-4 text-sm font-semibold">🎨 Finish detection</h3>
           {analytics.finish?.tracking === false ? (
             <p className="text-xs text-yellow-800">
@@ -2052,6 +2055,125 @@ function PriceSyncPanel() {
 /** Fold duplicate card rows — the same card held under two ids because two
  *  sources spelled its number differently ("#050" vs "#50"). Dry run first,
  *  always: this rewrites what people own. */
+function MirrorArtPanel() {
+  const [status, setStatus] = useState<{
+    withImages: number;
+    ours: number;
+    remaining: number;
+  } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [run, setRun] = useState({ mirrored: 0, failures: [] as string[] });
+  const [error, setError] = useState<string | null>(null);
+  const stopRef = useRef(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/mirror-art");
+      const json = await res.json();
+      if (res.ok) setStatus(json);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function start() {
+    setRunning(true);
+    setError(null);
+    stopRef.current = false;
+    setRun({ mirrored: 0, failures: [] });
+    let after: string | null = null;
+    try {
+      for (;;) {
+        if (stopRef.current) break;
+        const res = await fetch("/api/admin/mirror-art", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ after }),
+        });
+        // Text first: a proxy timeout answers with prose, not JSON.
+        const text = await res.text();
+        let json: {
+          mirrored: number;
+          failed: Array<{ id: string; reason: string }>;
+          lastId: string | null;
+          done: boolean;
+          error?: string;
+        };
+        try {
+          json = JSON.parse(text);
+        } catch {
+          throw new Error(`The server said: ${text.slice(0, 140)}`);
+        }
+        if (!res.ok) throw new Error(json.error || "Mirror failed");
+        setRun((r) => ({
+          mirrored: r.mirrored + json.mirrored,
+          failures: [...r.failures, ...json.failed.map((f) => `${f.id}: ${f.reason}`)].slice(-8),
+        }));
+        after = json.lastId;
+        if (json.done) break;
+        if (json.mirrored > 0) refresh();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Mirror failed");
+    }
+    setRunning(false);
+    refresh();
+  }
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-white p-3">
+      <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+        Copies card artwork from the third-party databases into our own storage and repoints
+        the cards, so pictures keep working when pokemontcg.io has a bad day. Originals are
+        kept on file; failed downloads stay pointed at the source and are retried on the next
+        run. Safe to stop and resume — and worth re-running after a catalogue import, which
+        brings in new hotlinked images.
+      </p>
+      {status && (
+        <p className="m-0 mb-2 text-xs text-brand-ink3">
+          {status.ours.toLocaleString()} of {status.withImages.toLocaleString()} card images
+          in our storage · {status.remaining.toLocaleString()} still hotlinked
+        </p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {running ? (
+          <button
+            className="btn-secondary text-sm"
+            onClick={() => {
+              stopRef.current = true;
+            }}
+          >
+            Stop after this batch
+          </button>
+        ) : (
+          <button
+            className="btn-primary text-sm"
+            disabled={!status || status.remaining === 0}
+            onClick={start}
+          >
+            {status && status.remaining === 0 ? "Everything is mirrored" : "Mirror next batches"}
+          </button>
+        )}
+      </div>
+      {(running || run.mirrored > 0) && (
+        <p className="m-0 mt-2 text-xs text-brand-ink3">
+          {running ? "Running… " : "Stopped. "}
+          {run.mirrored.toLocaleString()} card{run.mirrored === 1 ? "" : "s"} mirrored this run.
+        </p>
+      )}
+      {run.failures.length > 0 && (
+        <div className="mt-1 max-h-24 overflow-y-auto font-mono text-[11px] text-brand-ink4">
+          {run.failures.map((f, i) => (
+            <div key={i}>{f}</div>
+          ))}
+        </div>
+      )}
+      {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
+    </div>
+  );
+}
+
 function DedupeCardsPanel() {
   const [busy, setBusy] = useState(false);
   const [out, setOut] = useState<{
