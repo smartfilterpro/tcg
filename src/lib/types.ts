@@ -177,6 +177,10 @@ export interface Profile {
    *  and every reader falls back to the free plan. */
   plan?: "free" | "pro" | "family";
   trade_board_enabled?: boolean;
+  /** Friend codes (migration 028). The code is how someone reaches you; the
+   *  flag is whether anyone may, and it gates sending as well as receiving. */
+  friend_code?: string | null;
+  allow_friend_requests?: boolean;
   stripe_customer?: string | null;
   stripe_subscription?: string | null;
   /** Set while a cancellation is pending: paid access runs to this date. */
