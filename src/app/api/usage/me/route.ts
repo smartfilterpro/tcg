@@ -5,7 +5,7 @@ import { estimateCostUsd } from "@/lib/usage";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { creditSummary } from "@/lib/credits";
 
-/** GET: the current user's Trainer AI usage for this month, as a share of
+/** GET: the current user's TrainerAI usage for this month, as a share of
  *  their allowance — deliberately no dollar amounts (that's admin-only).
  *  { admin, percentUsed, calls, resetsOn, daily: number[14] (0..1) } */
 export async function GET() {

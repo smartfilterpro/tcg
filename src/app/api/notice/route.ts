@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
-// The site-wide notice: "Upgrade tonight at 11", "Trainer AI is down".
+// The site-wide notice: "Upgrade tonight at 11", "TrainerAI is down".
 //
 // Read by everyone, written by admins. One notice is live at a time — two
 // banners stacked on a page is worse than none, and nobody reads the second.

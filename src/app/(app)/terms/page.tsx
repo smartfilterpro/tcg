@@ -83,7 +83,7 @@ export default function TermsPage() {
               selling, or trading decisions.
             </li>
             <li>
-              <b>AI deck advice, trade advice, and chat.</b> Trainer AI output can be wrong,
+              <b>AI deck advice, trade advice, and chat.</b> TrainerAI output can be wrong,
               outdated, or misleading, including about card rules, legality, values, and trade
               fairness. Use your own judgment.
             </li>

@@ -1,6 +1,6 @@
 "use client";
 
-// The Trainer AI chat, present on every signed-in page.
+// The TrainerAI chat, present on every signed-in page.
 //
 // A launcher pinned bottom-right and a panel above it. It deliberately does
 // NOT take over the screen on desktop: most questions are asked *about*

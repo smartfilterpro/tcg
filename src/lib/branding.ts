@@ -7,7 +7,7 @@ export const APP_NAME = "TrainerDeck";
 
 /** The user-facing name of the in-app assistant. Generic, so it survived the
  *  rebrand unchanged. */
-export const AI_NAME = "Trainer AI";
+export const AI_NAME = "TrainerAI";
 
 /** Kept explicit and prominent: the app reads real card data and shows real
  *  card art, so saying plainly that it is unofficial matters more once money

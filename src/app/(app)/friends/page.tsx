@@ -719,7 +719,7 @@ export default function FriendsPage() {
                 />
               </div>
 
-              {/* Trainer AI chat */}
+              {/* TrainerAI chat */}
               <div className="card-panel p-4">
                 <h3 className="mb-1 font-semibold">🤖 Ask {AI_NAME}</h3>
                 <p className="mb-2 text-xs text-slate-500">

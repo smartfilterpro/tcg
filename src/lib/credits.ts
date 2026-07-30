@@ -69,7 +69,7 @@ export const CREDIT_MENU = [
   { key: "deck_build", label: "Deck build", cost: "15–50", what: "A full 60-card deck from your collection, with a strategy and a buy-list." },
   { key: "deck_review", label: "Deck review", cost: "5–15", what: "A written critique of a deck you built." },
   { key: "coach", label: "Coach reply", cost: "1–3", what: "One question about one deck." },
-  { key: "chat", label: "Trainer AI chat", cost: "3–5", what: "One question. Costs a little more than the coach because it carries an index of your whole collection." },
+  { key: "chat", label: "TrainerAI chat", cost: "3–5", what: "One question. Costs a little more than the coach because it carries an index of your whole collection." },
   { key: "grade", label: "Grading report", cost: "8–15", what: "Corner, edge, surface and centering analysis from your photos." },
   { key: "trade_chat", label: "Trade advice", cost: "1–3", what: "Whether a proposed trade is fair." },
   { key: "find_image", label: "Card image search", cost: "1–5", what: "Finding artwork for a card the database has no picture for." },

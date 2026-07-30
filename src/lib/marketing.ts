@@ -54,7 +54,7 @@ export const TIERS: Tier[] = [
       f("Collection value + weekly price refresh"),
       f("Two-player battles"),
       f("CSV export", false),
-      f("Ongoing Trainer AI credits", false),
+      f("Ongoing TrainerAI credits", false),
     ],
     cta: "Start free",
     href: "/signup",
@@ -71,7 +71,7 @@ export const TIERS: Tier[] = [
     features: [
       f("Everything in Free"),
       f("Bulk camera scanning, 20+ cards a shot"),
-      f("Trainer AI deck building + coaching"),
+      f("TrainerAI deck building + coaching"),
       f("Card grading reports"),
       f("Daily price refresh"),
       f("CSV export of your whole collection"),

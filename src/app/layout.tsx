@@ -27,7 +27,7 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: `${APP_NAME} — scan the whole pile, play the better deck`,
   description:
-    "Scan 20+ trading cards from one photo, track your collection's value, and build decks with Trainer AI from the cards you actually own.",
+    "Scan 20+ trading cards from one photo, track your collection's value, and build decks with TrainerAI from the cards you actually own.",
 };
 
 export const viewport: Viewport = {

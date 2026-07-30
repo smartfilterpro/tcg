@@ -257,7 +257,7 @@ export default function Landing({
           Point your camera at the pile.
         </h2>
         <p className="mx-auto mb-[30px] max-w-[52ch] text-[17px] leading-[1.6] text-brand-ink3">
-          Free forever for collecting. 100 Trainer AI credits to see what the assistant does. No
+          Free forever for collecting. 100 TrainerAI credits to see what the assistant does. No
           card, no invite code.
         </p>
         <Link

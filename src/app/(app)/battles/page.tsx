@@ -277,7 +277,7 @@ export default function BattlesPage() {
       {practiceAllowed && (decks.length > 0 || sharedDecks.length > 0) && (
         <form onSubmit={createPractice} className="card-panel space-y-3 p-4">
           <div className="flex items-center gap-2">
-            <h2 className="font-semibold">🤖 Practice vs Trainer AI</h2>
+            <h2 className="font-semibold">🤖 Practice vs TrainerAI</h2>
             <span className="chip bg-brand-sunken text-brand-ink3">Admin only</span>
           </div>
           <p className="text-xs text-slate-500">
@@ -300,7 +300,7 @@ export default function BattlesPage() {
               </select>
             </label>
             <label className="block text-xs font-medium text-slate-600">
-              Trainer AI plays
+              TrainerAI plays
               <select
                 className="input mt-1"
                 value={botDeck}
