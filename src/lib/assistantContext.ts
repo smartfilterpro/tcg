@@ -96,7 +96,15 @@ export async function buildContext(
 
   // Fold finishes together — "do I own a Charizard" doesn't care whether it's
   // the reverse holo, and splitting them doubles the line count for nothing.
-  const byName = new Map<string, { qty: number; set: string; value: number }>();
+  //
+  // Keyed by name AND set, which an owner conversation proved matters.
+  // Keyed by name alone, thirteen Gengar across four sets collapsed into
+  // one row filed under whichever set happened to be read first — and the
+  // assistant then told the owner, with full confidence, that all thirteen
+  // lived in Lost Origin. It reasoned correctly from data this code had
+  // made false. Set-level counts, set completion, and "which print do I
+  // have" all depend on the split being real.
+  const byName = new Map<string, { name: string; qty: number; set: string; value: number }>();
   const bySet = new Map<string, number>();
   // Standard legality, per set, from the cards we actually hold data for.
   // A set is judged by its cards: any card marked Standard-legal makes the
@@ -121,12 +129,13 @@ export async function buildContext(
       else tally.rotated += 1;
       setLegal.set(set, tally);
     }
-    const prev = byName.get(r.card.name);
+    const key = `${r.card.name}|${set}`;
+    const prev = byName.get(key);
     if (prev) {
       prev.qty += qty;
       prev.value = Math.max(prev.value, unit);
     } else {
-      byName.set(r.card.name, { qty, set, value: unit });
+      byName.set(key, { name: r.card.name, qty, set, value: unit });
     }
   }
 
@@ -184,8 +193,8 @@ export async function buildContext(
     // survive truncation — and grouping only changes how the survivors are
     // laid out, so the most valuable cards are still the ones that make it.
     const bySetGroup = new Map<string, string[]>();
-    for (const [name, v] of shown) {
-      const line = `${name}\t${v.qty}`;
+    for (const [, v] of shown) {
+      const line = `${v.name}\t${v.qty}`;
       const list = bySetGroup.get(v.set);
       if (list) list.push(line);
       else bySetGroup.set(v.set, [line]);

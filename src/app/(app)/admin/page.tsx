@@ -783,6 +783,9 @@ export default function AdminPage() {
           <h3 className="mb-1 mt-4 text-sm font-semibold">🎟️ Give credits</h3>
           <GrantCreditsPanel />
 
+          <h3 className="mb-1 mt-4 text-sm font-semibold">🧬 Merge duplicate cards</h3>
+          <DedupeCardsPanel />
+
           <h3 className="mb-1 mt-4 text-sm font-semibold">🩹 Fill price &amp; image gaps</h3>
           <PriceSyncPanel />
 
@@ -2040,6 +2043,85 @@ function PriceSyncPanel() {
         )}
       </div>
       {st?.error && <p className="mb-0 mt-2 text-xs text-brand-negative">{st.error}</p>}
+      {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
+    </div>
+  );
+}
+
+
+/** Fold duplicate card rows — the same card held under two ids because two
+ *  sources spelled its number differently ("#050" vs "#50"). Dry run first,
+ *  always: this rewrites what people own. */
+function DedupeCardsPanel() {
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<{
+    dryRun: boolean;
+    duplicateGroups: number;
+    merged: number;
+    itemsMoved: number;
+    sample: Array<{ name: string; set: string | null; rows: string[] }>;
+    failures: string[];
+    note: string;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(dryRun: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/dedupe-cards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dryRun }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Dedupe failed");
+      setOut(json);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Dedupe failed");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-white p-3">
+      <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+        Finds cards held twice under different ids — same name, number and set, spelled
+        differently by different sources (&ldquo;#050&rdquo; vs &ldquo;#50&rdquo;). Merging
+        repoints collections before removing anything.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button className="btn-secondary text-sm" disabled={busy} onClick={() => run(true)}>
+          {busy ? "Checking…" : "Check (dry run)"}
+        </button>
+        {out && out.dryRun && out.duplicateGroups > 0 && (
+          <button className="btn-primary text-sm" disabled={busy} onClick={() => run(false)}>
+            Merge {out.duplicateGroups} duplicate{out.duplicateGroups === 1 ? "" : "s"}
+          </button>
+        )}
+      </div>
+      {out && (
+        <div className="mt-2 text-xs text-brand-ink3">
+          <p className="m-0">
+            {out.duplicateGroups} duplicate group{out.duplicateGroups === 1 ? "" : "s"}
+            {!out.dryRun && ` · ${out.merged} merged · ${out.itemsMoved} collection entries moved`}
+            {" — "}
+            {out.note}
+          </p>
+          {out.sample.length > 0 && (
+            <div className="mt-1 max-h-32 overflow-y-auto font-mono text-[11px]">
+              {out.sample.map((g, i) => (
+                <div key={i}>
+                  {g.name} ({g.set ?? "?"}): {g.rows.join("  ·  ")}
+                </div>
+              ))}
+            </div>
+          )}
+          {out.failures.length > 0 && (
+            <p className="m-0 mt-1 text-brand-negative">{out.failures.join(" · ")}</p>
+          )}
+        </div>
+      )}
       {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
     </div>
   );
