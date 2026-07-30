@@ -6,6 +6,8 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { createObjectScanner, isEnvelope } from "@/lib/jsonStream";
 import { rowToSummary, defaultVariantFor, type CardSummaryRow } from "@/lib/types";
 import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
 import { loadFinishOverrides } from "@/lib/finishFeedback";
@@ -28,6 +30,14 @@ export const maxDuration = 120; // vision + N lookups can take a while
 const SCAN_SCHEMA = {
   type: "object",
   properties: {
+    // FIRST on purpose. Emitted before the cards, so the progress bar has a
+    // denominator while the reading is still happening rather than only once
+    // it's finished. One integer, once — not per card — so the output cost
+    // this file is otherwise so careful about is a rounding error.
+    count: {
+      type: "integer",
+      description: "How many Pokémon cards are visible in the photo. Answer this first, before reading any of them.",
+    },
     cards: {
       type: "array",
       items: {
@@ -150,22 +160,24 @@ async function matchFromLocalDb(
   }
 }
 
-export async function POST(req: Request) {
-  try {
-    const { user, profile } = await requireUser();
-    const { image, mediaType } = (await req.json()) as {
-      image?: string;
-      mediaType?: string;
-    };
-    if (!image) {
-      return NextResponse.json({ error: "Missing image" }, { status: 400 });
-    }
-
-    const supabase = await createClient();
-    const budget = await checkCredits(user, profile);
-    if (!budget.ok) {
-      return NextResponse.json({ error: budget.message }, { status: 429 });
-    }
+/** Do the scan, recording progress against a job row.
+ *
+ *  Deliberately NOT tied to the request that started it. The model runs for
+ *  ten to thirty seconds, and a phone that sleeps or a tab that backgrounds
+ *  used to kill the fetch — while the model kept going and the credits were
+ *  spent anyway. Someone paid for a scan and got an error. Now the work and
+ *  the browser are independent: whatever happens to the connection, the
+ *  cards land in the job and the client picks them up when it comes back. */
+async function runScan(opts: {
+  supabase: SupabaseClient;
+  admin: SupabaseClient;
+  userId: string;
+  image: string;
+  mediaType: string | undefined;
+  jobId: string;
+}): Promise<ScanMatch[]> {
+  const { supabase, admin, userId, image, mediaType, jobId } = opts;
+  {
     const client = anthropic();
     // Streamed with a generous cap: thinking + per-card JSON both draw from
     // max_tokens, and big multi-card spreads need the headroom.
@@ -196,27 +208,67 @@ export async function POST(req: Request) {
         },
       ],
     });
+    // Report each card the moment the model finishes writing it.
+    //
+    // The answer takes ten to thirty seconds and every card in it is complete
+    // long before the message is. Without this the client knows nothing until
+    // the end, which is why the old progress bar ran on a timer and invented
+    // its own progress.
+    if (jobId) {
+      const scanner = createObjectScanner();
+      const seen: Array<{ name: string; num: string | null; conf: string }> = [];
+      let expected: number | null = null;
+
+      stream.on("text", (chunk: string) => {
+        for (const obj of scanner.push(chunk)) {
+          const o = obj as Record<string, unknown>;
+          if (isEnvelope(o)) {
+            if (typeof o.count === "number") expected = o.count;
+            continue;
+          }
+          // The count arrives on the envelope, which is last — but the model
+          // may also emit it as a bare value we never see as an object. Take
+          // it from whichever gets here first.
+          if (typeof o.name !== "string") continue;
+          seen.push({
+            name: o.name,
+            num: typeof o.num === "string" ? o.num : null,
+            conf: typeof o.conf === "string" ? o.conf : "medium",
+          });
+          // Fire and forget: progress reporting must never slow the read or
+          // fail the scan.
+          void admin
+            .from("scan_jobs")
+            .update({
+              cards: seen,
+              // Until the model states a count, the best denominator we
+              // have is what we've read so far — a bar that never claims
+              // more progress than actually happened.
+              expected: expected ?? seen.length,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", jobId)
+            .then(() => {});
+        }
+      });
+    }
+
     const response = await stream.finalMessage();
 
-    await logAiUsage(supabase, user.id, "scan", SCAN_MODEL, response.usage);
+    await logAiUsage(supabase, userId, "scan", SCAN_MODEL, response.usage);
 
+    // Thrown, not returned: nothing is listening to this call any more, so
+    // the failure has to land on the job where the client will find it.
     if (response.stop_reason === "refusal") {
-      return NextResponse.json(
-        { error: "The image could not be processed. Try a different photo." },
-        { status: 422 }
-      );
+      throw new Error("The image could not be processed. Try a different photo.");
     }
 
     const textBlock = response.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") {
-      return NextResponse.json(
-        {
-          error:
-            response.stop_reason === "max_tokens"
-              ? "That photo has too many cards for one scan — try splitting it into two photos."
-              : "No cards detected.",
-        },
-        { status: 422 }
+      throw new Error(
+        response.stop_reason === "max_tokens"
+          ? "That photo has too many cards for one scan — try splitting it into two photos."
+          : "No cards detected."
       );
     }
 
@@ -235,14 +287,10 @@ export async function POST(req: Request) {
     try {
       parsed = JSON.parse(textBlock.text);
     } catch {
-      return NextResponse.json(
-        {
-          error:
-            response.stop_reason === "max_tokens"
-              ? "That photo has too many cards for one scan — try splitting it into two photos."
-              : "The scan came back malformed — please try again.",
-        },
-        { status: 422 }
+      throw new Error(
+        response.stop_reason === "max_tokens"
+          ? "That photo has too many cards for one scan — try splitting it into two photos."
+          : "The scan came back malformed — please try again."
       );
     }
     // Match each detected card against the reference database (in parallel,
@@ -333,7 +381,79 @@ export async function POST(req: Request) {
       // Memory is best-effort — a failure here never breaks a scan.
     }
 
-    return NextResponse.json({ results });
+    return results;
+  }
+}
+
+/** POST { image, mediaType } → { jobId }, immediately.
+ *
+ *  The scan itself runs on after this returns. That is the point: the answer
+ *  outlives the request. */
+export async function POST(req: Request) {
+  try {
+    const { user, profile } = await requireUser();
+    const { image, mediaType } = (await req.json()) as {
+      image?: string;
+      mediaType?: string;
+    };
+    if (!image) {
+      return NextResponse.json({ error: "Missing image" }, { status: 400 });
+    }
+
+    const supabase = await createClient();
+    const budget = await checkCredits(user, profile);
+    if (!budget.ok) {
+      return NextResponse.json({ error: budget.message }, { status: 429 });
+    }
+
+    const admin = createAdminClient();
+    const startedAt = Date.now();
+    const { data: job, error: jobErr } = await admin
+      .from("scan_jobs")
+      .insert({ user_id: user.id, status: "running" })
+      .select("id")
+      .single();
+    if (jobErr || !job) {
+      return NextResponse.json(
+        {
+          error: /scan_jobs/.test(jobErr?.message ?? "")
+            ? "Scanning needs a one-time database update — run supabase/migrations/034_scan_jobs.sql."
+            : "Couldn't start the scan.",
+        },
+        { status: 500 }
+      );
+    }
+    const jobId = job.id as string;
+
+    // Not awaited. The handler returns now; the work continues in this
+    // process and reports itself into the job row.
+    void runScan({ supabase, admin, userId: user.id, image, mediaType, jobId })
+      .then(async (results) => {
+        await admin
+          .from("scan_jobs")
+          .update({
+            status: "done",
+            cards: results,
+            expected: results.length,
+            duration_ms: Date.now() - startedAt,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+      })
+      .catch(async (err) => {
+        // Recorded on the job, not thrown into a void. The person is owed an
+        // explanation on a scan they have already been charged for.
+        await admin
+          .from("scan_jobs")
+          .update({
+            status: "error",
+            error: err instanceof Error ? err.message : "Scan failed",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+      });
+
+    return NextResponse.json({ jobId });
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
@@ -343,5 +463,30 @@ export async function POST(req: Request) {
       { error: err instanceof Error ? err.message : "Scan failed" },
       { status: 500 }
     );
+  }
+}
+
+/** GET ?job=<id> — where a scan got to. Also GET with no id: the most recent
+ *  unfinished scan, which is how a phone that slept finds its way back. */
+export async function GET(req: Request) {
+  try {
+    const { user } = await requireUser();
+    const supabase = await createClient();
+    const id = new URL(req.url).searchParams.get("job");
+
+    let q = supabase
+      .from("scan_jobs")
+      .select("id, status, expected, cards, error, duration_ms, created_at")
+      .eq("user_id", user.id);
+    q = id ? q.eq("id", id) : q.eq("status", "running");
+
+    const { data, error } = await q.order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (error) return NextResponse.json({ job: null, migrated: false });
+    return NextResponse.json({ job: data ?? null, migrated: true });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return NextResponse.json({ job: null }, { status: 500 });
   }
 }
