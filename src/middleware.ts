@@ -61,7 +61,13 @@ export async function middleware(request: NextRequest) {
   const isPublic = isPublicPath(pathname);
 
   if (!user && !isPublic) {
-    if (pathname.startsWith("/api/")) {
+    // A JSON 401 is right for fetch(), and wrong for a person. Some API
+    // routes are legitimate navigation targets — GET /api/billing/checkout
+    // is what signup redirects into, and an expired session there would
+    // otherwise render `{"error":"Not authenticated"}` in the address bar.
+    // Sec-Fetch-Mode tells the two apart; without it, assume fetch().
+    const navigating = request.headers.get("sec-fetch-mode") === "navigate";
+    if (pathname.startsWith("/api/") && !navigating) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
     const url = request.nextUrl.clone();
