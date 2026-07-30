@@ -29,6 +29,13 @@ import { budgetState, priceTrackerEnabled, ptFetch } from "@/lib/priceTracker";
 
 export const SYNC_STATE_KEY = "price_tracker_sync";
 
+/** Gap between whole-set requests. Their per-minute allowance is separate
+ *  from the daily one and a set fetch counts as several requests against it;
+ *  five in quick succession tripped it. */
+const SET_INTERVAL_MS = 6_000;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export interface SyncState {
   /** Sets still to walk, in order. Held in the state so a resumed run does
    *  not pay to list them again. */
@@ -39,6 +46,13 @@ export interface SyncState {
   imagesFilled: number;
   idsFilled: number;
   skippedAmbiguous: number;
+  /** How many of OUR cards were loaded into the match index. Zero here with
+   *  a rising cardsSeen is the signature of a broken index, which is
+   *  otherwise invisible: every card is "seen" and none can ever match. */
+  indexedCards: number;
+  /** Set when their minute window cut a run short. Not an error — press
+   *  again in a minute. */
+  rateLimited: boolean;
   startedAt: string;
   updatedAt: string;
   finishedAt: string | null;
@@ -56,6 +70,8 @@ export function freshSyncState(): SyncState {
     imagesFilled: 0,
     idsFilled: 0,
     skippedAmbiguous: 0,
+    indexedCards: 0,
+    rateLimited: false,
     startedAt: now,
     updatedAt: now,
     finishedAt: null,
@@ -209,7 +225,9 @@ export async function runPriceSync(
 
   const previous = await readSyncState(admin);
   const state =
-    opts.restart || !previous || previous.done ? freshSyncState() : { ...previous, error: null };
+    opts.restart || !previous || previous.done
+      ? freshSyncState()
+      : { ...previous, error: null, rateLimited: false };
 
   try {
     // The set list, once per pass rather than once per run.
@@ -233,13 +251,31 @@ export async function runPriceSync(
 
     // Our whole catalogue, once. 20,000 rows is a few megabytes and one pass
     // of paging — far cheaper than a query per card.
-    const { data: ours } = await fetchAllRows<OurCard>(() =>
+    // Checked, not assumed.
+    //
+    // This select names tcgplayer_id, which only exists after migration 033.
+    // Without it the whole query fails, the index comes back empty, and the
+    // sync walks the entire catalogue matching nothing at all — 404 cards
+    // seen, zero filled, no error anywhere. Swallowing this error made a
+    // configuration problem look like a matching problem.
+    const { data: ours, error: ourError } = await fetchAllRows<OurCard>(() =>
       admin
         .from("cards")
         .select("id, name, number, set_name, market_price, prices, image_small, image_locked, tcgplayer_id")
         .order("id")
     );
+    if (ourError) {
+      throw new Error(
+        /tcgplayer_id/.test(ourError.message)
+          ? "The cards table has no tcgplayer_id column — run supabase/migrations/033_tcgplayer_ids.sql first."
+          : `Couldn't read our catalogue: ${ourError.message}`
+      );
+    }
+    if (ours.length === 0) {
+      throw new Error("Our cards table is empty — run the card catalogue import first.");
+    }
     const { byKey, ambiguous } = buildIndex(ours);
+    state.indexedCards = byKey.size;
 
     let setsThisRun = 0;
     while (state.setIndex < state.sets.length && setsThisRun < maxSets) {
@@ -247,11 +283,30 @@ export async function runPriceSync(
       if (budget.cap - budget.used <= reserve) break;
 
       const set = state.sets[state.setIndex];
-      const json = (await ptFetch("/cards", {
-        setId: set.id,
-        fetchAllInSet: "true",
-        limit: "200",
-      })) as { data?: TheirCard[] | TheirCard };
+
+      // Their minute window is stricter than the daily one, and a whole-set
+      // fetch counts several requests against it. Five sets back-to-back was
+      // enough to trip it. Spaced out, so a run walks steadily instead of
+      // sprinting into a wall.
+      if (setsThisRun > 0) await sleep(SET_INTERVAL_MS);
+
+      let json: { data?: TheirCard[] | TheirCard };
+      try {
+        json = (await ptFetch("/cards", {
+          setId: set.id,
+          fetchAllInSet: "true",
+          limit: "200",
+        })) as { data?: TheirCard[] | TheirCard };
+      } catch (err) {
+        // 429 is not a failure, it is a pause. Stop here with progress saved
+        // and let the next press carry on rather than recording an error
+        // over a run that was working.
+        if (err instanceof Error && /429|rate limit/i.test(err.message)) {
+          state.rateLimited = true;
+          break;
+        }
+        throw err;
+      }
       const cards = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
 
       const patches: Patch[] = [];
