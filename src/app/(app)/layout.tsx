@@ -7,6 +7,7 @@ import HeaderCredits from "@/components/HeaderCredits";
 import AppNav from "@/components/AppNav";
 import TrainerChat from "@/components/TrainerChat";
 import UpgradeReturn from "@/components/UpgradeReturn";
+import SiteNotice from "@/components/SiteNotice";
 import { initialsFor } from "@/lib/avatar";
 
 /** The signed-in app shell, per App Screens artboard 02: dark bar with the
@@ -125,6 +126,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
       </header>
       {/* pb leaves room for the chat launcher so it never sits on the footer */}
+      {/* Above the content and below the nav: an outage notice that scrolls
+          away with the page is a notice nobody reads. */}
+      <SiteNotice />
+
       <main className="mx-auto max-w-[1060px] px-4 py-7 sm:px-6">
         {/* Suspense because it reads the query string, which opts the subtree
             out of static rendering — the boundary keeps that contained to

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Profile } from "@/lib/types";
 import { uploadCardPhoto } from "@/lib/photos";
 
@@ -776,6 +776,12 @@ export default function AdminPage() {
               )}
             </div>
           )}
+
+          <h3 className="mb-1 mt-4 text-sm font-semibold">📣 Site notice</h3>
+          <SiteNoticePanel />
+
+          <h3 className="mb-1 mt-4 text-sm font-semibold">🎟️ Give credits</h3>
+          <GrantCreditsPanel />
 
           <h3 className="mb-1 mt-4 text-sm font-semibold">💰 Price freshness</h3>
           <PriceRefreshPanel info={analytics.priceRefresh ?? null} />
@@ -1578,6 +1584,234 @@ function PriceRefreshPanel({
             If a jump is real, fix that card&apos;s price from its detail view (price
             override) or wait — it&apos;ll be rechecked on later runs.
           </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/** Publish the banner every signed-in page shows. One notice is live at a
+ *  time; publishing replaces whatever was up. */
+function SiteNoticePanel() {
+  const [body, setBody] = useState("");
+  const [level, setLevel] = useState<"info" | "warning" | "outage">("info");
+  const [dismissible, setDismissible] = useState(true);
+  const [endsAt, setEndsAt] = useState("");
+  const [live, setLive] = useState<{ id: string; body: string; level: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/notice");
+      const json = await res.json();
+      setLive(json.notice ?? null);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function publish() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/notice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          body,
+          level,
+          dismissible,
+          // datetime-local gives local wall-clock; the Date turns it into the
+          // instant the admin actually meant.
+          endsAt: endsAt ? new Date(endsAt).toISOString() : null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't publish");
+      setBody("");
+      setEndsAt("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't publish");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-white p-3">
+      {live ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded bg-brand-sunken p-2.5 text-xs">
+          <span className="font-mono uppercase text-brand-ink4">{live.level}</span>
+          <span className="min-w-0 flex-1">{live.body}</span>
+          <button
+            className="text-brand-negative underline"
+            onClick={async () => {
+              await fetch("/api/notice", { method: "DELETE" });
+              load();
+            }}
+          >
+            Take it down
+          </button>
+        </div>
+      ) : (
+        <p className="mb-3 mt-0 text-xs text-brand-ink5">Nothing showing right now.</p>
+      )}
+      <textarea
+        className="input mb-2 w-full text-sm"
+        rows={2}
+        maxLength={300}
+        placeholder="Upgrade tonight at 11pm ET — scanning will be off for about 20 minutes."
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+      />
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <select
+          className="input w-auto text-sm"
+          value={level}
+          onChange={(e) => setLevel(e.target.value as typeof level)}
+        >
+          <option value="info">Info — heads-up</option>
+          <option value="warning">Warning — degraded</option>
+          <option value="outage">Outage — broken</option>
+        </select>
+        <label className="flex items-center gap-1.5">
+          <span className="text-brand-ink4">until</span>
+          <input
+            type="datetime-local"
+            className="input w-auto text-sm"
+            value={endsAt}
+            onChange={(e) => setEndsAt(e.target.value)}
+            title="Leave empty to keep it up until you take it down"
+          />
+        </label>
+        <label className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={dismissible}
+            onChange={(e) => setDismissible(e.target.checked)}
+          />
+          <span>can be dismissed</span>
+        </label>
+        <button className="btn-primary text-sm" disabled={busy || !body.trim()} onClick={publish}>
+          {busy ? "Publishing…" : "Publish"}
+        </button>
+      </div>
+      {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
+    </div>
+  );
+}
+
+/** Add (or claw back) credits on one account. Every adjustment is audited —
+ *  this mints value, so "who did this and why" is the point. */
+function GrantCreditsPanel() {
+  const [email, setEmail] = useState("");
+  const [delta, setDelta] = useState("100");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
+  const [history, setHistory] = useState<
+    Array<{ id: string; delta: number; note: string; at: string; target: string; by: string }>
+  >([]);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/credits");
+      const json = await res.json();
+      setHistory(json.grants ?? []);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function grant() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch("/api/admin/credits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), delta: Number(delta), note }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't apply that");
+      setResult(
+        `Done — their balance is now ${json.balance.toLocaleString()} credits.` +
+          (json.audited ? "" : " (NOT audited — run migration 032.)")
+      );
+      setNote("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't apply that");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-white p-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="min-w-[200px] flex-1 text-xs">
+          <span className="mb-1 block text-brand-ink4">Account email</span>
+          <input
+            className="input text-sm"
+            type="email"
+            placeholder="them@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </label>
+        <label className="text-xs">
+          <span className="mb-1 block text-brand-ink4">Credits</span>
+          <input
+            className="input w-[110px] text-sm"
+            type="number"
+            step={25}
+            value={delta}
+            onChange={(e) => setDelta(e.target.value)}
+            title="Negative takes credits away"
+          />
+        </label>
+        <label className="min-w-[220px] flex-1 text-xs">
+          <span className="mb-1 block text-brand-ink4">Reason (recorded)</span>
+          <input
+            className="input text-sm"
+            placeholder="Comped after the scan outage on the 12th"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </label>
+        <button
+          className="btn-primary text-sm"
+          disabled={busy || !email.trim() || !note.trim()}
+          onClick={grant}
+        >
+          {busy ? "Applying…" : "Apply"}
+        </button>
+      </div>
+      {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
+      {result && <p className="mb-0 mt-2 text-xs text-brand-positive">{result}</p>}
+      {history.length > 0 && (
+        <div className="mt-3 border-t border-brand-line-soft pt-2">
+          <p className="m-0 mb-1 text-[11px] uppercase tracking-wide text-brand-ink5">
+            Recent adjustments
+          </p>
+          {history.slice(0, 8).map((g) => (
+            <div key={g.id} className="flex flex-wrap gap-2 py-0.5 text-[11.5px] text-brand-ink3">
+              <span className="font-mono">
+                {g.delta > 0 ? "+" : ""}
+                {g.delta}
+              </span>
+              <span className="min-w-0 flex-1 truncate">
+                {g.target} — {g.note}
+              </span>
+              <span className="text-brand-ink5">{new Date(g.at).toLocaleDateString()}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>

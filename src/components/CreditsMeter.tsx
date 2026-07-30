@@ -37,6 +37,8 @@ const REASON_LABELS: Record<string, string> = {
   find_image: "Image searches",
   grade: "Grading reports",
   boost_refund: "Refunds",
+  admin_grant: "Added by support",
+  admin_adjustment: "Support adjustment",
 };
 
 function refillDate(cycleStart: string): string {
