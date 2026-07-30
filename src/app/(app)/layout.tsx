@@ -59,12 +59,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             ) : (
               <HeaderCredits />
             )}
-            <span
-              className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-brand-accent text-[12.5px] font-bold text-white"
-              title={auth.profile?.email ?? undefined}
+            {/* The avatar was a dead span. It's the conventional way into
+                account settings, and there was no other route there. */}
+            <Link
+              href="/settings/account"
+              aria-label="Account settings"
+              title={`Account settings${auth.profile?.email ? ` · ${auth.profile.email}` : ""}`}
+              className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-brand-accent text-[12.5px] font-bold text-white hover:brightness-110"
             >
               {initialsFor(auth.profile?.display_name, auth.profile?.email)}
-            </span>
+            </Link>
             <Link
               href="/support"
               aria-label="Help & support"
