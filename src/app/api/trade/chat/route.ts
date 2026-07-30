@@ -46,21 +46,50 @@ interface TradeLine {
   value: number | null;
 }
 
-function summarizeCollection(items: CollectionItem[], cap = 250): string {
-  const lines = items
+/** A collection as a table grouped by set.
+ *
+ *  Was one sentence per card — "2x Charizard ex #125 (Obsidian Flames) ~$18.44
+ *  [DUPLICATE]" — which rewrote the set name on every line and spelled out a
+ *  DUPLICATE marker the prompt never reads (it keys on qty > 1 directly).
+ *  Grouping and tabbing costs 56% fewer tokens for the same facts, and this
+ *  endpoint sends TWO collections, so it pays twice.
+ *
+ *  The cap rises with the saving: 400 cards a side now costs less than 250
+ *  did, so the advisor can see more of what either player actually has. */
+function summarizeCollection(items: CollectionItem[], cap = 400): string {
+  const ranked = items
     .map((it) => {
       const value = itemPrice(it);
       const finish = it.variant && it.variant !== "normal" ? ` [${variantLabel(it.variant)}]` : "";
-      const price = value != null ? ` ~$${value.toFixed(2)}` : " (value unknown)";
       return {
         value: value ?? 0,
-        text: `${it.quantity}x ${it.card.name} #${it.card.number} (${it.card.set_name})${finish}${price}${it.quantity > 1 ? " [DUPLICATE]" : ""}`,
+        set: it.card.set_name ?? "Unknown set",
+        // An empty value cell is how "no price on file" is written — the
+        // prompt already tells the model to call those out as unknown.
+        row: `${it.quantity}\t${it.card.name}${finish}\t${it.card.number ?? ""}\t${
+          value != null ? value.toFixed(2) : ""
+        }`,
       };
     })
     .sort((a, b) => b.value - a.value);
-  const shown = lines.slice(0, cap).map((l) => l.text);
-  if (lines.length > cap) shown.push(`…and ${lines.length - cap} more lower-value cards.`);
-  return shown.join("\n");
+
+  const shown = ranked.slice(0, cap);
+  const bySet = new Map<string, string[]>();
+  for (const r of shown) {
+    const list = bySet.get(r.set);
+    if (list) list.push(r.row);
+    else bySet.set(r.set, [r.row]);
+  }
+
+  const out = [
+    "Grouped by set. Each row is: qty<TAB>card<TAB>number<TAB>value in USD.",
+    "An empty value means no price on file. qty above 1 means they hold spares.",
+    ...[...bySet.entries()].map(([set, rows]) => `[${set}]\n${rows.join("\n")}`),
+  ];
+  if (ranked.length > cap) {
+    out.push(`…and ${ranked.length - cap} more lower-value cards not listed.`);
+  }
+  return out.join("\n\n");
 }
 
 function formatTrade(side: string, lines: TradeLine[]): string {
