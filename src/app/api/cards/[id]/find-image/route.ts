@@ -7,6 +7,7 @@ import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
 import { getTcgdexImageById } from "@/lib/tcgdex";
 import { getCardById } from "@/lib/pokemontcg";
+import { findCard, priceTrackerEnabled } from "@/lib/priceTracker";
 
 export const maxDuration = 120;
 
@@ -206,9 +207,37 @@ export async function POST(req: Request, { params }: Params) {
     const direct = await tryCandidates(fromSource);
     if (direct) return NextResponse.json({ imageUrl: direct.url, source: direct.source });
 
-    // 2) Nothing usable from the source, so search the web — which is the
-    // point of the button. This runs whether the database had no image at
-    // all or had one that wouldn't download.
+    // 2) Pokémon Price Tracker — a real card database, paid but generously
+    // budgeted, and tried BEFORE the AI search. Every card it finds is a
+    // card that never reaches the expensive, guessing step below, and the
+    // user is not charged credits for it.
+    if (priceTrackerEnabled()) {
+      try {
+        const found = await findCard({
+          name: (card.name as string) ?? "",
+          setName: (card.set_name as string | null) ?? null,
+          number: (card.number as string | null) ?? null,
+        });
+        if (found?.images.length) {
+          const fromTracker = await tryCandidates(
+            found.images.slice(0, 4).map((url) => ({ url, source: "Pokémon Price Tracker" }))
+          );
+          if (fromTracker) {
+            return NextResponse.json({ imageUrl: fromTracker.url, source: fromTracker.source });
+          }
+        } else {
+          attempts.push("Pokémon Price Tracker: no image for this card");
+        }
+      } catch (err) {
+        attempts.push(
+          `Pokémon Price Tracker: ${err instanceof Error ? err.message.slice(0, 80) : "failed"}`
+        );
+      }
+    }
+
+    // 3) Nothing usable from any card database, so search the web — which is
+    // the point of the button. This runs whether the databases had no image
+    // at all or had one that wouldn't download.
     const client = anthropic();
     const response = await client.messages.create({
       model: MODEL,
