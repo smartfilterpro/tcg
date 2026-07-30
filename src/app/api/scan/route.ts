@@ -13,6 +13,18 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const maxDuration = 120; // vision + N lookups can take a while
 
+// Field names here are TERSE ON PURPOSE — "num" not "collector_number".
+//
+// Unlike everywhere else in the app, the expensive half of a scan is what the
+// model WRITES: output bills at five times input, and on a 20-card photo the
+// answer is 78% of the cost. Every key is emitted once per card, so a
+// four-token name costs four tokens twenty times over.
+//
+// The meaning lives in the `description` strings below, which stay long and
+// explicit — those are input, at a fifth of the price, and they are what
+// actually instructs the model. Shortening the keys costs nothing in
+// grounding; shortening the descriptions would. `name` and `stamp` are left
+// alone because they are already single tokens and clearer as they are.
 const SCAN_SCHEMA = {
   type: "object",
   properties: {
@@ -26,27 +38,27 @@ const SCAN_SCHEMA = {
             description:
               "The card's printed name, exactly as shown (e.g. 'Charizard ex', 'Iono', 'Rare Candy').",
           },
-          collector_number: {
+          num: {
             type: ["string", "null"],
             description:
               "The collector number at the bottom of the card. Usually before a slash ('042' from '042/191'). Promo cards may have NO slash and a letter prefix instead — report the full code (e.g. 'SWSH095', 'SM210', 'XY67'). Null if unreadable.",
           },
-          set_total: {
+          tot: {
             type: ["string", "null"],
             description:
               "What follows the slash: usually the set size ('191' from '042/191'), but on promo cards it can be a set code — report it as printed (e.g. 'SVP' from '095/SVP'). Null if there is no slash or it's unreadable.",
           },
-          set_name_hint: {
+          set: {
             type: ["string", "null"],
             description:
               "The set name if identifiable from the set symbol or printed text, else null.",
           },
-          rarity_hint: {
+          rar: {
             type: ["string", "null"],
             description:
               "Best guess at the printed rarity (e.g. 'Special Illustration Rare', 'Full Art', 'Common'). Null if unsure.",
           },
-          finish: {
+          fin: {
             type: "string",
             enum: ["normal", "holo", "reverse_holo", "unknown"],
             description:
@@ -58,14 +70,14 @@ const SCAN_SCHEMA = {
             description:
               "Gold foil promo stamp pressed onto the artwork area. 'pokemon_center': a gold Pokémon Center logo stamp. 'prerelease': a gold PRERELEASE wordmark. 'staff': a gold STAFF wordmark. 'none' when there is clearly no stamp; 'unknown' only if the artwork area is obscured.",
           },
-          confidence: {
+          conf: {
             type: "string",
             enum: ["high", "medium", "low"],
             description:
               "high = name AND collector number clearly read; medium = name clear but number uncertain; low = partially obscured or blurry.",
           },
         },
-        required: ["name", "collector_number", "set_total", "set_name_hint", "rarity_hint", "finish", "stamp", "confidence"],
+        required: ["name", "num", "tot", "set", "rar", "fin", "stamp", "conf"],
         additionalProperties: false,
       },
     },
@@ -80,8 +92,8 @@ For EVERY distinct, identifiable card in the image, extract its printed details.
 Read carefully — the collector number at the bottom (e.g. 042/191) is the most
 important field for identification. Promo cards are common and number differently:
 a black-star promo may show 'SWSH095', 'SM210', 'XY67' with no slash (report the
-full code as collector_number), or '095/SVP' where the part after the slash is a
-set code, not a count (report 'SVP' as set_total). Do not invent numbers you
+full code in the "num" field), or '095/SVP' where the part after the slash is a
+set code, not a count (report 'SVP' in "tot"). Do not invent numbers you
 cannot read; use null instead and lower the confidence. Ignore card backs,
 sleeves without cards, and anything that is not a Pokémon TCG card. List cards
 roughly left-to-right, top-to-bottom.
@@ -211,13 +223,13 @@ export async function POST(req: Request) {
     let parsed: {
       cards: Array<{
         name: string;
-        collector_number: string | null;
-        set_total: string | null;
-        set_name_hint: string | null;
-        rarity_hint: string | null;
-        finish?: "normal" | "holo" | "reverse_holo" | "unknown";
+        num: string | null;
+        tot: string | null;
+        set: string | null;
+        rar: string | null;
+        fin?: "normal" | "holo" | "reverse_holo" | "unknown";
         stamp?: "none" | "pokemon_center" | "prerelease" | "staff" | "unknown";
-        confidence: "high" | "medium" | "low";
+        conf: "high" | "medium" | "low";
       }>;
     };
     try {
@@ -243,18 +255,18 @@ export async function POST(req: Request) {
       if (c.stamp === "pokemon_center") hintParts.push("Pokémon Center stamp");
       else if (c.stamp === "prerelease") hintParts.push("Prerelease stamp");
       else if (c.stamp === "staff") hintParts.push("Staff stamp");
-      if (c.finish === "reverse_holo") hintParts.push("Reverse Holo");
-      else if (c.finish === "holo") hintParts.push("Holo");
-      else if (c.finish === "normal") hintParts.push("matte");
-      if (c.rarity_hint) hintParts.push(c.rarity_hint);
+      if (c.fin === "reverse_holo") hintParts.push("Reverse Holo");
+      else if (c.fin === "holo") hintParts.push("Holo");
+      else if (c.fin === "normal") hintParts.push("matte");
+      if (c.rar) hintParts.push(c.rar);
       return {
         // Normalize away curly apostrophes etc. the vision model may emit
         name: cleanCardName(c.name),
-        collectorNumber: c.collector_number,
-        setTotal: c.set_total,
-        setNameHint: c.set_name_hint,
+        collectorNumber: c.num,
+        setTotal: c.tot,
+        setNameHint: c.set,
         rarityHint: hintParts.length > 0 ? hintParts.join(", ") : null,
-        confidence: c.confidence,
+        confidence: c.conf,
       };
     });
 

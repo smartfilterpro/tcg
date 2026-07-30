@@ -27,8 +27,16 @@ interface ReviewRow {
   predictedVariant: string | null; // the finish the scanner suggested, to learn from edits
 }
 
-/** Downscale a photo client-side so uploads stay fast and under limits. */
-async function fileToBase64(file: File, maxDim = 2048): Promise<{ data: string; mediaType: string }> {
+/** Downscale a photo client-side so uploads stay fast and under limits.
+ *
+ *  1568 rather than 2048 because that is the API's own ceiling: anything
+ *  longer on either edge is resized down to fit before it is billed, so the
+ *  extra pixels were never read and never charged for — they were just a
+ *  bigger upload, which on a phone on mobile data is the part the user feels.
+ *  Sending exactly what the model will see costs the same tokens and about
+ *  40% fewer bytes. Do not raise this expecting better recognition; the
+ *  server-side resize would undo it. */
+async function fileToBase64(file: File, maxDim = 1568): Promise<{ data: string; mediaType: string }> {
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
   const w = Math.round(bitmap.width * scale);
