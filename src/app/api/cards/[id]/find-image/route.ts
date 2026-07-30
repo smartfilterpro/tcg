@@ -218,6 +218,17 @@ export async function POST(req: Request, { params }: Params) {
           setName: (card.set_name as string | null) ?? null,
           number: (card.number as string | null) ?? null,
         });
+        // Free mapping: we were handed their catalogue id, and every bulk
+        // dataset they publish joins on it. Best-effort — a card whose id we
+        // fail to store is a card the backfill picks up later, not an error
+        // worth failing an image search over.
+        if (found?.tcgPlayerId) {
+          await supabase
+            .from("cards")
+            .update({ tcgplayer_id: found.tcgPlayerId })
+            .eq("id", id)
+            .then(() => {});
+        }
         if (found?.images.length) {
           const fromTracker = await tryCandidates(
             found.images.slice(0, 4).map((url) => ({ url, source: "Pokémon Price Tracker" }))

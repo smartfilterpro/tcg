@@ -197,6 +197,10 @@ export function extractMarketPrice(json: unknown): number | null {
 export interface PriceTrackerCard {
   images: string[];
   marketPrice: number | null;
+  /** Their catalogue id. Recorded whenever we see one: it is the join key
+   *  for every bulk dataset they publish, and we have no other way to get
+   *  one short of fuzzy-matching names later. */
+  tcgPlayerId: string | null;
   /** Kept for the admin probe, so the shape can be inspected once. */
   raw?: unknown;
 }
@@ -262,6 +266,7 @@ export async function ptFetch(
 
 /** Their documented card shape, as much of it as we use. */
 interface PtCard {
+  tcgPlayerId?: string;
   name?: string;
   setName?: string;
   cardNumber?: string;
@@ -335,7 +340,11 @@ export async function findCard(query: {
       typeof card?.prices?.market === "number" ? card.prices.market : extractMarketPrice(json);
 
     const value: PriceTrackerCard | null = images.length
-      ? { images, marketPrice: price }
+      ? {
+          images,
+          marketPrice: price,
+          tcgPlayerId: typeof card?.tcgPlayerId === "string" ? card.tcgPlayerId : null,
+        }
       : null;
     cache.set(key, { at: Date.now(), value });
     return value;
