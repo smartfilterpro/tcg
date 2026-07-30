@@ -559,17 +559,32 @@ export default function ScanPage() {
           {/* A real bar. It used to advance on a 3.5-second timer whatever was
               happening; each segment is now one card the model has finished
               reading. */}
+          {/* One segment per card up to 24, then a plain bar.
+              A binder page is 9 and a spread on a table can be 30 or more —
+              at that point the segments are sub-pixel slivers with hairline
+              gaps, which reads as a rendering fault rather than as progress.
+              Nothing caps how many cards a photo may hold; this caps only how
+              many pieces the bar is drawn in. */}
           {progress.expected != null && progress.expected > 0 && (
-            <div className="mx-auto mt-4 flex max-w-64 gap-1">
-              {Array.from({ length: progress.expected }).map((_, i) => (
+            progress.expected <= 24 ? (
+              <div className="mx-auto mt-4 flex max-w-64 gap-1">
+                {Array.from({ length: progress.expected }).map((_, i) => (
+                  <div
+                    key={i}
+                    className={`h-1 flex-1 rounded-full transition-colors duration-300 ${
+                      i < progress.read ? "bg-poke-red" : "bg-slate-200"
+                    }`}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="mx-auto mt-4 h-1 max-w-64 overflow-hidden rounded-full bg-slate-200">
                 <div
-                  key={i}
-                  className={`h-1 flex-1 rounded-full transition-colors duration-300 ${
-                    i < progress.read ? "bg-poke-red" : "bg-slate-200"
-                  }`}
+                  className="h-full rounded-full bg-poke-red transition-all duration-300"
+                  style={{ width: `${(progress.read / progress.expected) * 100}%` }}
                 />
-              ))}
-            </div>
+              </div>
+            )
           )}
 
           {partial.length > 0 && (
