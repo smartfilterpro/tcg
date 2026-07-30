@@ -6,7 +6,7 @@ import { buildSide, pushLogRaw, type BattleState } from "@/lib/battle";
 import { BOT_ID } from "@/lib/battleBot";
 
 /** Shown as the practice opponent's name in the log and on the board. */
-const BOT_NAME = "Trainer AI";
+const BOT_NAME = "TrainerAI";
 import {
   battleErrorResponse,
   displayName,
@@ -24,9 +24,11 @@ export async function GET() {
   try {
     const { user, profile } = await requireUser();
     const isAdmin = profile?.role === "admin";
-    // Practice-vs-bot is the one plan-gated feature: it left admin-only
-    // testing and became a Pro perk. Two-player battles stay free for all.
-    const practiceAllowed = isAdmin || profile?.plan === "pro" || profile?.plan === "family";
+    // Practice-vs-bot is admin-only, and back to being so deliberately: the
+    // bot plays badly enough that it was never worth charging for, and it
+    // briefly shipped as a Pro perk. Two-player battles are free for
+    // everyone and always were — there is no model call in a battle.
+    const practiceAllowed = isAdmin;
     const admin = createAdminClient();
     const { data, error } = await admin
       .from("battles")
@@ -95,10 +97,16 @@ export async function POST(req: Request) {
       vsBot?: boolean;
       botDeckId?: string;
     };
-    // Practice battles: admins always; otherwise a Pro/Family perk.
-    const practice =
-      vsBot === true &&
-      (profile?.role === "admin" || profile?.plan === "pro" || profile?.plan === "family");
+    // Practice battles are admin-only. Refused rather than quietly downgraded
+    // to a two-player battle: asking for the bot and silently getting an
+    // empty seat is worse than being told no.
+    const practice = vsBot === true;
+    if (practice && profile?.role !== "admin") {
+      return NextResponse.json(
+        { error: "Practice battles against the bot aren't available yet." },
+        { status: 403 }
+      );
+    }
     if (!deckId || typeof deckId !== "string") {
       return NextResponse.json({ error: "Pick a deck to battle with." }, { status: 400 });
     }

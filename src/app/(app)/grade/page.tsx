@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
+import { CreditLock } from "@/components/CreditLock";
+import { useCredits } from "@/components/useCredits";
 import type { GradeReport } from "@/lib/grading";
 import type { GradeValue } from "@/lib/gradeValue";
 import { quadLooksLikeCard, quadNearEdge, type CenteringMeasurement, type Quad } from "@/lib/cardGeometry";
@@ -21,7 +23,6 @@ import GradeReportView, { gradeColor } from "@/components/GradeReportView";
 import type { SavedGrade } from "@/app/api/grade/reports/route";
 import { FanMark } from "@/components/Logo";
 import { APP_NAME } from "@/lib/branding";
-import { ACTION_ESTIMATES } from "@/lib/credits";
 
 const GRADE_STEPS = [
   "Flattening the card and measuring its borders…",
@@ -409,6 +410,7 @@ function SavedGradeModal({
 }
 
 export default function GradePage() {
+  const creditState = useCredits();
   const [front, setFront] = useState<SideState | null>(null);
   const [back, setBack] = useState<SideState | null>(null);
   const [grading, setGrading] = useState(false);
@@ -655,13 +657,22 @@ export default function GradePage() {
               </span>
               <span className="text-brand-ink5">used for the &ldquo;worth it?&rdquo; maths</span>
             </label>
-            <button
-              className="mt-3 w-full whitespace-nowrap rounded-full bg-brand-ink px-4 py-3 text-[14.5px] font-medium text-brand-canvas hover:bg-brand-ink2 disabled:opacity-50"
-              disabled={!front || !back || grading}
-              onClick={grade}
-            >
-              {grading ? "Grading…" : `Grade my card · ${ACTION_ESTIMATES.grade} credits`}
-            </button>
+            {/* The grade itself is a model call, so the balance decides,
+                not the plan — a Pro out of credits is in the same place as
+                a free user, and should be told so plainly. */}
+            {creditState.empty ? (
+              <div className="mt-3 flex flex-wrap items-center justify-center gap-1">
+                <CreditLock plan={creditState.credits?.plan} label="Out of credits to grade" />
+              </div>
+            ) : (
+              <button
+                className="mt-3 w-full whitespace-nowrap rounded-full bg-brand-ink px-4 py-3 text-[14.5px] font-medium text-brand-canvas hover:bg-brand-ink2 disabled:opacity-50"
+                disabled={!front || !back || grading}
+                onClick={grade}
+              >
+                {grading ? "Grading…" : "Grade my card"}
+              </button>
+            )}
             {grading && (
               <div className="mt-2.5 flex items-center gap-2">
                 <FanMark size={16} className="animate-spin-slow shrink-0" />

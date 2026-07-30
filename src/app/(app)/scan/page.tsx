@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import CardPickerModal from "@/components/CardPickerModal";
+import { CreditLock } from "@/components/CreditLock";
+import { useCredits } from "@/components/useCredits";
 import { AI_NAME } from "@/lib/branding";
 import { uploadCardPhoto } from "@/lib/photos";
 import {
@@ -61,6 +63,7 @@ const SCAN_STEPS = [
 
 export default function ScanPage() {
   const router = useRouter();
+  const creditState = useCredits();
   const fileRef = useRef<HTMLInputElement>(null);
   const [scanStep, setScanStep] = useState(0);
   const [phase, setPhase] = useState<"idle" | "scanning" | "review" | "saving" | "done">("idle");
@@ -267,9 +270,18 @@ export default function ScanPage() {
           />
           <div className="text-5xl">📷</div>
           <p className="mt-3 text-slate-600">Take a photo or choose one from your library.</p>
-          <button className="btn-primary mt-4" onClick={() => fileRef.current?.click()}>
-            Take / choose photo
-          </button>
+          {/* Identifying a card is a model call, so it's the credit balance
+              that decides — not the plan. Free users scan until they run
+              out; so do paid ones. */}
+          {creditState.empty ? (
+            <div className="mt-4 flex items-center justify-center">
+              <CreditLock plan={creditState.credits?.plan} label="Out of credits to scan" />
+            </div>
+          ) : (
+            <button className="btn-primary mt-4" onClick={() => fileRef.current?.click()}>
+              Take / choose photo
+            </button>
+          )}
         </div>
       )}
 

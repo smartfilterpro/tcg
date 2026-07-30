@@ -1,10 +1,13 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { getUserAndProfile } from "@/lib/auth";
 import { APP_NAME, FAN_DISCLAIMER } from "@/lib/branding";
 import { FanMark, Wordmark } from "@/components/Logo";
 import HeaderCredits from "@/components/HeaderCredits";
 import AppNav from "@/components/AppNav";
 import TrainerChat from "@/components/TrainerChat";
+import UpgradeReturn from "@/components/UpgradeReturn";
+import SiteNotice from "@/components/SiteNotice";
 import { initialsFor } from "@/lib/avatar";
 
 /** The signed-in app shell, per App Screens artboard 02: dark bar with the
@@ -20,15 +23,21 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const isAdmin = auth.profile?.role === "admin";
   const plan = auth.profile?.plan ?? "free";
   // The lock marks what the free plan doesn't include. Neither page hard-
-  // blocks: Battle still offers two-player games and Grade still runs on
-  // trial credits — the lock is the plan pitch, not a wall.
+  // blocks: both run on trial credits — the lock is the plan pitch, not a
+  // wall, and the real limit is the credit balance, shown per action.
+  //
+  // Battle carries no lock. Anyone can play anyone; it is two people and a
+  // shared table, with no model call anywhere in it, so there is nothing to
+  // meter and nothing to sell. (Practice against the bot is a separate,
+  // admin-only thing — see /api/battles.) If AI-driven battles arrive later,
+  // that feature can be gated on its own terms rather than the whole page.
   const locked = !isAdmin && plan === "free";
 
   const navItems = [
     { label: "Collection", href: "/" },
-    { label: "Scan", href: "/scan" },
+    { label: "Scan", href: "/scan", locked },
     { label: "Decks", href: "/decks" },
-    { label: "Battle", href: "/battles", locked },
+    { label: "Battle", href: "/battles" },
     { label: "Grade", href: "/grade", locked },
     { label: "Friends", href: "/friends" },
     { label: "Trades", href: "/trades" },
@@ -117,7 +126,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
       </header>
       {/* pb leaves room for the chat launcher so it never sits on the footer */}
-      <main className="mx-auto max-w-[1060px] px-4 py-7 sm:px-6">{children}</main>
+      {/* Above the content and below the nav: an outage notice that scrolls
+          away with the page is a notice nobody reads. */}
+      <SiteNotice />
+
+      <main className="mx-auto max-w-[1060px] px-4 py-7 sm:px-6">
+        {/* Suspense because it reads the query string, which opts the subtree
+            out of static rendering — the boundary keeps that contained to
+            the banner instead of the whole shell. */}
+        <Suspense fallback={null}>
+          <UpgradeReturn />
+        </Suspense>
+        {children}
+      </main>
       <TrainerChat />
       <footer className="mx-auto max-w-[1060px] px-4 pb-24 pt-2 text-center text-xs text-slate-400 sm:px-6">
         <div>

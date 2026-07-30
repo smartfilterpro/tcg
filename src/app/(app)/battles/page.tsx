@@ -269,32 +269,16 @@ export default function BattlesPage() {
         </div>
       )}
 
-      {!practiceAllowed && (
-        <div className="card-panel p-5 text-center">
-          <div className="mx-auto mb-3.5 flex h-[52px] w-[52px] items-center justify-center rounded-[14px] bg-brand-sunken text-xl">
-            🔒
-          </div>
-          <h2 className="m-0 mb-2 font-display text-[21px] font-bold tracking-[-.02em]">
-            Practice battles are a Pro feature
-          </h2>
-          <p className="mx-auto mb-4 max-w-md text-[14.5px] leading-[1.6] text-brand-ink3">
-            Practise your deck against a bot that plays a straightforward, honest game — bench,
-            energy, evolve, attack — so you can see how fast your deck sets up.
-          </p>
-          <div className="mx-auto mb-4 max-w-md rounded-xl bg-brand-sunken px-3.5 py-3 text-left text-[13px] leading-[1.55] text-brand-ink2">
-            Pro also unlocks grading reports and <b>500 credits a month</b> — $9, cancel any time.
-            Battles against friends stay free for everyone.
-          </div>
-          <a href="/pricing" className="btn-primary inline-block">
-            See plans
-          </a>
-        </div>
-      )}
+      {/* The "practice battles are a Pro feature" upsell used to sit here.
+          It sold something that is no longer for sale: the bot plays too
+          poorly to charge for, so it is admin-only again and non-admins are
+          shown nothing rather than a locked door to an empty room. Battles
+          against other people are, and always were, free for everyone. */}
       {practiceAllowed && (decks.length > 0 || sharedDecks.length > 0) && (
         <form onSubmit={createPractice} className="card-panel space-y-3 p-4">
           <div className="flex items-center gap-2">
-            <h2 className="font-semibold">🤖 Practice vs Trainer AI</h2>
-            <span className="chip bg-poke-gold/30 text-yellow-900">Pro</span>
+            <h2 className="font-semibold">🤖 Practice vs TrainerAI</h2>
+            <span className="chip bg-brand-sunken text-brand-ink3">Admin only</span>
           </div>
           <p className="text-xs text-slate-500">
             Play a deck against the practice opponent — no code, no waiting. It plays a
@@ -316,7 +300,7 @@ export default function BattlesPage() {
               </select>
             </label>
             <label className="block text-xs font-medium text-slate-600">
-              Trainer AI plays
+              TrainerAI plays
               <select
                 className="input mt-1"
                 value={botDeck}

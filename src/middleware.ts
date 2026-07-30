@@ -22,6 +22,14 @@ const PUBLIC_PATHS = [
   // mark the endpoint down if it 401s, which costs the production keyset. It
   // holds no data and answers a hash challenge, so it is safe to expose.
   "/api/ebay/account-deletion",
+  // Family invitations are answered by people who may not have an account
+  // yet — that is the entire point of the change. The page itself resolves
+  // the token through a security-definer function and shows nothing for a
+  // dead one; accepting still requires signing in.
+  "/family/join",
+  // What things cost is a question people ask before signing up, so the
+  // reference page answers it without an account.
+  "/credits",
   "/terms",
 ];
 

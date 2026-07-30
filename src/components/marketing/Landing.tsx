@@ -7,7 +7,7 @@ import Link from "next/link";
 import { MarketingNav, MarketingFooter } from "@/components/marketing/Chrome";
 import { PricingSection } from "@/components/marketing/Pricing";
 import { APP_NAME } from "@/lib/branding";
-import { STATS, STATS_DISCLAIMER } from "@/lib/marketing";
+import type { LiveStat } from "@/lib/liveStats";
 
 const DIFFS = [
   {
@@ -78,7 +78,15 @@ function Placeholder({ label, dark = false, className }: { label: string; dark?:
   );
 }
 
-export default function Landing() {
+/** The hero numbers are measured, so they arrive as props from the server
+ *  component that reads them rather than being imported as constants. */
+export default function Landing({
+  stats,
+  statsNote,
+}: {
+  stats: readonly LiveStat[];
+  statsNote: string;
+}) {
   return (
     <div className="min-h-screen overflow-x-hidden bg-brand-canvas font-body text-brand-ink">
       <MarketingNav />
@@ -115,7 +123,7 @@ export default function Landing() {
                 </Link>
               </div>
               <div className="mt-10 flex flex-wrap gap-[30px]">
-                {STATS.map((s) => (
+                {stats.map((s) => (
                   <div key={s.value}>
                     <div className="font-display text-[26px] font-bold tracking-[-.03em] min-[720px]:text-[32px]">
                       {s.value}
@@ -124,7 +132,7 @@ export default function Landing() {
                   </div>
                 ))}
               </div>
-              <p className="mb-6 mt-3 max-w-[52ch] text-[11.5px] leading-snug text-brand-ink5">{STATS_DISCLAIMER}</p>
+              <p className="mb-6 mt-3 max-w-[52ch] text-[11.5px] leading-snug text-brand-ink5">{statsNote}</p>
             </div>
 
             <div className="min-w-[320px] flex-[1_1_420px] self-end">
@@ -249,7 +257,7 @@ export default function Landing() {
           Point your camera at the pile.
         </h2>
         <p className="mx-auto mb-[30px] max-w-[52ch] text-[17px] leading-[1.6] text-brand-ink3">
-          Free forever for collecting. 100 Trainer AI credits to see what the assistant does. No
+          Free forever for collecting. 100 TrainerAI credits to see what the assistant does. No
           card, no invite code.
         </p>
         <Link

@@ -1,6 +1,6 @@
 "use client";
 
-// The Trainer AI chat, present on every signed-in page.
+// The TrainerAI chat, present on every signed-in page.
 //
 // A launcher pinned bottom-right and a panel above it. It deliberately does
 // NOT take over the screen on desktop: most questions are asked *about*
@@ -9,9 +9,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
-import { ACTION_ESTIMATES } from "@/lib/credits";
 import { FanMark } from "@/components/Logo";
 import Markdown from "@/components/Markdown";
+import { OutOfCreditsNote } from "@/components/CreditLock";
+import { useCredits } from "@/components/useCredits";
 
 interface Msg {
   id?: string;
@@ -29,6 +30,7 @@ const STARTERS = [
 ];
 
 export default function TrainerChat() {
+  const credits = useCredits();
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [draft, setDraft] = useState("");
@@ -85,6 +87,10 @@ export default function TrainerChat() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "The chat failed");
       setMsgs((m) => [...m, { role: "assistant", content: json.answer, refused: json.refused }]);
+      // Re-read the balance: this is the one surface someone uses repeatedly
+      // in a sitting, so it's where the lock has to appear on time rather
+      // than at the next page load.
+      credits.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The chat failed");
       // Put the question back so it isn't lost to a failed send.
@@ -140,7 +146,7 @@ export default function TrainerChat() {
             <div className="min-w-0 flex-1">
               <div className="font-display text-[15px] font-bold leading-tight">{AI_NAME}</div>
               <div className="text-[11.5px] text-brand-ink4">
-                Knows your cards and decks · {ACTION_ESTIMATES.chat} credits a question
+                Knows your cards and decks
               </div>
             </div>
             {msgs.length > 0 && (
@@ -227,6 +233,15 @@ export default function TrainerChat() {
             {error && <p className="mt-2 text-[12.5px] text-brand-negative">{error}</p>}
           </div>
 
+          {/* Out of credits: the composer is replaced rather than left to
+              fail on send. Shown to paid plans on the same terms — a Pro who
+              has spent the month's allowance is in exactly this position,
+              and hiding that until they press send would be worse. */}
+          {credits.empty ? (
+            <div className="border-t border-brand-line px-4 py-3">
+              <OutOfCreditsNote plan={credits.credits?.plan} />
+            </div>
+          ) : (
           <form
             className="flex items-end gap-2 border-t border-brand-line px-3 py-2.5"
             onSubmit={(e) => {
@@ -259,6 +274,7 @@ export default function TrainerChat() {
               ↑
             </button>
           </form>
+          )}
         </div>
       )}
     </>

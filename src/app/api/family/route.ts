@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -8,6 +9,17 @@ import { cycleStart, MONTHLY_GRANT } from "@/lib/credits";
 // own cap away.
 
 const MAX_MEMBERS = 5;
+
+/** The app's own origin, for building an invitation link. Behind Railway's
+ *  proxy the request URL's host is the internal one, so the forwarded header
+ *  wins when it's there. */
+function originOf(req: Request): string {
+  const configured = (process.env.NEXT_PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
+  if (configured) return configured;
+  const host = req.headers.get("x-forwarded-host") ?? new URL(req.url).host;
+  const proto = req.headers.get("x-forwarded-proto") ?? "https";
+  return `${proto}://${host}`;
+}
 
 async function loadGroup(admin: ReturnType<typeof createAdminClient>, userId: string) {
   const { data: mine } = await admin
@@ -126,41 +138,101 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true });
     }
 
+    // Invite: creates a request, never a membership.
+    //
+    // This used to insert straight into family_members on a typed email
+    // address, so anyone who knew your address could put your account in
+    // their group — and being in one is not cosmetic. A parent can cap your
+    // monthly spending, switch your trade board off, and see your usage
+    // itemised; your AI requests start drawing on their pool. Nobody should
+    // get that over an account without the account's agreement.
+    //
+    // It also no longer requires the invitee to have signed up first, which
+    // was a strange thing to ask of the person doing the inviting. The link
+    // works either way: an existing account answers it in place, a new one
+    // signs up and lands back on it.
     if (body.action === "invite") {
       const fam = await loadGroup(admin, user.id);
       if (!fam?.group || fam.myRole !== "parent") {
-        return NextResponse.json({ error: "Only a parent can add members." }, { status: 403 });
-      }
-      if (fam.members.length >= MAX_MEMBERS) {
-        return NextResponse.json({ error: `A family holds up to ${MAX_MEMBERS} profiles.` }, { status: 409 });
+        return NextResponse.json({ error: "Only a parent can invite members." }, { status: 403 });
       }
       const email = (body.email ?? "").trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        return NextResponse.json({ error: "That doesn't look like an email address." }, { status: 400 });
+      }
+      if (email === (user.email ?? "").toLowerCase()) {
+        return NextResponse.json({ error: "You're already in this family." }, { status: 400 });
+      }
+
+      // Seats are counted as members plus invitations already outstanding.
+      // Counting only members would let five pending invites all land on a
+      // family with one seat free.
+      const { count: pending } = await admin
+        .from("family_invites")
+        .select("id", { count: "exact", head: true })
+        .eq("group_id", fam.group.id)
+        .eq("status", "pending")
+        .gt("expires_at", new Date().toISOString());
+      if (fam.members.length + (pending ?? 0) >= MAX_MEMBERS) {
+        return NextResponse.json(
+          {
+            error: `A family holds up to ${MAX_MEMBERS} profiles, counting invitations you haven't had answered yet.`,
+          },
+          { status: 409 }
+        );
+      }
+
+      // If they already have an account and are already in a family, say so
+      // now rather than after they've followed a link that can't work.
       const { data: target } = await admin
         .from("profiles")
         .select("id")
         .eq("email", email)
         .maybeSingle();
-      if (!target) {
-        return NextResponse.json(
-          {
-            error:
-              "No account with that email. Have them sign up first (it's free), then add them here.",
-          },
-          { status: 404 }
-        );
+      if (target) {
+        const { data: theirs } = await admin
+          .from("family_members")
+          .select("group_id")
+          .eq("user_id", target.id)
+          .maybeSingle();
+        if (theirs) {
+          return NextResponse.json(
+            {
+              error:
+                theirs.group_id === fam.group.id
+                  ? "They're already in your family."
+                  : "That account already belongs to another family.",
+            },
+            { status: 409 }
+          );
+        }
       }
+
+      const token = randomBytes(24).toString("base64url");
       const role = body.role === "parent" ? "parent" : "kid";
-      const { error } = await admin
-        .from("family_members")
-        .insert({ group_id: fam.group.id, user_id: target.id, role });
+      const { error } = await admin.from("family_invites").insert({
+        group_id: fam.group.id,
+        invited_by: user.id,
+        email,
+        role,
+        token,
+      });
       if (error) {
-        // unique(user_id): already in a family — theirs or yours.
+        // The partial unique index: one live invitation per address.
         return NextResponse.json(
-          { error: "That account is already part of a family." },
+          { error: "You've already invited that address — resend or cancel that invitation." },
           { status: 409 }
         );
       }
-      return NextResponse.json({ ok: true });
+      return NextResponse.json({
+        ok: true,
+        // The link IS the delivery mechanism. There is no outbound mail yet,
+        // and returning a link the parent can send themselves is honest
+        // about that rather than silently dropping the invitation into a
+        // mail queue that doesn't exist.
+        link: `${originOf(req)}/family/join/${token}`,
+        hasAccount: !!target,
+      });
     }
 
     return NextResponse.json({ error: "Unknown action." }, { status: 400 });

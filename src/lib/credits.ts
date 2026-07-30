@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllRows } from "@/lib/fetchAll";
 import { AI_NAME } from "@/lib/branding";
 
 /** One-time signup grant (≈ $1 of AI). Never refills — it sits there until
@@ -52,19 +53,33 @@ export function creditsForUsd(usd: number): number {
 
 /** Typical costs per action at current models, for UI copy only ("a deck
  *  build usually runs 15–50 credits"). The ledger always debits actuals. */
-export const ACTION_ESTIMATES: Record<string, string> = {
-  scan: "2–4",
-  deck_build: "15–50",
-  deck_review: "5–15",
-  grade: "8–15",
-  coach: "1–3",
-  // Measured, not guessed: the chat carries an index of your collection and
-  // your decks, so it costs more than the deck coach, which is handed one
-  // deck. 3 credits for a small collection, 5 for a large one.
-  chat: "3–5",
-  trade_chat: "1–3",
-  find_image: "1–5",
-};
+/** What each AI action typically costs, in one place.
+ *
+ *  Ranges, not prices. The ledger debits what a call actually cost (1 credit
+ *  = 1¢ of model spend), so a fixed menu would be a fiction — a scan of two
+ *  cards and a scan of twenty are not the same call.
+ *
+ *  These numbers appear on exactly one page. They used to be printed on the
+ *  buttons themselves ("Grade my card · 8–15 credits"), which put a price tag
+ *  on every action in the product and made using it feel like running a
+ *  meter. The balance is in the header; the detail lives at /credits for
+ *  anyone who wants it.
+ */
+export const CREDIT_MENU = [
+  { key: "scan", label: "Bulk scan", cost: "2–4", what: "One photo, up to 20 cards identified." },
+  { key: "deck_build", label: "Deck build", cost: "15–50", what: "A full 60-card deck from your collection, with a strategy and a buy-list." },
+  { key: "deck_review", label: "Deck review", cost: "5–15", what: "A written critique of a deck you built." },
+  { key: "coach", label: "Coach reply", cost: "1–3", what: "One question about one deck." },
+  { key: "chat", label: "TrainerAI chat", cost: "3–5", what: "One question. Costs a little more than the coach because it carries an index of your whole collection." },
+  { key: "grade", label: "Grading report", cost: "8–15", what: "Corner, edge, surface and centering analysis from your photos." },
+  { key: "trade_chat", label: "Trade advice", cost: "1–3", what: "Whether a proposed trade is fair." },
+  { key: "find_image", label: "Card image search", cost: "1–5", what: "Finding artwork for a card the database has no picture for." },
+] as const;
+
+/** Keyed lookup, for anywhere that needs one action's range. */
+export const ACTION_ESTIMATES: Record<string, string> = Object.fromEntries(
+  CREDIT_MENU.map((m) => [m.key, m.cost])
+);
 
 /** The start of the user's current credit cycle.
  *
@@ -185,11 +200,89 @@ async function sumDeltas(
   userIds: string[],
   opts?: { since?: Date; negativeOnly?: boolean }
 ): Promise<number> {
-  let q = admin.from("credit_ledger").select("delta").in("user_id", userIds);
-  if (opts?.since) q = q.gte("created_at", opts.since.toISOString());
-  if (opts?.negativeOnly) q = q.lt("delta", 0);
-  const { data } = await q;
-  return (data ?? []).reduce((s, r) => s + (r.delta as number), 0);
+  // Paged. PostgREST caps a response at 1,000 rows, and the ledger gains a
+  // row per AI call — a few months of real use passes a thousand, at which
+  // point an unpaged sum silently stops counting the rest and the balance
+  // is simply wrong. Ordered totally so paging can't drop or repeat rows.
+  const { data } = await fetchAllRows<{ delta: number }>(() => {
+    let q = admin
+      .from("credit_ledger")
+      .select("delta")
+      .in("user_id", userIds)
+      .order("created_at")
+      .order("id");
+    if (opts?.since) q = q.gte("created_at", opts.since.toISOString());
+    if (opts?.negativeOnly) q = q.lt("delta", 0);
+    return q;
+  });
+  return data.reduce((s, r) => s + (r.delta ?? 0), 0);
+}
+
+/** Credits that were BOUGHT or GIVEN outright, and survive a plan ending.
+ *
+ *  A monthly allowance is rent: it comes with the subscription and goes with
+ *  it. A boost is property — someone paid cash for those credits separately,
+ *  and taking them back because a subscription lapsed would be keeping money
+ *  for nothing. Admin grants sit on the same side: they were given to make
+ *  something right, and expiring them would undo the apology.
+ */
+const PERSISTENT_REASONS = new Set([
+  "boost",
+  "boost_refund",
+  "admin_grant",
+  "admin_adjustment",
+]);
+
+/** End-of-subscription clean-up: monthly credits go, bought credits stay.
+ *
+ *  Spending draws down the monthly allowance FIRST and boosts last, which is
+ *  the reading that favours the person who paid: you never lose a boost you
+ *  bought because a plan you also paid for happened to expire. Concretely
+ *  the surviving balance is whatever remains of the persistent credits, and
+ *  the rest is written off with an explicit ledger row rather than by
+ *  deleting history.
+ *
+ *  Returns how many credits were removed. Idempotent through `ref`: a
+ *  redelivered cancellation cannot expire the same credits twice.
+ */
+export async function expirePlanCredits(
+  admin: SupabaseClient,
+  userId: string,
+  ref: string
+): Promise<number> {
+  const { data } = await fetchAllRows<{ delta: number; reason: string }>(() =>
+    admin
+      .from("credit_ledger")
+      .select("delta, reason")
+      .eq("user_id", userId)
+      .order("created_at")
+      .order("id")
+  );
+
+  const balance = data.reduce((s, r) => s + (r.delta ?? 0), 0);
+  if (balance <= 0) return 0;
+
+  const persistent = data
+    .filter((r) => PERSISTENT_REASONS.has(r.reason))
+    .reduce((s, r) => s + (r.delta ?? 0), 0);
+
+  // Can't survive more than is actually there, and can't be negative.
+  const surviving = Math.max(0, Math.min(balance, persistent));
+  const toExpire = balance - surviving;
+  if (toExpire <= 0) return 0;
+
+  const { error } = await admin.from("credit_ledger").insert({
+    user_id: userId,
+    delta: -toExpire,
+    reason: "plan_expired",
+    ref_id: ref,
+  });
+  // 23505 is the redelivery we wanted to ignore; anything else is real.
+  if (error && error.code !== "23505") {
+    console.error(`credit expiry failed for ${userId}: ${error.message}`);
+    return 0;
+  }
+  return error ? 0 : toExpire;
 }
 
 export interface CreditStatus {
@@ -229,6 +322,16 @@ export async function checkCredits(
     const poolIds = family ? family.memberIds : [user.id];
     const balance = await sumDeltas(admin, poolIds);
 
+    // A balance of zero stops the NEXT request, never the one in flight.
+    //
+    // This is checked once, before the model is called, and the debit happens
+    // afterwards from the usage it actually reported. So a request that
+    // starts with one credit left runs to completion even if it costs fifty,
+    // and the balance simply goes negative until the next refill. That is
+    // deliberate and is promised on /credits: nobody gets cut off mid-answer
+    // and charged for a truncated one. Do not "fix" this into a mid-flight
+    // abort — an abandoned generation costs us exactly the same as a
+    // finished one, and delivers nothing.
     if (balance <= 0) {
       return {
         ok: false,

@@ -8,7 +8,6 @@
 // on, and how much runway is left. No opaque percentages either.
 
 import { useEffect, useState } from "react";
-import { ACTION_ESTIMATES } from "@/lib/credits";
 import { BOOST_LIST, BOOSTS_NOTE } from "@/lib/boosts";
 import { AI_NAME } from "@/lib/branding";
 
@@ -32,11 +31,14 @@ const REASON_LABELS: Record<string, string> = {
   deck_build: "Deck builds",
   deck_review: "Deck reviews",
   coach: "Coach replies",
-  chat: "Trainer AI chat",
+  chat: "TrainerAI chat",
   trade_chat: "Trade advisor",
   find_image: "Image searches",
   grade: "Grading reports",
   boost_refund: "Refunds",
+  admin_grant: "Added by support",
+  plan_expired: "Plan ended",
+  admin_adjustment: "Support adjustment",
 };
 
 function refillDate(cycleStart: string): string {
@@ -296,9 +298,9 @@ export default function CreditsMeter() {
                 Buy credits
               </button>
             </div>
-            <div className="text-[11px] text-brand-ink5">
-              Typical: bulk scan {ACTION_ESTIMATES.scan} cr · deck build {ACTION_ESTIMATES.deck_build} cr
-            </div>
+            <a href="/credits" className="text-[11px] text-brand-ink5 underline">
+              What things cost
+            </a>
           </div>
         </div>
       </div>
@@ -331,7 +333,7 @@ export function BulkScanNudge({ cards }: { cards: number }) {
         href="/scan"
         className="rounded-full bg-brand-canvas px-5 py-2.5 text-sm font-medium text-brand-ink"
       >
-        Try a bulk scan · {ACTION_ESTIMATES.scan} cr
+        Try a bulk scan
       </a>
     </div>
   );

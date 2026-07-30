@@ -1,4 +1,4 @@
-// What Trainer AI knows about you, assembled for each message.
+// What TrainerAI knows about you, assembled for each message.
 //
 // The hard constraint is cost, not the context window. A credit is a cent, so
 // stuffing 1,500 cards of full rules text into every chat turn — which is how
@@ -8,6 +8,7 @@
 // assistant needs a card's text it can ask, or the deck tools can fetch it.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 /** Roughly 4 characters a token for English prose and short lines. Only used
  *  to decide how much to include, so an estimate is fine. */
@@ -32,6 +33,9 @@ interface Row {
     number: string | null;
     rarity: string | null;
     market_price: number | null;
+    /** From pokemontcg.io, cached in battle_data. Null when we've never
+     *  looked this card up — sparse, and treated as unknown, not as legal. */
+    legal: { std?: boolean; exp?: boolean } | null;
   } | null;
 }
 
@@ -48,11 +52,31 @@ export async function buildContext(
   userId: string
 ): Promise<AssistantContext> {
   const [itemsRes, decksRes, profileRes, gradesRes] = await Promise.all([
-    supabase
-      .from("collection_items")
-      .select("quantity, variant, price_override, card:cards(name, set_name, number, rarity, market_price)")
-      .eq("user_id", userId)
-      .limit(5000),
+    // Paged, not .limit(5000).
+    //
+    // PostgREST caps every response at 1,000 rows whatever .limit() asks for,
+    // and this query had no .order() either — so past a thousand rows it
+    // returned an ARBITRARY thousand, silently. The symptom was subtle and
+    // bad: someone owning four different printings of Professor's Research
+    // (3+3+2+2 = 10) had two of those rows survive the cap, so the assistant
+    // was told they owned 4 and said so with confidence. Not a hallucination
+    // — it read the data faithfully, and the data was a random subset.
+    //
+    // The order has to be total, or paging repeats rows on one page and
+    // drops them from another, which would be the same bug wearing a hat.
+    fetchAllRows(() =>
+      supabase
+        .from("collection_items")
+        .select(
+          // legal:battle_data->legal pulls just the legality object out of
+          // the jsonb rather than the whole card's rules text, which would
+          // be megabytes across a big collection.
+          "quantity, variant, price_override, card:cards(name, set_name, number, rarity, market_price, legal:battle_data->legal)"
+        )
+        .eq("user_id", userId)
+        .order("created_at")
+        .order("id")
+    ),
     supabase
       .from("decks")
       .select("name, strategy, cards")
@@ -74,6 +98,13 @@ export async function buildContext(
   // the reverse holo, and splitting them doubles the line count for nothing.
   const byName = new Map<string, { qty: number; set: string; value: number }>();
   const bySet = new Map<string, number>();
+  // Standard legality, per set, from the cards we actually hold data for.
+  // A set is judged by its cards: any card marked Standard-legal makes the
+  // set current, and a set whose known cards are all marked not-legal has
+  // rotated. Sets with no data at all stay unknown and are named as such —
+  // the assistant must not guess, and "I don't know" is a correct answer
+  // that a confident wrong one is not.
+  const setLegal = new Map<string, { legal: number; rotated: number }>();
   let totalCards = 0;
   let totalValue = 0;
   for (const r of rows) {
@@ -84,6 +115,12 @@ export async function buildContext(
     totalValue += qty * unit;
     const set = r.card.set_name ?? "Unknown set";
     bySet.set(set, (bySet.get(set) ?? 0) + qty);
+    if (r.card.legal && typeof r.card.legal.std === "boolean") {
+      const tally = setLegal.get(set) ?? { legal: 0, rotated: 0 };
+      if (r.card.legal.std) tally.legal += 1;
+      else tally.rotated += 1;
+      setLegal.set(set, tally);
+    }
     const prev = byName.get(r.card.name);
     if (prev) {
       prev.qty += qty;
@@ -110,6 +147,34 @@ export async function buildContext(
     parts.push(
       "BY SET: " + sets.slice(0, 40).map(([s, n]) => `${s} (${n})`).join(", ") +
         (sets.length > 40 ? `, and ${sets.length - 40} more sets` : "")
+    );
+  }
+
+  // What is actually legal in Standard right now, from the card database
+  // rather than from the model's memory of when it was trained. Rotation
+  // moves every year, so a model asked "is this Standard legal?" is being
+  // asked a question its training data cannot answer.
+  const standard: string[] = [];
+  const rotated: string[] = [];
+  const unknownLegality: string[] = [];
+  for (const [set] of sets) {
+    const tally = setLegal.get(set);
+    if (!tally) unknownLegality.push(set);
+    else if (tally.legal > 0) standard.push(set);
+    else rotated.push(set);
+  }
+  if (standard.length || rotated.length || unknownLegality.length) {
+    parts.push(
+      "FORMAT LEGALITY — this is current data from the card database, and it " +
+        "OVERRIDES anything you remember about rotation. Never state that a card " +
+        "is or isn't Standard legal from memory.\n" +
+        (standard.length ? `Standard legal: ${standard.join(", ")}.\n` : "") +
+        (rotated.length ? `Rotated out of Standard: ${rotated.join(", ")}.\n` : "") +
+        (unknownLegality.length
+          ? `No legality data on file for: ${unknownLegality.slice(0, 25).join(", ")}` +
+            (unknownLegality.length > 25 ? `, and ${unknownLegality.length - 25} more` : "") +
+            ". For these, say you don't have current legality data and point them at the official list — do not guess."
+          : "")
     );
   }
 

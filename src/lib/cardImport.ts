@@ -22,6 +22,25 @@ export const IMPORT_STATE_KEY = "card_import";
 /** pokemontcg.io's maximum. Fewer, larger pages beats more, smaller ones. */
 export const IMPORT_PAGE_SIZE = 250;
 
+/** Space between page requests.
+ *
+ *  There was none: pages went out back-to-back, each one issued the instant
+ *  the last returned, twenty in a row. That is the most aggressive pattern
+ *  available to us against an API that is free, small, and visibly struggling
+ *  — and 500s that recur at the same page while a valid key is configured
+ *  look far more like load shedding than like a broken request.
+ *
+ *  Deliberately applied here rather than inside the pokemontcg client. A
+ *  global queue would put a member's card lookup behind the import's next
+ *  page, so a background job would be slowing down a scan somebody is
+ *  watching. Only the bulk job waits.
+ *
+ *  400ms adds ~8s to a twenty-page call and is invisible next to a run that
+ *  has to be restarted. */
+const PAGE_INTERVAL_MS = 400;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export interface CardImportState {
   /** Next page to fetch, 1-based. */
   page: number;
@@ -162,6 +181,9 @@ export async function runCardImport(
 
   try {
     for (let i = 0; i < maxPages; i++) {
+      // Before every page but the first — no reason to make the caller wait
+      // for a request that hasn't strained anything yet.
+      if (i > 0) await sleep(PAGE_INTERVAL_MS);
       const { more } = await importOnePage(admin, state);
       state.updatedAt = new Date().toISOString();
       if (!more) {

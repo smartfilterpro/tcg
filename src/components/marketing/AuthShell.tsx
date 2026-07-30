@@ -20,7 +20,7 @@ const NEXT_STEPS = [
   {
     n: "03",
     title: "Get a deck that's actually yours",
-    body: "Trainer AI builds a legal 60-card list from cards you own, tuned to how you like to play.",
+    body: "TrainerAI builds a legal 60-card list from cards you own, tuned to how you like to play.",
   },
   {
     n: "04",

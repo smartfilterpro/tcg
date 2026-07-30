@@ -3,30 +3,20 @@
 // lives in the components.
 
 import { BOOST_LIST, BOOSTS_NOTE } from "@/lib/boosts";
-import { MONTHLY_GRANT, SIGNUP_GRANT } from "@/lib/credits";
+import { CREDIT_MENU, MONTHLY_GRANT, SIGNUP_GRANT } from "@/lib/credits";
 
-/** Hand-measured, hand-updated — the owner's decision over wiring these to
- *  live telemetry. The as-of date renders next to them, and the disclaimer
- *  is not optional: without it these read as guarantees. */
-export const STATS = [
-  { value: "97%", label: "of scanned cards matched correctly, first try" },
-  { value: "3.4s", label: "average time to add one card, start to saved" },
-  { value: "20+", label: "cards read from a single photo" },
-] as const;
+// STATS / STATS_ASOF / STATS_DISCLAIMER lived here as hand-measured
+// constants. They are measured from scan_events now — see lib/liveStats.ts.
+// A hand-maintained number decays: it stops moving while the thing it
+// describes keeps changing, and nobody remembers to edit it.
 
-export const STATS_ASOF = "July 2026";
-export const STATS_DISCLAIMER = `Measured on our own test scans, ${STATS_ASOF} — updated by hand as the scanner improves. Your photos, lighting and cards will vary.`;
-
-/** What actions typically cost. Ranges, not fixed prices: the ledger debits
- *  what each call actually cost (1 credit = 1¢ of AI), so the honest table
- *  is a range. The mock's fixed menu predates that decision. */
-export const CREDIT_COSTS = [
-  { action: "Bulk scan (up to 20 cards)", cost: "2–4 credits" },
-  { action: "Deck build", cost: "15–50 credits" },
-  { action: "Deck review", cost: "5–15 credits" },
-  { action: "Coach reply", cost: "1–3 credits" },
-  { action: "Grading report", cost: "8–15 credits" },
-] as const;
+/** The pricing page's cost table, from the same menu the in-app reference
+ *  page reads. Two hand-kept lists of the same numbers had already drifted —
+ *  this one was missing chat, trade advice and image search entirely. */
+export const CREDIT_COSTS = CREDIT_MENU.map((m) => ({
+  action: m.label,
+  cost: `${m.cost} credits`,
+}));
 
 export const CREDIT_COSTS_NOTE =
   "Charged by what each request actually costs to run — bigger collections make bigger deck builds. Every charge shows in your history.";
@@ -64,7 +54,7 @@ export const TIERS: Tier[] = [
       f("Collection value + weekly price refresh"),
       f("Two-player battles"),
       f("CSV export", false),
-      f("Ongoing Trainer AI credits", false),
+      f("Ongoing TrainerAI credits", false),
     ],
     cta: "Start free",
     href: "/signup",
@@ -81,7 +71,7 @@ export const TIERS: Tier[] = [
     features: [
       f("Everything in Free"),
       f("Bulk camera scanning, 20+ cards a shot"),
-      f("Trainer AI deck building + coaching"),
+      f("TrainerAI deck building + coaching"),
       f("Card grading reports"),
       f("Daily price refresh"),
       f("CSV export of your whole collection"),

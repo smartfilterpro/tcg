@@ -1,6 +1,7 @@
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
+import { writeZip, type ZipEntry } from "@/lib/zip";
 import type { GradeReport } from "@/lib/grading";
 
 export const maxDuration = 120;
@@ -134,7 +135,12 @@ export async function GET(req: Request) {
   try {
     await requireAdmin();
     const url = new URL(req.url);
-    const format = url.searchParams.get("format") === "csv" ? "csv" : "jsonl";
+    const raw = url.searchParams.get("format");
+    const format = raw === "csv" ? "csv" : raw === "zip" ? "zip" : "jsonl";
+    // Photos make the archive big — a few hundred KB each — so the zip is
+    // paged rather than pretending a whole corpus fits in one response.
+    const limit = Math.max(1, Math.min(500, Number(url.searchParams.get("limit")) || 100));
+    const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
     const onlyLabelled = url.searchParams.get("only") === "labelled";
 
     const admin = createAdminClient();
@@ -142,7 +148,8 @@ export async function GET(req: Request) {
       .from("grade_reports")
       .select("*")
       .order("created_at", { ascending: false })
-      .limit(10000);
+      .order("id");
+    q = format === "zip" ? q.range(offset, offset + limit - 1) : q.limit(10000);
     if (onlyLabelled) q = q.not("actual_grade", "is", null);
 
     const { data, error } = await q;
@@ -191,6 +198,77 @@ export async function GET(req: Request) {
         headers: {
           "Content-Type": "text/csv;charset=utf-8",
           "Content-Disposition": `attachment; filename="grades-${stamp}.csv"`,
+        },
+      });
+    }
+
+    if (format === "zip") {
+      // The images ARE the training data. A JSONL of grades with URLs in it
+      // is not a dataset — it's a dataset plus a scavenger hunt, and the URLs
+      // stop resolving the moment a photo is deleted or the bucket is
+      // reconfigured. So the archive carries the pixels.
+      const files: ZipEntry[] = [];
+      let fetched = 0;
+      let missing = 0;
+
+      // Sequential, not parallel: this is an admin pulling a training set,
+      // nobody is waiting on a spinner, and a hundred concurrent fetches at
+      // the storage bucket is a good way to get rate limited mid-export.
+      for (const e of examples) {
+        for (const side of ["front", "back"] as const) {
+          const src = e.images[side];
+          if (!src) {
+            missing += 1;
+            continue;
+          }
+          try {
+            const res = await fetch(src, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
+            if (!res.ok) {
+              missing += 1;
+              continue;
+            }
+            files.push({
+              // Named by example id so a row in the JSONL and its photos are
+              // matched by inspection, with no lookup table.
+              name: `images/${e.id}-${side}.jpg`,
+              data: new Uint8Array(await res.arrayBuffer()),
+            });
+            fetched += 1;
+          } catch {
+            missing += 1;
+          }
+        }
+      }
+
+      const meta = {
+        _meta: {
+          exported_at: new Date().toISOString(),
+          examples: examples.length,
+          labelled: examples.filter((x) => x.actual != null).length,
+          images_included: fetched,
+          images_missing: missing,
+          page: { offset, limit },
+          images_note:
+            "Each example's photos are images/<id>-front.jpg and <id>-back.jpg. " +
+            "Missing files mean the photo was deleted or unreachable at export time.",
+          training_warning:
+            "Rows without `actual` hold the model's OWN estimate. Training on those " +
+            "teaches it to reproduce its current mistakes with more confidence. Only " +
+            "rows carrying `actual` — a grade a human grader assigned — are supervision.",
+        },
+      };
+      files.push({
+        name: "examples.jsonl",
+        data: new TextEncoder().encode(
+          [JSON.stringify(meta), ...examples.map((e) => JSON.stringify(e))].join("\n") + "\n"
+        ),
+      });
+
+      const zip = writeZip(files);
+      return new NextResponse(Buffer.from(zip), {
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": `attachment; filename="grades-${stamp}-${offset}.zip"`,
         },
       });
     }

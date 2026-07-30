@@ -115,7 +115,13 @@ function headers(): Record<string, string> {
 // Worth another go. 5xx is pokemontcg.io failing on its own side, 429 is
 // quota, and the timeouts are load. None of them say the request was wrong.
 const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+/** Interactive callers — a scan waiting on a card lookup. Few tries, short
+ *  waits: somebody is watching a spinner. */
 const ATTEMPTS = 3;
+/** The bulk import. Nobody is waiting on any single page, and giving an
+ *  overloaded server twenty seconds to recover beats losing the run. */
+export const IMPORT_ATTEMPTS = 5;
 
 /** Say what actually happened.
  *
@@ -146,12 +152,24 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *  The catalogue import fetches ~80 pages in a row. Without this, a single
  *  blip anywhere in that sequence ends the run — which is exactly what
  *  happened: one 500 on page 1 and the whole import wrote nothing. */
-async function apiFetchJson(url: string): Promise<Record<string, unknown>> {
+async function apiFetchJson(
+  url: string,
+  attempts = ATTEMPTS
+): Promise<Record<string, unknown>> {
   let last = "pokemontcg.io could not be reached";
-  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    // 0.75s, then 1.5s. Long enough for a load spike to pass, short enough
-    // that the caller's request timeout isn't spent waiting.
-    if (attempt > 0) await sleep(750 * 2 ** (attempt - 1));
+  let retryAfterMs = 0;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) {
+      // 1s, 2s, 4s, 8s, capped — with jitter so a burst of failures doesn't
+      // reconverge into a synchronised thundering retry. Two seconds of
+      // total patience (the old schedule) is nothing to a server that is
+      // still coming back up.
+      const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
+      const jittered = backoff * (0.75 + Math.random() * 0.5);
+      // If they told us how long to wait, believe them over our own guess.
+      await sleep(Math.max(jittered, retryAfterMs));
+      retryAfterMs = 0;
+    }
 
     let res: Response;
     try {
@@ -166,11 +184,17 @@ async function apiFetchJson(url: string): Promise<Record<string, unknown>> {
     }
 
     if (res.ok) return (await res.json()) as Record<string, unknown>;
+
+    // Honoured for 429 and 503 alike — it's the server telling us when it
+    // will be ready, which is better information than any backoff curve.
+    const after = Number(res.headers.get("retry-after"));
+    if (Number.isFinite(after) && after > 0) retryAfterMs = Math.min(after * 1000, 30_000);
+
     last = describeFailure(res.status, await res.text().catch(() => ""), url);
-    // A 400 or a 404 will say the same thing three times over.
+    // A 400 or a 404 will say the same thing every time.
     if (!RETRYABLE.has(res.status)) break;
   }
-  throw new Error(`${last} (${ATTEMPTS} attempts)`);
+  throw new Error(`${last} (${attempts} attempts)`);
 }
 
 /** Best-effort USD market price across print variants. */
@@ -435,7 +459,10 @@ export async function searchAllCardsPage(
   url.searchParams.set("page", String(page));
   url.searchParams.set("pageSize", String(pageSize));
   url.searchParams.set("orderBy", "id");
-  const json = (await apiFetchJson(url.toString())) as { data?: RawCard[]; totalCount?: number };
+  const json = (await apiFetchJson(url.toString(), IMPORT_ATTEMPTS)) as {
+    data?: RawCard[];
+    totalCount?: number;
+  };
   return {
     cards: (json.data ?? []).map(toSummary),
     totalCount: typeof json.totalCount === "number" ? json.totalCount : null,

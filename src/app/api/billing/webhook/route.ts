@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { stripeFetch, verifyStripeSignature } from "@/lib/stripe";
+import { expirePlanCredits } from "@/lib/credits";
 
 export const maxDuration = 60;
 
@@ -55,6 +56,15 @@ async function handleSubscription(admin: ReturnType<typeof createAdminClient>, s
       .from("profiles")
       .update({ plan: "free", stripe_subscription: null, plan_expires_at: null, billing_anchor: null })
       .eq("id", userId);
+    // The month's allowance goes with the month. Boosts and support grants
+    // stay: those were bought or given outright, and clawing them back
+    // because a subscription lapsed would be keeping money for nothing.
+    // Keyed to the subscription so a redelivered cancellation can't expire
+    // the same credits twice.
+    const expired = await expirePlanCredits(admin, userId, `sub:${str(sub.id) ?? "unknown"}`);
+    if (expired > 0) {
+      console.log(`BILLING: ${expired} plan credits expired for ${userId} at cancellation.`);
+    }
     return;
   }
   if (status !== "active" && status !== "trialing" && status !== "past_due") return;

@@ -23,7 +23,7 @@ export async function MarketingNav() {
             Bulk scan
           </Link>
           <Link href="/#ai" className="hidden whitespace-nowrap rounded-lg px-3 py-2 hover:bg-brand-sunken min-[1000px]:block">
-            Trainer AI
+            TrainerAI
           </Link>
           <Link href="/pricing" className="hidden whitespace-nowrap rounded-lg px-3 py-2 hover:bg-brand-sunken min-[1000px]:block">
             Pricing
@@ -65,7 +65,7 @@ const FOOTER_COLS: Array<{ title: string; links: Array<{ label: string; href: st
     title: "Product",
     links: [
       { label: "Bulk scan", href: "/#scan" },
-      { label: "Trainer AI", href: "/#ai" },
+      { label: "TrainerAI", href: "/#ai" },
       { label: "For families", href: "/#families" },
       { label: "Pricing", href: "/pricing" },
     ],
