@@ -53,6 +53,8 @@ export interface SyncState {
   /** Set when their minute window cut a run short. Not an error — press
    *  again in a minute. */
   rateLimited: boolean;
+  /** Cards we didn't hold at all, created from their record. */
+  cardsAdded: number;
   /** A few of their cards that matched nothing of ours, verbatim. "Nothing
    *  matched" has two very different causes — we don't hold the card, or we
    *  hold it under a different name/number format — and only seeing real
@@ -77,6 +79,7 @@ export function freshSyncState(): SyncState {
     skippedAmbiguous: 0,
     indexedCards: 0,
     rateLimited: false,
+    cardsAdded: 0,
     unmatchedSamples: [],
     startedAt: now,
     updatedAt: now,
@@ -130,10 +133,74 @@ export interface TheirCard {
   name?: string;
   setName?: string;
   cardNumber?: string;
+  totalSetNumber?: string;
+  rarity?: string;
+  cardType?: string;
+  pokemonType?: string;
+  hp?: number;
+  stage?: string;
   prices?: { market?: number; low?: number };
   imageCdnUrl800?: string;
   imageCdnUrl400?: string;
   imageCdnUrl?: string;
+}
+
+/** A brand-new card row from their record, for a card we don't hold at all.
+ *
+ *  The id is minted as tcgp-<tcgPlayerId> — deterministic, so re-seeing the
+ *  same card upserts the same row instead of multiplying. Same pattern as
+ *  the tcgdex- and custom- prefixes that already live in the id space. When
+ *  the pokemontcg.io import later imports the same card under its own id,
+ *  mergeTcgpDuplicates in cardImport folds this row into that one.
+ *
+ *  Null when their record is too thin to key reliably: a card with no name
+ *  or no number could never be matched again, and an unmatchable row is a
+ *  permanent duplicate waiting to happen. */
+export function rowFromTheirs(
+  theirs: TheirCard,
+  set: { id: string; name: string }
+): Record<string, unknown> | null {
+  const name = cleanCardName(theirs.name ?? "");
+  const number = (theirs.cardNumber ?? "").trim();
+  const tcgId = (theirs.tcgPlayerId ?? "").trim();
+  if (!name || !number || !tcgId) return null;
+
+  // Their enum is "Pokémon"/"Pokemon"/"Trainer"/"Energy" depending on which
+  // page of their docs you read; normalise rather than trust.
+  const rawType = (theirs.cardType ?? "").toLowerCase();
+  const supertype = rawType.startsWith("pok")
+    ? "Pokémon"
+    : rawType.startsWith("train")
+      ? "Trainer"
+      : rawType.startsWith("energ")
+        ? "Energy"
+        : null;
+
+  const market = typeof theirs.prices?.market === "number" ? theirs.prices.market : null;
+  const image = theirs.imageCdnUrl800 ?? theirs.imageCdnUrl400 ?? theirs.imageCdnUrl ?? null;
+  const total = Number((theirs.totalSetNumber ?? "").replace(/\D/g, ""));
+
+  return {
+    id: `tcgp-${tcgId}`,
+    name,
+    supertype,
+    subtypes: theirs.stage ? [theirs.stage] : [],
+    types: theirs.pokemonType ? [theirs.pokemonType] : [],
+    hp: typeof theirs.hp === "number" ? String(theirs.hp) : null,
+    number,
+    rarity: theirs.rarity ?? null,
+    set_id: `tcgp-set-${set.id}`,
+    set_name: theirs.setName ?? set.name,
+    set_series: null,
+    set_printed_total: Number.isFinite(total) && total > 0 ? total : null,
+    release_date: null,
+    image_small: image,
+    image_large: image,
+    market_price: market,
+    prices: market != null ? { normal: market } : null,
+    price_updated_at: new Date().toISOString(),
+    tcgplayer_id: tcgId,
+  };
 }
 
 /** Index key: normalised name plus normalised collector number.
@@ -338,6 +405,37 @@ export async function runPriceSync(
         }
         const mine = byKey.get(key);
         if (!mine) {
+          // A card we don't hold at all: add it rather than skip it. The
+          // catalogue is only as complete as its sources, and this source is
+          // holding a full record in its hands. Guarded by the ambiguity set
+          // — a key two of OUR cards already share can't safely gain a third
+          // — and by rowFromTheirs returning null for records too thin to
+          // ever match again.
+          if (!ambiguous.has(key)) {
+            const row = rowFromTheirs(theirs, set);
+            if (row) {
+              const { error: insErr } = await admin
+                .from("cards")
+                .upsert(row, { onConflict: "id" });
+              if (!insErr) {
+                state.cardsAdded += 1;
+                // Into the index, so the same card met again this run (a
+                // reprint list, a shared promo) updates rather than re-adds.
+                byKey.set(key, {
+                  id: row.id as string,
+                  name: row.name as string,
+                  number: row.number as string,
+                  set_name: row.set_name as string | null,
+                  market_price: row.market_price as number | null,
+                  prices: row.prices as Record<string, number | null> | null,
+                  image_small: row.image_small as string | null,
+                  image_locked: false,
+                  tcgplayer_id: row.tcgplayer_id as string,
+                });
+                continue;
+              }
+            }
+          }
           if (state.unmatchedSamples.length < 10) {
             state.unmatchedSamples.push({
               set: set.name,
