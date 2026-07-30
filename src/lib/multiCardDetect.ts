@@ -173,10 +173,140 @@ function maskByFlood(img: RGBAImage, tolerance: number): Uint8Array {
   return fg;
 }
 
+interface PixelBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+function isCardShaped(bw: number, bh: number): boolean {
+  const ratio = bw / bh;
+  return (
+    Math.min(Math.abs(ratio - CARD_ASPECT), Math.abs(ratio - 1 / CARD_ASPECT)) <= ASPECT_TOLERANCE
+  );
+}
+
+/** Split a blob wherever a line of TABLE runs through it.
+ *
+ *  This is the test that aspect and fill cannot do. Cards laid in a grid have
+ *  the proportions of a card: two across and two down is (2×63):(2×88) =
+ *  0.716, a single card exactly, and two side by side is 1.43 against a
+ *  landscape card's 1.396. No tolerance separates those, and a tightly laid
+ *  block is solid enough to pass the fill test too — so a 2×2 block and a
+ *  side-by-side pair both arrive looking like perfectly ordinary cards.
+ *
+ *  What they are not is gapless. There is a line of table between any two
+ *  cards, and it is visible in the photo even when the foreground mask
+ *  bridged it — a shadow in the groove is "not background" to a threshold
+ *  while still being obviously darker than either card. So this looks at the
+ *  PIXELS inside the box rather than at the mask, and cuts where a run of
+ *  columns or rows is mostly background-coloured.
+ *
+ *  Guarded by the result: a split is only accepted if both halves are
+ *  themselves card-shaped. That is what stops a white-bordered card on a
+ *  white desk being sliced through its own border, which is the obvious way
+ *  this could go wrong. */
+function splitOnGaps(
+  img: RGBAImage,
+  bg: [number, number, number],
+  box: PixelBox,
+  depth = 0
+): PixelBox[] {
+  if (depth > 3) return [box];
+  const bw = box.x1 - box.x0 + 1;
+  const bh = box.y1 - box.y0 + 1;
+  if (bw < 24 || bh < 24) return [box];
+
+  const nearBg = (x: number, y: number): boolean => {
+    const p = (y * img.width + x) * 4;
+    const dr = img.data[p] - bg[0];
+    const dg = img.data[p + 1] - bg[1];
+    const db = img.data[p + 2] - bg[2];
+    // Strict. A loose "near background" slices a pale card through its own
+    // text box on a pale desk — the failure this guard exists to prevent,
+    // observed at 70. The gap between two cards is the table itself, so it
+    // matches closely or it is not a gap.
+    return dr * dr + dg * dg + db * db < 40 * 40;
+  };
+
+  // Try a vertical cut, then a horizontal one.
+  for (const vertical of [true, false]) {
+    const span = vertical ? bw : bh;
+    const cross = vertical ? bh : bw;
+    // Never cut near an edge: that is trimming, not separating.
+    const margin = Math.max(6, Math.round(span * 0.22));
+    const gap: boolean[] = new Array(span).fill(false);
+    for (let i = 0; i < span; i++) {
+      let hits = 0;
+      for (let j = 0; j < cross; j += 2) {
+        const x = vertical ? box.x0 + i : box.x0 + j;
+        const y = vertical ? box.y0 + j : box.y0 + i;
+        if (nearBg(x, y)) hits++;
+      }
+      // Nearly the whole line, not a majority of it. A gap between cards is
+      // table for its entire length; a band inside a card is interrupted by
+      // artwork, text and borders.
+      gap[i] = hits / Math.ceil(cross / 2) > 0.82;
+    }
+
+    // Longest interior run of gap lines.
+    let bestStart = -1;
+    let bestLen = 0;
+    let runStart = -1;
+    for (let i = margin; i < span - margin; i++) {
+      if (gap[i]) {
+        if (runStart < 0) runStart = i;
+        const len = i - runStart + 1;
+        if (len > bestLen) {
+          bestLen = len;
+          bestStart = runStart;
+        }
+      } else {
+        runStart = -1;
+      }
+    }
+    if (bestLen < 2) continue;
+
+    const cut = bestStart + Math.floor(bestLen / 2);
+    const a: PixelBox = vertical
+      ? { ...box, x1: box.x0 + bestStart - 1 }
+      : { ...box, y1: box.y0 + bestStart - 1 };
+    const b: PixelBox = vertical
+      ? { ...box, x0: box.x0 + bestStart + bestLen }
+      : { ...box, y0: box.y0 + bestStart + bestLen };
+    void cut;
+
+    const aw = a.x1 - a.x0 + 1;
+    const ah = a.y1 - a.y0 + 1;
+    const bwid = b.x1 - b.x0 + 1;
+    const bhi = b.y1 - b.y0 + 1;
+    if (aw < 12 || ah < 12 || bwid < 12 || bhi < 12) continue;
+
+    // Only accept a cut that yields card-shaped pieces — or pieces that are
+    // themselves splittable into card-shaped ones.
+    const left = isCardShaped(aw, ah) ? [a] : splitOnGaps(img, bg, a, depth + 1);
+    const right = isCardShaped(bwid, bhi) ? [b] : splitOnGaps(img, bg, b, depth + 1);
+    const ok =
+      left.every((p) => isCardShaped(p.x1 - p.x0 + 1, p.y1 - p.y0 + 1)) &&
+      right.every((p) => isCardShaped(p.x1 - p.x0 + 1, p.y1 - p.y0 + 1));
+    if (!ok) continue;
+
+    // Each piece may itself be a block: a 2×2 needs a vertical cut and then
+    // a horizontal one on each half.
+    return [
+      ...left.flatMap((piece) => splitOnGaps(img, bg, piece, depth + 1)),
+      ...right.flatMap((piece) => splitOnGaps(img, bg, piece, depth + 1)),
+    ];
+  }
+  return [box];
+}
+
 /** One pass at a given threshold, mask method and erosion setting. */
 function pass(img: RGBAImage, tolerance: number, erode: boolean, flood: boolean): CardBox[] {
   const { width: w, height: h } = img;
   const total = w * h;
+  const bg = ringBackground(img);
   const fg = flood ? maskByFlood(img, tolerance) : maskByColour(img, tolerance);
 
   // Optional one-pixel erosion.
@@ -254,13 +384,17 @@ function pass(img: RGBAImage, tolerance: number, erode: boolean, flood: boolean)
     if (areaFrac < MIN_AREA || areaFrac > MAX_AREA) continue;
     if (area / boxArea < MIN_FILL) continue;
 
-    // Card-shaped either way up.
-    const ratio = bw / bh;
-    const upright = Math.abs(ratio - CARD_ASPECT);
-    const sideways = Math.abs(ratio - 1 / CARD_ASPECT);
-    if (Math.min(upright, sideways) > ASPECT_TOLERANCE) continue;
-
-    boxes.push({ x: minX / w, y: minY / h, w: bw / w, h: bh / h });
+    // Cut the blob on any line of table running through it, BEFORE judging
+    // its shape — a block of cards passes the shape test intact, so testing
+    // first would accept it and never look inside.
+    for (const piece of splitOnGaps(img, bg, { x0: minX, y0: minY, x1: maxX, y1: maxY })) {
+      const pw = piece.x1 - piece.x0 + 1;
+      const ph = piece.y1 - piece.y0 + 1;
+      const pArea = (pw * ph) / total;
+      if (pArea < MIN_AREA || pArea > MAX_AREA) continue;
+      if (!isCardShaped(pw, ph)) continue;
+      boxes.push({ x: piece.x0 / w, y: piece.y0 / h, w: pw / w, h: ph / h });
+    }
   }
 
   // Reading order, so the overlay's numbering matches how someone laid the
@@ -310,38 +444,18 @@ export function detectCards(source: RGBAImage): CardBox[] {
     }
   }
 
-  // Throw away boxes that are really several cards.
+  // NOTE: an earlier version discarded any box containing two or more
+  // smaller card-shaped boxes, on the theory that such a box is a block of
+  // cards. It is gone, and deliberately.
   //
-  // A k×k block of cards has the SAME aspect ratio as one card — two across
-  // and two down is (2×63):(2×88), which is 0.716 exactly — so the shape
-  // test cannot reject it, and it is nearly solid so the fill test can't
-  // either. Worse, it is the largest box, so the dedup below was keeping it
-  // and discarding the four real cards inside it as duplicates. A photo of
-  // six came back as three: one block plus the two cards beside it.
-  //
-  // A block is recognisable by what is inside it: two or more card-shaped
-  // boxes, found by other passes, that between them cover most of its area.
-  // A single card contains at most its own art window, which is one box
-  // covering well under half — so this separates the two cases without
-  // needing to know which is which in advance.
-  const merged = new Set<number>();
-  all.forEach((b, i) => {
-    const bArea = b.w * b.h;
-    let coveredArea = 0;
-    let insideCount = 0;
-    for (const c of all) {
-      const cArea = c.w * c.h;
-      if (cArea >= bArea * 0.6) continue;
-      const cx = c.x + c.w / 2;
-      const cy = c.y + c.h / 2;
-      if (cx > b.x && cx < b.x + b.w && cy > b.y && cy < b.y + b.h) {
-        insideCount += 1;
-        coveredArea += cArea;
-      }
-    }
-    if (insideCount >= 2 && coveredArea >= bArea * 0.55) merged.add(i);
-  });
-  const candidates = all.filter((_, i) => !merged.has(i));
+  // It could only ever fire when some OTHER pass had already separated the
+  // cards — useless for the case it was written for, where every pass welds
+  // them. And it did real damage: a pale card on a pale desk yields a blob
+  // for its artwork and another for its text box, so the whole card looked
+  // like a "block" containing two cards and was thrown away, leaving the
+  // fragments. Blocks are now cut apart by splitOnGaps, which looks at the
+  // table running between real cards rather than guessing from overlaps.
+  const candidates = all;
 
   candidates.sort((a, b) => b.w * b.h - a.w * a.h);
   const kept: CardBox[] = [];

@@ -493,7 +493,14 @@ export default function ScanPage() {
               one box over four cards, because three boxes were zipped against
               six names. A silent tile is a small loss; a confident wrong
               caption is a bug someone has to notice to distrust. */}
-          {crops.length > 0 ? (
+          {/* The tiles are shown only while nothing contradicts them: once
+              the model states how many cards are in the photo, a detector
+              that found a different number was wrong somewhere, and wrong
+              tiles are worse than no tiles. Fall back to the plain photo —
+              the failure then looks like the ordinary scan screen rather
+              than a broken one. The checklist below carries the real
+              progress either way. */}
+          {crops.length > 0 && (progress.expected == null || crops.length === progress.expected) ? (
             <div className="mx-auto mb-4 grid max-w-md grid-cols-3 gap-2 sm:grid-cols-4">
               {crops.map((src, i) => {
                 const named = crops.length === partial.length ? partial[i] : null;
@@ -532,16 +539,7 @@ export default function ScanPage() {
               {crops.length} detected
             </p>
           )}
-          {/* The detector and the model disagreed on how many cards are in
-              the photo. Said plainly rather than papered over — the model is
-              the one that decides what gets saved. */}
-          {crops.length > 0 && progress.expected != null && crops.length !== progress.expected && (
-            <p className="mb-3 text-[11.5px] text-slate-400">
-              Found {crops.length} outline{crops.length === 1 ? "" : "s"}, reading{" "}
-              {progress.expected} card{progress.expected === 1 ? "" : "s"} — the list below is
-              what counts.
-            </p>
-          )}
+
           <div className="flex items-center justify-center gap-3">
             <FanMark size={22} className="animate-spin-slow shrink-0" />
             <span className="text-lg font-semibold">Identifying cards</span>
