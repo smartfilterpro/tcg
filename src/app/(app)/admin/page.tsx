@@ -1866,6 +1866,7 @@ function PriceSyncPanel() {
       skippedAmbiguous: number;
       indexedCards: number;
       rateLimited: boolean;
+      cardsAdded?: number;
       unmatchedSamples?: Array<{ set: string; name: string; num: string }>;
       done: boolean;
       error: string | null;
@@ -1951,9 +1952,10 @@ function PriceSyncPanel() {
   return (
     <div className="rounded-lg border border-brand-line bg-white p-3">
       <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
-        Fills in cards that have <b>no price</b> and <b>no picture</b>, and records the
-        TCGplayer id every bulk dataset joins on. Never overwrites a price or image we already
-        have, and never touches member photos or admin-locked art.
+        Keeps every matched card&apos;s <b>price current</b> (same TCGplayer source as the
+        import, refreshed daily), fills in <b>missing pictures</b>, records the TCGplayer id
+        every bulk dataset joins on, and <b>adds cards we don&apos;t hold at all</b>. Members&apos;
+        own price overrides, member photos and admin-locked art are never touched.
       </p>
       {st && total > 0 && (
         <>
@@ -1963,9 +1965,15 @@ function PriceSyncPanel() {
                 the entire admin page. */}
             Set {st.setIndex ?? 0} of {total} ({pct}%) ·{" "}
             {(st.cardsSeen ?? 0).toLocaleString()} cards seen ·{" "}
-            <b>{(st.pricesFilled ?? 0).toLocaleString()} prices</b>,{" "}
+            <b>{(st.pricesFilled ?? 0).toLocaleString()} prices updated</b>,{" "}
             {(st.imagesFilled ?? 0).toLocaleString()} images,{" "}
             {(st.idsFilled ?? 0).toLocaleString()} ids filled
+            {(st.cardsAdded ?? 0) > 0 && (
+              <>
+                {" "}
+                · <b>{(st.cardsAdded ?? 0).toLocaleString()} new cards added</b>
+              </>
+            )}
             {(st.skippedAmbiguous ?? 0) > 0 && ` · ${st.skippedAmbiguous} skipped as ambiguous`}
           </p>
           {/* Zero matches with cards streaming past is the signature of a

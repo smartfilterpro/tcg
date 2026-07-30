@@ -7,12 +7,19 @@
 // crawled a few hundred cards and reported 51 of 120 with no price at all.
 // The data existed; we just never asked for it.
 //
-// Two rules shape the whole file:
+// The rules, each an owner decision:
 //
-//   GAP-FILL, NEVER OVERWRITE. A card that already has a price keeps it.
-//   Replacing the valuation source wholesale is a different decision from
-//   using an allowance, and quietly doing the first while being asked for
-//   the second would be wrong.
+//   PRICES ALWAYS UPDATE. Their numbers are TCGplayer market prices — the
+//   same underlying source our import reads, refreshed daily instead of
+//   whenever the import last ran. Same source, fresher, wins. (Members'
+//   own price_override values live on collection_items and are never
+//   touched by any of this.)
+//
+//   EVERYTHING ELSE GAP-FILLS. Images fill only where we have none, and
+//   member photos and admin-locked art are never touched.
+//
+//   CARDS WE DON'T HOLD ARE ADDED, under a minted tcgp-<id> row that the
+//   catalogue import later folds into the real card.
 //
 //   MATCH EXACTLY OR SKIP. A wrong match writes a wrong price onto a real
 //   card, and nobody would ever notice. Name and collector number must both
@@ -53,6 +60,8 @@ export interface SyncState {
   /** Set when their minute window cut a run short. Not an error — press
    *  again in a minute. */
   rateLimited: boolean;
+  /** Cards we didn't hold at all, created from their record. */
+  cardsAdded: number;
   /** A few of their cards that matched nothing of ours, verbatim. "Nothing
    *  matched" has two very different causes — we don't hold the card, or we
    *  hold it under a different name/number format — and only seeing real
@@ -77,6 +86,7 @@ export function freshSyncState(): SyncState {
     skippedAmbiguous: 0,
     indexedCards: 0,
     rateLimited: false,
+    cardsAdded: 0,
     unmatchedSamples: [],
     startedAt: now,
     updatedAt: now,
@@ -130,10 +140,75 @@ export interface TheirCard {
   name?: string;
   setName?: string;
   cardNumber?: string;
-  prices?: { market?: number; low?: number };
+  totalSetNumber?: string;
+  rarity?: string;
+  cardType?: string;
+  pokemonType?: string;
+  hp?: number;
+  stage?: string;
+  prices?: { market?: number; low?: number; primaryPrinting?: string };
   imageCdnUrl800?: string;
   imageCdnUrl400?: string;
   imageCdnUrl?: string;
+}
+
+/** A brand-new card row from their record, for a card we don't hold at all.
+ *
+ *  The id is minted as tcgp-<tcgPlayerId> — deterministic, so re-seeing the
+ *  same card upserts the same row instead of multiplying. Same pattern as
+ *  the tcgdex- and custom- prefixes that already live in the id space. When
+ *  the pokemontcg.io import later imports the same card under its own id,
+ *  mergeTcgpDuplicates in cardImport folds this row into that one.
+ *
+ *  Null when their record is too thin to key reliably: a card with no name
+ *  or no number could never be matched again, and an unmatchable row is a
+ *  permanent duplicate waiting to happen. */
+export function rowFromTheirs(
+  theirs: TheirCard,
+  set: { id: string; name: string }
+): Record<string, unknown> | null {
+  const name = cleanCardName(theirs.name ?? "");
+  const number = (theirs.cardNumber ?? "").trim();
+  const tcgId = (theirs.tcgPlayerId ?? "").trim();
+  if (!name || !number || !tcgId) return null;
+
+  // Their enum is "Pokémon"/"Pokemon"/"Trainer"/"Energy" depending on which
+  // page of their docs you read; normalise rather than trust.
+  const rawType = (theirs.cardType ?? "").toLowerCase();
+  const supertype = rawType.startsWith("pok")
+    ? "Pokémon"
+    : rawType.startsWith("train")
+      ? "Trainer"
+      : rawType.startsWith("energ")
+        ? "Energy"
+        : null;
+
+  const market = typeof theirs.prices?.market === "number" ? theirs.prices.market : null;
+  const image = theirs.imageCdnUrl800 ?? theirs.imageCdnUrl400 ?? theirs.imageCdnUrl ?? null;
+  const total = Number((theirs.totalSetNumber ?? "").replace(/\D/g, ""));
+
+  return {
+    id: `tcgp-${tcgId}`,
+    name,
+    supertype,
+    subtypes: theirs.stage ? [theirs.stage] : [],
+    types: theirs.pokemonType ? [theirs.pokemonType] : [],
+    hp: typeof theirs.hp === "number" ? String(theirs.hp) : null,
+    number,
+    rarity: theirs.rarity ?? null,
+    set_id: `tcgp-set-${set.id}`,
+    set_name: theirs.setName ?? set.name,
+    set_series: null,
+    set_printed_total: Number.isFinite(total) && total > 0 ? total : null,
+    release_date: null,
+    image_small: image,
+    image_large: image,
+    market_price: market,
+    prices:
+      market != null ? { [variantKeyFor(theirs.prices?.primaryPrinting) ?? "normal"]: market } : null,
+    price_updated_at: new Date().toISOString(),
+    tcgplayer_id: tcgId,
+  };
 }
 
 /** Index key: normalised name plus normalised collector number.
@@ -169,6 +244,21 @@ export function buildIndex(cards: OurCard[]): {
   return { byKey, ambiguous };
 }
 
+/** Their printing names → our per-finish price keys. Unknown names return
+ *  null and the per-finish map is left alone — writing a guessed key would
+ *  invent a finish the card doesn't come in, and availableVariants() treats
+ *  the map's keys as the list of finishes that exist. */
+export function variantKeyFor(printing: string | null | undefined): string | null {
+  const t = (printing ?? "").trim().toLowerCase();
+  if (!t || t === "normal" || t === "unlimited") return "normal";
+  if (t === "holofoil") return "holofoil";
+  if (t === "reverse holofoil") return "reverseHolofoil";
+  if (t === "1st edition" || t === "1st edition normal") return "1stEditionNormal";
+  if (t === "1st edition holofoil") return "1stEditionHolofoil";
+  if (t === "unlimited holofoil") return "unlimitedHolofoil";
+  return null;
+}
+
 export interface Patch {
   id: string;
   market_price?: number;
@@ -192,13 +282,22 @@ export function patchFor(ours: OurCard, theirs: TheirCard): Patch | null {
     useful = true;
   }
 
-  // GAP-FILL. A card that already has a price keeps it.
+  // PRICES ALWAYS UPDATE — same source as the import (TCGplayer), fresher.
+  // Skipped when equal, so an already-current card writes nothing.
   const market = theirs.prices?.market;
-  if (ours.market_price == null && typeof market === "number" && market > 0) {
+  if (typeof market === "number" && market > 0 && market !== ours.market_price) {
     patch.market_price = market;
-    // Seed the per-finish map too, or the collection's finish-aware pricing
-    // still shows nothing for a card whose headline price we just set.
-    patch.prices = { ...(ours.prices ?? {}), normal: market };
+    const key = variantKeyFor(theirs.prices?.primaryPrinting);
+    const existing = ours.prices ?? {};
+    if (key) {
+      patch.prices = { ...existing, [key]: market };
+    } else if (Object.keys(existing).length === 0) {
+      // No finish stated and no map to respect: seed the headline finish so
+      // finish-aware pricing shows something rather than nothing.
+      patch.prices = { normal: market };
+    }
+    // A stated-but-unknown finish updates market_price only, leaving the
+    // per-finish map to the source that understands it.
     useful = true;
   }
 
@@ -338,6 +437,37 @@ export async function runPriceSync(
         }
         const mine = byKey.get(key);
         if (!mine) {
+          // A card we don't hold at all: add it rather than skip it. The
+          // catalogue is only as complete as its sources, and this source is
+          // holding a full record in its hands. Guarded by the ambiguity set
+          // — a key two of OUR cards already share can't safely gain a third
+          // — and by rowFromTheirs returning null for records too thin to
+          // ever match again.
+          if (!ambiguous.has(key)) {
+            const row = rowFromTheirs(theirs, set);
+            if (row) {
+              const { error: insErr } = await admin
+                .from("cards")
+                .upsert(row, { onConflict: "id" });
+              if (!insErr) {
+                state.cardsAdded += 1;
+                // Into the index, so the same card met again this run (a
+                // reprint list, a shared promo) updates rather than re-adds.
+                byKey.set(key, {
+                  id: row.id as string,
+                  name: row.name as string,
+                  number: row.number as string,
+                  set_name: row.set_name as string | null,
+                  market_price: row.market_price as number | null,
+                  prices: row.prices as Record<string, number | null> | null,
+                  image_small: row.image_small as string | null,
+                  image_locked: false,
+                  tcgplayer_id: row.tcgplayer_id as string,
+                });
+                continue;
+              }
+            }
+          }
           if (state.unmatchedSamples.length < 10) {
             state.unmatchedSamples.push({
               set: set.name,
