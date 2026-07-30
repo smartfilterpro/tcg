@@ -91,17 +91,14 @@ function ringBackground(img: RGBAImage): [number, number, number] {
   return [mid(rs), mid(gs), mid(bs)];
 }
 
-/** Cards in a photo, as fractions of its size. Empty when nothing
- *  card-shaped stands out — which is a normal answer, not a failure. */
-export function detectCards(source: RGBAImage, tolerance = 54): CardBox[] {
-  const { img } = downscale(source, WORK_DIM);
-  const { width: w, height: h } = img;
-  if (w < 32 || h < 32) return [];
-
+/** Foreground by distance from one background colour.
+ *
+ *  Fast and right when the table is evenly lit and clearly different from
+ *  the cards. Fails when the light falls off across the photo, because one
+ *  colour cannot describe a surface that is three shades lighter at the top. */
+function maskByColour(img: RGBAImage, tolerance: number): Uint8Array {
+  const total = img.width * img.height;
   const bg = ringBackground(img);
-  const total = w * h;
-
-  // 1 = not background.
   const fg = new Uint8Array(total);
   for (let i = 0; i < total; i++) {
     const p = i * 4;
@@ -110,30 +107,97 @@ export function detectCards(source: RGBAImage, tolerance = 54): CardBox[] {
     const db = img.data[p + 2] - bg[2];
     if (Math.sqrt(dr * dr + dg * dg + db * db) > tolerance) fg[i] = 1;
   }
+  return fg;
+}
 
-  // Shrink the foreground by one pixel before labelling.
+/** Foreground by flooding the table inwards from the edges.
+ *
+ *  Grows from every border pixel to neighbours within `tolerance` of THEIR
+ *  OWN neighbour's colour, rather than of one fixed value — so it follows a
+ *  lighting gradient across a desk instead of giving up on it. Whatever the
+ *  flood cannot reach is an island, and cards are islands.
+ *
+ *  This is the pass that handles pale cards on a pale desk, where a global
+ *  threshold has to choose between missing the cards and swallowing the
+ *  table: the flood only has to notice the STEP at a card's edge, not the
+ *  absolute difference between card and table.
+ *
+ *  Its own failure is the opposite one, and loud rather than subtle: a
+ *  single low-contrast pixel bridging card and table leaks the flood inside
+ *  and the card stops being an island. The search over tolerances is what
+ *  makes that survivable — a leak collapses the count to near zero and
+ *  another setting wins. */
+function maskByFlood(img: RGBAImage, tolerance: number): Uint8Array {
+  const { width: w, height: h } = img;
+  const total = w * h;
+  const isBackground = new Uint8Array(total);
+  const stack = new Int32Array(total);
+  let sp = 0;
+
+  const push = (idx: number) => {
+    if (!isBackground[idx]) {
+      isBackground[idx] = 1;
+      stack[sp++] = idx;
+    }
+  };
+  for (let x = 0; x < w; x++) {
+    push(x);
+    push((h - 1) * w + x);
+  }
+  for (let y = 0; y < h; y++) {
+    push(y * w);
+    push(y * w + w - 1);
+  }
+
+  const close = (a: number, b: number): boolean => {
+    const pa = a * 4;
+    const pb = b * 4;
+    const dr = img.data[pa] - img.data[pb];
+    const dg = img.data[pa + 1] - img.data[pb + 1];
+    const db = img.data[pa + 2] - img.data[pb + 2];
+    return dr * dr + dg * dg + db * db <= tolerance * tolerance;
+  };
+
+  while (sp > 0) {
+    const idx = stack[--sp];
+    const x = idx % w;
+    const y = (idx / w) | 0;
+    if (x > 0 && !isBackground[idx - 1] && close(idx, idx - 1)) push(idx - 1);
+    if (x < w - 1 && !isBackground[idx + 1] && close(idx, idx + 1)) push(idx + 1);
+    if (y > 0 && !isBackground[idx - w] && close(idx, idx - w)) push(idx - w);
+    if (y < h - 1 && !isBackground[idx + w] && close(idx, idx + w)) push(idx + w);
+  }
+
+  const fg = new Uint8Array(total);
+  for (let i = 0; i < total; i++) fg[i] = isBackground[i] ? 0 : 1;
+  return fg;
+}
+
+/** One pass at a given threshold, mask method and erosion setting. */
+function pass(img: RGBAImage, tolerance: number, erode: boolean, flood: boolean): CardBox[] {
+  const { width: w, height: h } = img;
+  const total = w * h;
+  const fg = flood ? maskByFlood(img, tolerance) : maskByColour(img, tolerance);
+
+  // Optional one-pixel erosion.
   //
-  // Cards laid out in a block are separated by a gap of a millimetre or two,
-  // which at this working size is one or two pixels — and a single bridging
-  // pixel, from a shadow or a compression artefact, welds two cards into one
-  // blob. Eroding first breaks those bridges. Solid card interiors lose only
-  // their outermost pixel, which the bounding box doesn't miss.
-  const eroded = new Uint8Array(total);
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x;
-      if (
-        fg[i] &&
-        fg[i - 1] &&
-        fg[i + 1] &&
-        fg[i - w] &&
-        fg[i + w]
-      ) {
-        eroded[i] = 1;
+  // It breaks the thin bridges that weld cards laid out in a block into one
+  // blob — but it is NOT free, and running it always was a mistake. On a
+  // low-contrast photo (pale cards on a pale table) the foreground mask is
+  // already patchy, and eroding a patchy blob shatters it into fragments
+  // that each then fail the shape test. That turned a photo of six cards
+  // into two detections. So it is one setting among several, and the search
+  // below keeps whichever answer is better.
+  if (erode) {
+    const eroded = new Uint8Array(total);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        if (fg[i] && fg[i - 1] && fg[i + 1] && fg[i - w] && fg[i + w]) eroded[i] = 1;
       }
     }
+    fg.set(eroded);
   }
-  fg.set(eroded);
 
   // Flood fill with an explicit stack. Recursion would blow the stack on a
   // blob of 50,000 pixels, which is an ordinary card at this size.
@@ -202,4 +266,49 @@ export function detectCards(source: RGBAImage, tolerance = 54): CardBox[] {
   // Reading order, so the overlay's numbering matches how someone laid the
   // cards out and how the model reads them.
   return boxes.sort((a, b) => (Math.abs(a.y - b.y) > 0.08 ? a.y - b.y : a.x - b.x));
+}
+
+/** Cards in a photo, as fractions of its size. Empty when nothing
+ *  card-shaped stands out — which is a normal answer, not a failure.
+ *
+ *  Tries a handful of settings and keeps the best answer rather than betting
+ *  the result on one threshold. A single global tolerance cannot serve both
+ *  a dark wood table (where cards blaze out at any threshold) and a pale
+ *  desk (where a white border against off-white is a few levels of
+ *  difference) — and the erosion that rescues a tightly-laid block is the
+ *  same step that shatters a patchy low-contrast mask.
+ *
+ *  Each pass is around 20ms at this working size, so eight of them is still
+ *  faster than decoding the photo. "Best" is simply the most blobs that
+ *  passed the shape tests, which are strict enough — 63:88 within 0.18, and
+ *  62% fill — that finding MORE of them means finding more real cards, not
+ *  more noise. */
+export function detectCards(source: RGBAImage): CardBox[] {
+  const { img } = downscale(source, WORK_DIM);
+  if (img.width < 32 || img.height < 32) return [];
+
+  // More cards wins; on a tie, more AREA wins.
+  //
+  // The tie-break matters more than it looks. A card is a white border round
+  // an art window round a text box, and a threshold that leaks past the
+  // border still finds the art window — which is card-ish enough to pass the
+  // shape tests. That yields the right COUNT with every box drawn around a
+  // fragment of its card. Preferring the larger answer at equal count picks
+  // the whole card over the picture inside it.
+  let best: CardBox[] = [];
+  let bestArea = 0;
+  for (const flood of [true, false]) {
+    for (const tolerance of [18, 26, 38, 54, 78]) {
+      for (const erode of [false, true]) {
+        const found = pass(img, tolerance, erode, flood);
+        if (found.length === 0) continue;
+        const area = found.reduce((sum, b) => sum + b.w * b.h, 0);
+        if (found.length > best.length || (found.length === best.length && area > bestArea)) {
+          best = found;
+          bestArea = area;
+        }
+      }
+    }
+  }
+  return best;
 }

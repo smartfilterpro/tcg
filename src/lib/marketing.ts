@@ -119,8 +119,8 @@ export const FAQS = [
     a: "Because a deck build costs real money to run, and 'unlimited' plans either get throttled quietly or priced for the heaviest user. Metering keeps Pro at $9.",
   },
   {
-    q: "Can I cancel or get a refund?",
-    a: "Cancel any time from billing — you keep access to the end of the cycle. Unused boost credits are refundable within 14 days.",
+    q: "What happens if I cancel?",
+    a: "Cancel any time from billing and you keep access to the end of the cycle you've paid for — there's no partial refund for the rest of it. Your monthly credits end with the plan; boost credits you bought stay on your account and keep working on the free plan. Payments are final, and deleting your account forfeits any credits left, including boosts.",
   },
   {
     q: "Is this affiliated with Pokémon?",

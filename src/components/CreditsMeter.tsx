@@ -106,7 +106,7 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
           ) : (
             <>You&apos;re out of credits.</>
           )}{" "}
-          Boost credits stack on top and don&apos;t expire while your plan is active.
+          Boost credits stack on top and stay with your account even if your plan ends.
         </p>
         <div className="flex flex-col gap-[9px]">
           {packs.map((p) => {
@@ -152,8 +152,8 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
         </button>
         {error && <p className="mt-2 text-sm text-brand-negative">{error}</p>}
         <p className="mb-0 mt-2.5 text-center text-[11.5px] leading-[1.5] text-brand-ink5">
-          {BOOSTS_NOTE} One-off charge, no subscription change. Refundable within 14 days if
-          unused.
+          {BOOSTS_NOTE} One-off charge, no subscription change. Credits are added straight away
+          and the payment is final; they stay yours if you later cancel your plan.
         </p>
       </div>
     </div>
