@@ -446,7 +446,16 @@ export async function POST(req: Request) {
           const { text, atk } = extrasFor(bd);
           return { ...c, ...(text ? { text } : {}), ...(atk ? { atk } : {}) };
         });
-        const userContent = [
+        // Split into a STABLE prefix and a VARIABLE tail so the prefix can be
+        // cached. The collection JSON is ~96% of this request and is
+        // byte-identical between builds until the player scans something new,
+        // so on a second build in the same session it bills at a tenth.
+        //
+        // The order below is load-bearing: a cache prefix has to be an exact
+        // leading substring, so anything that changes per build — the list of
+        // decks they already own, the request itself — must come after the
+        // marker, never before it.
+        const stableContent = [
           styleNotes ? `PLAYER'S PLAY STYLE PROFILE:\n${styleNotes}` : null,
           fmt
             ? `FORMAT: ${fmt === "standard" ? "Standard" : "Expanded"} — ${excluded} ineligible cards were already removed from the list below. Entries without legality data remain: exclude any YOU know are not legal in this format, and only suggest format-legal upgrade cards.`
@@ -467,6 +476,12 @@ export async function POST(req: Request) {
               ? `NOTE: ${noText} of the Pokémon in this list arrived without attack data, so you can only judge them by name, HP, type and subtype. Card data fills in over successive builds. Do not treat that as a reason to fall back on the same few well-known cards — work with what you CAN read, and if a promising line is unreadable this time, say so in one sentence at the end of the strategy.`
               : null;
           })(),
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+
+        // Changes on every build, so it sits outside the cached prefix.
+        const variableContent = [
           priorDecks.length > 0
             ? `DECKS THIS PLAYER ALREADY HAS (newest first):\n${priorDecks
                 .map((d, i) => `${i + 1}. ${d}`)
@@ -485,14 +500,34 @@ export async function POST(req: Request) {
         const stream = client.messages.stream({
           model: MODEL,
           max_tokens: 32000,
-          system: SYSTEM,
+          // The rules and rubric never change between builds, so they cache
+          // alongside the collection.
+          system: [
+            {
+              type: "text" as const,
+              text: SYSTEM,
+              cache_control: { type: "ephemeral" as const },
+            },
+          ],
           output_config: {
             format: {
               type: "json_schema",
               schema: DECK_SCHEMA as unknown as Record<string, unknown>,
             },
           },
-          messages: [{ role: "user", content: userContent }],
+          messages: [
+            {
+              role: "user" as const,
+              content: [
+                {
+                  type: "text" as const,
+                  text: stableContent,
+                  cache_control: { type: "ephemeral" as const },
+                },
+                { type: "text" as const, text: variableContent },
+              ],
+            },
+          ],
         });
         const response = await stream.finalMessage();
 
@@ -585,8 +620,21 @@ export async function POST(req: Request) {
                 },
               },
               messages: [
-                { role: "user", content: userContent },
-                { role: "assistant", content: textBlock.text },
+                {
+                  // Same two blocks as the first pass, in the same order, so
+                  // this replay reads the cache the build just wrote instead
+                  // of paying for the collection a second time.
+                  role: "user" as const,
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: stableContent,
+                      cache_control: { type: "ephemeral" as const },
+                    },
+                    { type: "text" as const, text: variableContent },
+                  ],
+                },
+                { role: "assistant" as const, content: textBlock.text },
                 {
                   role: "user",
                   content:
