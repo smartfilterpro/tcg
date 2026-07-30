@@ -98,7 +98,10 @@ async function writeImportState(admin: SupabaseClient, state: CardImportState): 
 function keepsItsImage(row: { image_locked?: boolean | null; image_small?: string | null }): boolean {
   if (row.image_locked === true) return true;
   const url = row.image_small ?? "";
-  return url.includes("/card-photos/");
+  // card-photos: a member's upload. card-art: the mirror's copy (037) —
+  // overwriting it with the source's URL would silently un-mirror the card
+  // on every re-import.
+  return url.includes("/card-photos/") || url.includes("/card-art/");
 }
 
 /** Fold tcgp- duplicate rows into the real cards just imported.

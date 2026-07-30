@@ -5,6 +5,7 @@ import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
 import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
 import { uploadCardPhoto } from "@/lib/photos";
+import { artSrc } from "@/lib/art";
 import { matchesSearch } from "@/lib/text";
 
 import {
@@ -597,7 +598,7 @@ export default function CollectionPage({
               <div className="aspect-[63/88] w-full overflow-hidden rounded-[7px]">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={item.card.image_small!}
+                  src={artSrc(item.card.id, item.card.image_small)!}
                   alt={item.card.name}
                   className="h-full w-full object-cover"
                   loading="lazy"
@@ -673,7 +674,11 @@ export default function CollectionPage({
                 <div className="flex aspect-[63/88] w-40 shrink-0 items-center justify-center self-center overflow-hidden rounded-lg bg-slate-100 shadow sm:self-start">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={selected.card.image_large ?? selected.card.image_small!}
+                    src={artSrc(
+                      selected.card.id,
+                      selected.card.image_large ?? selected.card.image_small,
+                      "large"
+                    )!}
                     alt={selected.card.name}
                     className="h-full w-full object-contain"
                     onError={() => markBroken(selected.card.id)}

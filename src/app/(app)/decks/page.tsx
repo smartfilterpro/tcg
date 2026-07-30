@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
+import { artSrc } from "@/lib/art";
 import { matchesSearch } from "@/lib/text";
 import type { CollectionItem, Deck, DeckCardEntry, DeckSuggestion } from "@/lib/types";
 import type { CardDetail } from "@/app/api/cards/details/route";
@@ -76,14 +77,16 @@ function ManualBuilder({
         const prev = byName.get(it.card.name);
         if (prev) {
           prev.owned += it.quantity;
-          if (!prev.image && it.card.image_small) prev.image = it.card.image_small;
+          if (!prev.image && it.card.image_small) {
+            prev.image = artSrc(it.card.id, it.card.image_small);
+          }
         } else {
           byName.set(it.card.name, {
             name: it.card.name,
             owned: it.quantity,
             category: categoryOf(it.card.supertype),
             cardId: it.card.id,
-            image: it.card.image_small,
+            image: artSrc(it.card.id, it.card.image_small),
             setName: it.card.set_name,
           });
         }

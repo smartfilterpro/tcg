@@ -5,5 +5,7 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { startPriceRefreshLoop } = await import("@/lib/priceRefresh");
     startPriceRefreshLoop();
+    const { startArtMirrorLoop } = await import("@/lib/artMirror");
+    startArtMirrorLoop();
   }
 }

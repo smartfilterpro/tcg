@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { APP_NAME } from "@/lib/branding";
+import { artSrc } from "@/lib/art";
 import { avatarColor, initialsFor } from "@/lib/avatar";
 import { matchesSearch, shortAgo } from "@/lib/text";
 import {
@@ -649,7 +650,7 @@ function AttachFromCollection({
     return {
       id: it.id, // collection item id — distinguishes finishes of the same card
       name: `${it.card.name}${finish}`,
-      image: it.card.image_small,
+      image: artSrc(it.card.id, it.card.image_small),
       set_name: it.card.set_name,
       number: it.card.number,
       qty: 1,

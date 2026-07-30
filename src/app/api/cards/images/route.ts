@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { artSrc } from "@/lib/art";
 
 /** Alternate spellings a deck entry's name might be stored under in the
  *  cards table — chiefly basic energy: decks often say "Basic Fighting
@@ -38,7 +39,8 @@ export async function GET(req: Request) {
         .select("id, image_small")
         .in("id", ids);
       if (error) throw error;
-      for (const row of data ?? []) images[row.id] = row.image_small;
+      // Hotlinked cards go out as /art paths, which mirror on first view.
+      for (const row of data ?? []) images[row.id] = artSrc(row.id, row.image_small);
     }
 
     const imagesByName: Record<string, string | null> = {};
@@ -47,14 +49,16 @@ export async function GET(req: Request) {
       const variants = [...new Set(names.flatMap(nameVariants))];
       const { data } = await supabase
         .from("cards")
-        .select("name, image_small")
+        .select("id, name, image_small")
         .in("name", variants)
         .not("image_small", "is", null)
         .limit(200);
       const byLower = new Map<string, string>();
       for (const row of data ?? []) {
         const key = (row.name as string).toLowerCase();
-        if (!byLower.has(key)) byLower.set(key, row.image_small as string);
+        if (!byLower.has(key)) {
+          byLower.set(key, artSrc(row.id as string, row.image_small as string)!);
+        }
       }
       const unresolved: string[] = [];
       for (const name of names) {
@@ -70,11 +74,13 @@ export async function GET(req: Request) {
         if (!clean) continue;
         const { data: rows } = await supabase
           .from("cards")
-          .select("image_small")
+          .select("id, image_small")
           .or(nameVariants(clean).map((v) => `name.ilike.${v}`).join(","))
           .not("image_small", "is", null)
           .limit(1);
-        imagesByName[name] = (rows?.[0]?.image_small as string | null) ?? null;
+        imagesByName[name] = rows?.[0]
+          ? artSrc(rows[0].id as string, rows[0].image_small as string | null)
+          : null;
       }
     }
 
