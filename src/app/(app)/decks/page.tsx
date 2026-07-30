@@ -529,11 +529,40 @@ interface BuiltDeck {
 }
 
 /** Wishlist of unowned cards that would strengthen the deck. */
-function UpgradeList({ suggestions }: { suggestions: UpgradeSuggestion[] }) {
+/** Turn suggestions into the shape ensureImages looks cards up by, so the
+ *  "cards to buy" pictures come from the same cache the deck list uses. */
+function suggestionLookups(suggestions: UpgradeSuggestion[]): DeckCardEntry[] {
+  return suggestions.map((u) => ({
+    name: u.name,
+    quantity: u.quantity,
+    category: "trainer" as const,
+    card_id: u.card?.id ?? null,
+    reason: null,
+  }));
+}
+
+function UpgradeList({
+  suggestions,
+  cardImages,
+  nameImages,
+}: {
+  suggestions: UpgradeSuggestion[];
+  /** The same maps the deck list uses. A suggestion only carries a resolved
+   *  `card` when the AI's name matched a card record at save time; without
+   *  these it fell back to a "?" tile forever, even for cards sitting in the
+   *  database under a slightly different name. */
+  cardImages?: Record<string, string | null>;
+  nameImages?: Record<string, string | null>;
+}) {
   const total = suggestions.reduce(
     (s, u) => s + (u.card?.marketPrice ?? 0) * u.quantity,
     0
   );
+  const imageFor = (u: UpgradeSuggestion) =>
+    u.card?.imageSmall ??
+    (u.card?.id ? cardImages?.[u.card.id] : null) ??
+    nameImages?.[u.name] ??
+    null;
   return (
     <div className="mt-3 rounded-lg bg-amber-50 p-3">
       <div className="mb-2 flex items-baseline justify-between">
@@ -545,14 +574,26 @@ function UpgradeList({ suggestions }: { suggestions: UpgradeSuggestion[] }) {
         )}
       </div>
       <ul className="space-y-2">
-        {suggestions.map((u, i) => (
+        {suggestions.map((u, i) => {
+          const image = imageFor(u);
+          return (
           <li key={i} className="flex gap-2">
-            {u.card?.imageSmall ? (
+            {image ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={u.card.imageSmall} alt={u.name} className="w-12 shrink-0 self-start rounded" />
+              <img
+                src={image}
+                alt={u.name}
+                loading="lazy"
+                className="aspect-[63/88] w-12 shrink-0 self-start rounded object-cover"
+              />
             ) : (
-              <div className="flex aspect-[63/88] w-12 shrink-0 items-center justify-center self-start rounded bg-amber-100 text-[9px] text-amber-400">
-                ?
+              // Still nothing: say which card is missing a picture rather
+              // than showing an anonymous "?" — it reads as broken.
+              <div
+                className="flex aspect-[63/88] w-12 shrink-0 items-center justify-center self-start rounded bg-amber-100 p-1 text-center text-[8px] leading-tight text-amber-700"
+                title={`No picture on file for ${u.name}`}
+              >
+                {u.name}
               </div>
             )}
             <div className="min-w-0 text-xs text-amber-900">
@@ -579,7 +620,8 @@ function UpgradeList({ suggestions }: { suggestions: UpgradeSuggestion[] }) {
               )}
             </div>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );
@@ -688,12 +730,19 @@ export default function DecksPage() {
   }
 
   useEffect(() => {
-    if (built) ensureImages(built.cards);
+    // Suggestions as well as the deck itself: "cards to buy" are by
+    // definition cards you don't own, so they were never in the lookup and
+    // every one of them rendered as a placeholder.
+    if (built) {
+      ensureImages([...built.cards, ...suggestionLookups(built.missing_suggestions ?? [])]);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [built]);
 
   useEffect(() => {
-    if (viewing) ensureImages(viewing.cards ?? []);
+    if (viewing) {
+      ensureImages([...(viewing.cards ?? []), ...suggestionLookups(viewing.suggestions ?? [])]);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewing]);
 
@@ -951,7 +1000,11 @@ export default function DecksPage() {
             <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{built.strategy}</p>
             <DeckList cards={built.cards} />
             {built.missing_suggestions?.length > 0 && (
-              <UpgradeList suggestions={built.missing_suggestions} />
+              <UpgradeList
+                suggestions={built.missing_suggestions}
+                cardImages={cardImages}
+                nameImages={nameImages}
+              />
             )}
             <CoachBox deck={{ name: built.name, strategy: built.strategy, cards: built.cards }} />
           </div>
@@ -1068,7 +1121,11 @@ export default function DecksPage() {
                   </p>
                 )}
                 {(viewing.suggestions?.length ?? 0) > 0 && (
-                  <UpgradeList suggestions={viewing.suggestions!} />
+                  <UpgradeList
+                    suggestions={viewing.suggestions!}
+                    cardImages={cardImages}
+                    nameImages={nameImages}
+                  />
                 )}
                 <HandSimulator getCards={() => viewing.cards ?? []} />
                 <CoachBox
