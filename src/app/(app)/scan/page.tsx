@@ -43,7 +43,7 @@ interface ReviewRow {
 async function fileToBase64(
   file: File,
   maxDim = 1568
-): Promise<{ data: string; mediaType: string; boxes: CardBox[] }> {
+): Promise<{ data: string; mediaType: string; boxes: CardBox[]; crops: string[] }> {
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
   const w = Math.round(bitmap.width * scale);
@@ -65,8 +65,40 @@ async function fileToBase64(
     // Detection is decoration. A failure here must never stop a scan.
   }
 
+  // Cut each detected card out of the photo.
+  //
+  // Better than drawing boxes on the whole picture, which is what the first
+  // version did: on a phone the photo is thumbnail-sized, so six outlines on
+  // it are six slivers with unreadable labels. One tile per card shows each
+  // one big enough to recognise, which is the point of showing them at all.
+  const crops: string[] = [];
+  for (const b of boxes) {
+    const cw = Math.max(1, Math.round(b.w * w));
+    const ch = Math.max(1, Math.round(b.h * h));
+    const out = document.createElement("canvas");
+    // Capped: these are thumbnails, and a full-resolution crop per card
+    // would be several megabytes of data URLs held in React state.
+    const s = Math.min(1, 220 / Math.max(cw, ch));
+    out.width = Math.max(1, Math.round(cw * s));
+    out.height = Math.max(1, Math.round(ch * s));
+    out
+      .getContext("2d")!
+      .drawImage(
+        canvas,
+        Math.round(b.x * w),
+        Math.round(b.y * h),
+        cw,
+        ch,
+        0,
+        0,
+        out.width,
+        out.height
+      );
+    crops.push(out.toDataURL("image/jpeg", 0.8));
+  }
+
   const dataUrl = canvas.toDataURL("image/jpeg", 0.88);
-  return { data: dataUrl.split(",")[1], mediaType: "image/jpeg", boxes };
+  return { data: dataUrl.split(",")[1], mediaType: "image/jpeg", boxes, crops };
 }
 
 
@@ -116,6 +148,8 @@ export default function ScanPage() {
   /** Card outlines found in the photo before it was even sent. Cosmetic: a
    *  card the detector misses is still read by the model. */
   const [boxes, setBoxes] = useState<CardBox[]>([]);
+  /** Each detected card, cut out of the photo. */
+  const [crops, setCrops] = useState<string[]>([]);
   const [phase, setPhase] = useState<"idle" | "scanning" | "review" | "saving" | "done">("idle");
   const [rows, setRows] = useState<ReviewRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -227,11 +261,13 @@ export default function ScanPage() {
     setProgress({ read: 0, expected: null });
     setPartial([]);
     setBoxes([]);
+    setCrops([]);
     setPreview(URL.createObjectURL(file));
     const startedAt = Date.now();
     try {
-      const { data, mediaType, boxes: found } = await fileToBase64(file);
+      const { data, mediaType, boxes: found, crops: cut } = await fileToBase64(file);
       setBoxes(found);
+      setCrops(cut);
       // A denominator before the model has said anything. Replaced by its
       // own count the moment that arrives — the model is the authority on
       // how many cards there are, this is just a head start.
@@ -448,43 +484,62 @@ export default function ScanPage() {
 
       {phase === "scanning" && (
         <div className="card-panel p-6 text-center">
-          {preview && (
-            <div className="relative mx-auto mb-5 inline-block overflow-hidden rounded-lg">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={preview} alt="scan preview" className="max-h-56 rounded-lg" />
-              <div className="absolute inset-0 bg-poke-dark/20" />
-              <div className="scan-beam" />
-              {/* Outlines found locally, before the photo was sent. They fill
-                  in as the model names each card — box i belongs to card i,
-                  since both run in reading order. Percentages, so they track
-                  the image at whatever size it rendered. */}
-              {boxes.map((b, i) => (
-                <div
-                  key={i}
-                  className={`absolute rounded-[3px] border-2 transition-colors duration-300 ${
-                    i < progress.read
-                      ? "border-poke-red bg-poke-red/10"
-                      : "border-white/70"
-                  }`}
-                  style={{
-                    left: `${b.x * 100}%`,
-                    top: `${b.y * 100}%`,
-                    width: `${b.w * 100}%`,
-                    height: `${b.h * 100}%`,
-                  }}
-                >
-                  {partial[i] && (
-                    <span className="absolute inset-x-0 bottom-0 truncate bg-poke-red px-1 py-px text-[8px] font-medium leading-tight text-white">
-                      {partial[i].name}
-                    </span>
-                  )}
-                </div>
-              ))}
+          {/* One tile per detected card, cut out of the photo.
+              ────────────────────────────────────────────────────────────
+              Names are attached ONLY when the detector found exactly as many
+              cards as the model read. Pairing tile i with card i is an
+              assumption, and when it is wrong it is wrong loudly: the first
+              build of this labelled a bottom-row Pawmi as "Bayleef" and drew
+              one box over four cards, because three boxes were zipped against
+              six names. A silent tile is a small loss; a confident wrong
+              caption is a bug someone has to notice to distrust. */}
+          {crops.length > 0 ? (
+            <div className="mx-auto mb-4 grid max-w-md grid-cols-3 gap-2 sm:grid-cols-4">
+              {crops.map((src, i) => {
+                const named = crops.length === partial.length ? partial[i] : null;
+                const read = crops.length === partial.length ? i < progress.read : false;
+                return (
+                  <div key={i} className="relative">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={src}
+                      alt={named ? named.name : `Detected card ${i + 1}`}
+                      className={`aspect-[63/88] w-full rounded-md object-cover ring-2 transition ${
+                        read ? "ring-poke-red" : "opacity-70 ring-slate-200"
+                      }`}
+                    />
+                    {named && (
+                      <span className="absolute inset-x-0 bottom-0 truncate rounded-b-md bg-poke-red/90 px-1 py-0.5 text-[10px] font-medium leading-tight text-white">
+                        {named.name}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
+          ) : (
+            preview && (
+              <div className="relative mx-auto mb-5 inline-block overflow-hidden rounded-lg">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={preview} alt="scan preview" className="max-h-56 rounded-lg" />
+                <div className="absolute inset-0 bg-poke-dark/20" />
+                <div className="scan-beam" />
+              </div>
+            )
           )}
-          {boxes.length > 0 && progress.read === 0 && (
-            <p className="mb-2 -mt-3 font-mono text-[11px] uppercase tracking-wide text-slate-400">
-              {boxes.length} detected
+          {crops.length > 0 && progress.read === 0 && (
+            <p className="mb-3 font-mono text-[11px] uppercase tracking-wide text-slate-400">
+              {crops.length} detected
+            </p>
+          )}
+          {/* The detector and the model disagreed on how many cards are in
+              the photo. Said plainly rather than papered over — the model is
+              the one that decides what gets saved. */}
+          {crops.length > 0 && progress.expected != null && crops.length !== progress.expected && (
+            <p className="mb-3 text-[11.5px] text-slate-400">
+              Found {crops.length} outline{crops.length === 1 ? "" : "s"}, reading{" "}
+              {progress.expected} card{progress.expected === 1 ? "" : "s"} — the list below is
+              what counts.
             </p>
           )}
           <div className="flex items-center justify-center gap-3">
