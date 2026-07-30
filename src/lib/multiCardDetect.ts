@@ -310,9 +310,42 @@ export function detectCards(source: RGBAImage): CardBox[] {
     }
   }
 
-  all.sort((a, b) => b.w * b.h - a.w * a.h);
+  // Throw away boxes that are really several cards.
+  //
+  // A k×k block of cards has the SAME aspect ratio as one card — two across
+  // and two down is (2×63):(2×88), which is 0.716 exactly — so the shape
+  // test cannot reject it, and it is nearly solid so the fill test can't
+  // either. Worse, it is the largest box, so the dedup below was keeping it
+  // and discarding the four real cards inside it as duplicates. A photo of
+  // six came back as three: one block plus the two cards beside it.
+  //
+  // A block is recognisable by what is inside it: two or more card-shaped
+  // boxes, found by other passes, that between them cover most of its area.
+  // A single card contains at most its own art window, which is one box
+  // covering well under half — so this separates the two cases without
+  // needing to know which is which in advance.
+  const merged = new Set<number>();
+  all.forEach((b, i) => {
+    const bArea = b.w * b.h;
+    let coveredArea = 0;
+    let insideCount = 0;
+    for (const c of all) {
+      const cArea = c.w * c.h;
+      if (cArea >= bArea * 0.6) continue;
+      const cx = c.x + c.w / 2;
+      const cy = c.y + c.h / 2;
+      if (cx > b.x && cx < b.x + b.w && cy > b.y && cy < b.y + b.h) {
+        insideCount += 1;
+        coveredArea += cArea;
+      }
+    }
+    if (insideCount >= 2 && coveredArea >= bArea * 0.55) merged.add(i);
+  });
+  const candidates = all.filter((_, i) => !merged.has(i));
+
+  candidates.sort((a, b) => b.w * b.h - a.w * a.h);
   const kept: CardBox[] = [];
-  for (const box of all) {
+  for (const box of candidates) {
     // Same card as one we already have? Centres inside each other, or a
     // substantial share of the smaller box covered by the larger, both mean
     // "this is that card again, found at a different setting".
