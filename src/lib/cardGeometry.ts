@@ -997,9 +997,25 @@ export function centeringCapBack(worstPct: number): number {
   return 8;
 }
 
-/** Walk inward from one edge of the rectified card until the printed border
- *  colour gives way to the frame/artwork, and take the median across many
- *  scan lines. */
+/** Walk inward from one edge of the rectified card and measure the printed
+ *  border's thickness, taking the median across many scan lines.
+ *
+ *  Two things about real photos that a naive edge-to-first-change walk gets
+ *  wrong, both found by running this against actual graded exports:
+ *
+ *  THE CROP LEAVES SLIVERS. Corners placed a hair wide put a few rows of
+ *  table inside the crop, so the border does not start at d=0 — walking
+ *  from the crop edge met table, mismatched instantly, and reported the
+ *  border "too thin" on a card whose border was in plain view. So each line
+ *  first finds where the border STARTS (skipping any leading non-border
+ *  sliver), and thickness is measured from there. The card's true edge is
+ *  where its border begins, not where the crop happened to be cut.
+ *
+ *  TEXT INTERRUPTS BORDERS. The copyright line sits INSIDE the bottom
+ *  border of most modern cards; treating it as the border's end read a
+ *  third of the true width. A short interruption after which border colour
+ *  resumes is part of the border; the frame or artwork that genuinely ends
+ *  it does not come back. */
 function scanBorder(
   card: RGBAImage,
   border: [number, number, number],
@@ -1009,28 +1025,91 @@ function scanBorder(
   const horizontal = dir === "left" || dir === "right";
   const along = horizontal ? card.height : card.width;
   const across = horizontal ? card.width : card.height;
-  const startFrac = 0.008;
   const maxFrac = 0.3;
-  const widths: number[] = [];
+  /** A border starting deeper than this isn't the card's edge border. */
+  const startCap = Math.floor(across * 0.08);
+  /** Interruption the scan may look past — the height of a line of text set
+   *  into the border, not more. ONLY the bottom border gets this: the
+   *  copyright line lives there and nowhere else. The sides carry no text,
+   *  and the top's hazard runs the other way — a resume window let scan
+   *  lines escape across the frame into a pale name banner, which reads as
+   *  border colour and inflates the measurement. Both were observed on the
+   *  real exports, each costing an axis that measured fine without it. */
+  const gapCap = dir === "bottom" ? Math.max(4, Math.floor(across * 0.03)) : 0;
+  const resumeNeed = Math.max(5, Math.floor(across * 0.008));
+
   const at = (d: number, a: number): [number, number, number] => {
     const pos = dir === "left" || dir === "top" ? d : across - 1 - d;
     return horizontal ? px(card, pos, a) : px(card, a, pos);
   };
+  const isBorder = (d: number, a: number) => colorDist(at(d, a), border) <= thr;
+
+  // Pass 1: each line's border start and end.
+  const lines: Array<{ a: number; start: number; end: number }> = [];
   let tried = 0;
   for (let a = Math.floor(along * 0.18); a < along * 0.82; a += 2) {
     tried++;
-    let run = 0;
-    for (let d = Math.floor(across * startFrac); d < across * maxFrac; d++) {
-      if (colorDist(at(d, a), border) > thr) {
-        run++;
-        if (run >= 3) {
-          widths.push(d - 2);
-          break;
-        }
-      } else {
-        run = 0;
+
+    let start = -1;
+    for (let d = Math.floor(across * 0.004); d < startCap; d++) {
+      if (isBorder(d, a) && isBorder(d + 1, a) && isBorder(d + 2, a)) {
+        start = d;
+        break;
       }
     }
+    if (start < 0) continue;
+
+    let end = -1;
+    let d = start;
+    let resumes = 2;
+    for (;;) {
+      let run = 0;
+      while (d < across * maxFrac) {
+        if (!isBorder(d, a)) {
+          run++;
+          if (run >= 3) break;
+        } else {
+          run = 0;
+        }
+        d++;
+      }
+      end = d - run;
+      if (gapCap === 0 || resumes === 0) break;
+      // Look past a text-sized gap for the border resuming in earnest.
+      let resumed = -1;
+      const limit = Math.min(d + gapCap, Math.floor(across * maxFrac));
+      for (let r = d; r < limit; r++) {
+        let ok = true;
+        for (let k = 0; k < resumeNeed; k++) {
+          if (!isBorder(r + k, a)) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) {
+          resumed = r;
+          break;
+        }
+      }
+      if (resumed < 0) break;
+      resumes--;
+      d = resumed;
+    }
+    if (end > start) lines.push({ a, start, end });
+  }
+
+  // Pass 2: one start for the whole edge. The card's edge is a single
+  // straight line in a rectified image, so the per-line starts are noisy
+  // estimates of one number — using each line's own start fed that noise
+  // straight into the width spread and failed the consistency check on
+  // borders that were perfectly uniform. Lines whose start sits far from
+  // the consensus saw glare or artwork, not the edge, and are dropped.
+  const startMedian = median(lines.map((l) => l.start));
+  const widths: number[] = [];
+  for (const l of lines) {
+    if (Math.abs(l.start - startMedian) > Math.max(4, across * 0.02)) continue;
+    const w = l.end - startMedian;
+    if (w > 0) widths.push(w);
   }
   return { widths, tried };
 }
@@ -1056,8 +1135,33 @@ function measureAxis(
   const minBorder = span * 0.018;
   const sides = [dirA, dirB].map((dir) => {
     const { widths } = scanBorder(card, border, thr, dir);
-    const m = median(widths);
-    return { dir, m, mad: median(widths.map((w) => Math.abs(w - m))), n: widths.length };
+    let m = median(widths);
+    let mad = median(widths.map((w) => Math.abs(w - m)));
+    let n = widths.length;
+
+    // The bottom border's rescue, and only the bottom's.
+    //
+    // The copyright line splits its scan lines into two populations: lines
+    // that stopped at the text (under-measured) and lines that read through
+    // to the frame (true). That bimodal spread fails the consistency check
+    // even though the upper cluster is perfectly tight — so when it fails,
+    // re-judge on the widths at or above the median, which discards the
+    // text-stopped population. Safe here because the bottom's systematic
+    // error runs one way: text makes lines read SHORT. The top is left
+    // strict, because its failure runs the other way — a scan escaping into
+    // a pale name banner reads LONG, and an upper-cluster rescue would
+    // canonise exactly the lines that escaped.
+    if (dir === "bottom" && n >= 20 && (m < minBorder || mad > Math.max(4, m * 0.25))) {
+      const upper = widths.filter((w) => w >= m);
+      const um = median(upper);
+      const umad = median(upper.map((w) => Math.abs(w - um)));
+      if (upper.length >= 20 && um >= minBorder && umad <= Math.max(4, um * 0.25)) {
+        m = um;
+        mad = umad;
+        n = upper.length;
+      }
+    }
+    return { dir, m, mad, n };
   });
 
   // Name the edge that actually failed, and why. Reporting "top and bottom"
@@ -1066,17 +1170,11 @@ function measureAxis(
   const failures: string[] = [];
   for (const s of sides) {
     if (s.n < 20) {
-      failures.push(`no ${s.dir} border could be found`);
-    } else if (s.m < minBorder) {
       failures.push(
-        `the ${s.dir} border reads too thin to be the printed border — printing inside it${
-          s.dir === "bottom"
-            ? " (the copyright line)"
-            : s.dir === "top"
-              ? " (the name or set banner)"
-              : ""
-        } stops the scan short of the real edge`
+        `too few clean scan lines crossed the ${s.dir} border (glare or artwork over most of it)`
       );
+    } else if (s.m < minBorder) {
+      failures.push(`the ${s.dir} border measures thinner than any printed border`);
     } else if (s.mad > Math.max(4, s.m * 0.25)) {
       failures.push(`the ${s.dir} border varies too much along its length to be a printed border`);
     }
@@ -1089,7 +1187,7 @@ function measureAxis(
     // owner to go looking for one.
     const known =
       axisName === "top-to-bottom"
-        ? " That is common on modern cards, where the top and bottom borders carry printed text, and it says nothing about the card itself."
+        ? " This says nothing about the card itself — only that this direction couldn't be measured reliably from the photo."
         : "";
     return {
       measure: null,
