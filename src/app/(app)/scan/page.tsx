@@ -28,6 +28,7 @@ interface ReviewRow {
   photoUrl: string | null; // user-taken photo, used when the DB has no image
   originalCardId: string | null; // the scan's auto-match, to measure accuracy
   predictedVariant: string | null; // the finish the scanner suggested, to learn from edits
+  owned: number; // copies already in the collection before this scan
 }
 
 /** Downscale a photo client-side so uploads stay fast and under limits.
@@ -68,6 +69,37 @@ async function fileToBase64(
   return { data: dataUrl.split(",")[1], mediaType: "image/jpeg", boxes };
 }
 
+
+/** The one-line verdict above the results.
+ *
+ *  Assembled from the confidences we already have. The artboard shows this
+ *  as prose — "Five matched cleanly. One needs your eyes — the collector
+ *  number was cut off." — which reads like something a model wrote, and it
+ *  would be daft to pay for a second model call to say what the data
+ *  already says. */
+function scanSummary(rows: ReviewRow[]): string {
+  const total = rows.length;
+  const unsure = rows.filter((r) => !r.card || r.detected.confidence === "low");
+  const clean = total - unsure.length;
+
+  if (total === 0) return "";
+  if (unsure.length === 0) {
+    return total === 1 ? "Matched cleanly." : `All ${clean} matched cleanly.`;
+  }
+  if (clean === 0) {
+    return unsure.length === 1
+      ? "This one needs your eyes — check the name and number before saving."
+      : `None matched cleanly — check each one before saving.`;
+  }
+  // Why it's unsure, when we can say. A missing collector number is the
+  // usual cause and the one the reader can actually do something about.
+  const why = unsure.every((r) => !r.detected.collectorNumber)
+    ? " — the collector number wasn't readable"
+    : "";
+  return unsure.length === 1
+    ? `${clean} matched cleanly. One needs your eyes${why}.`
+    : `${clean} matched cleanly. ${unsure.length} need your eyes${why}.`;
+}
 
 export default function ScanPage() {
   const router = useRouter();
@@ -250,6 +282,7 @@ export default function ScanPage() {
             photoUrl: null,
             originalCardId: r.match?.id ?? null,
             predictedVariant: r.match ? variant : null,
+            owned: r.owned ?? 0,
           };
         })
       );
@@ -274,6 +307,10 @@ export default function ScanPage() {
   function removeRow(key: number) {
     setRows((prev) => prev.filter((r) => r.key !== key));
   }
+
+  /** Rows the reader should look at before saving: no match at all, or a
+   *  match the scanner wasn't confident about. */
+  const unsureRows = rows.filter((r) => !r.card || r.detected.confidence === "low");
 
   async function save() {
     const valid = rows.filter((r) => r.card && r.quantity > 0);
@@ -516,18 +553,21 @@ export default function ScanPage() {
 
       {(phase === "review" || phase === "saving") && (
         <div>
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-sm font-semibold">
-              {rows.length} card{rows.length === 1 ? "" : "s"} detected
+          <div className="mb-1 flex items-baseline justify-between gap-3">
+            <p className="text-lg font-semibold">
+              {rows.length} card{rows.length === 1 ? "" : "s"} read
               {scanSeconds != null && (
-                <span className="font-normal text-slate-400"> in {scanSeconds}s</span>
-              )}{" "}
-              — review before saving
+                <span className="ml-1.5 text-sm font-normal text-slate-400">in {scanSeconds}s</span>
+              )}
             </p>
             <button className="btn-secondary text-xs" onClick={reset}>
               Start over
             </button>
           </div>
+          {/* Composed, not generated. Every fact in this sentence is already
+              in the results — spending a second model call to write it would
+              cost credits to say something we can assemble for free. */}
+          <p className="mb-3 text-sm text-slate-600">{scanSummary(rows)}</p>
           <p className="mb-3 -mt-1 text-[11px] text-slate-400">
             💡 Double-check the finish: <b>Holo</b> = only the artwork shines ·{" "}
             <b>Reverse Holo</b> = everything <i>but</i> the artwork shines ·{" "}
@@ -536,7 +576,15 @@ export default function ScanPage() {
 
           <div className="space-y-3">
             {rows.map((row) => (
-              <div key={row.key} className="card-panel flex gap-3 p-3">
+              <div
+                key={row.key}
+                id={`scan-row-${row.key}`}
+                className={`card-panel flex gap-3 p-3 ${
+                  !row.card || row.detected.confidence === "low"
+                    ? "ring-1 ring-amber-300"
+                    : ""
+                }`}
+              >
                 {row.card?.imageSmall || row.photoUrl ? (
                   <div className="aspect-[63/88] w-20 shrink-0 self-start overflow-hidden rounded">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -556,6 +604,19 @@ export default function ScanPage() {
                     <span className="font-semibold">
                       {row.card ? row.card.name : `“${row.detected.name}” — not found`}
                     </span>
+                    {/* The thing someone sorting a pile actually wants to
+                        know: is this one I already have, and how many will I
+                        have after saving? Counted server-side during the
+                        scan, so it costs no extra request. */}
+                    {row.card && (
+                      <span
+                        className={`chip ${
+                          row.owned > 0 ? "bg-slate-100 text-slate-600" : "bg-green-100 text-green-800"
+                        }`}
+                      >
+                        {row.owned > 0 ? `×${row.owned + row.quantity} now` : "new"}
+                      </span>
+                    )}
                     <span className={`chip ${confidenceChip[row.detected.confidence]}`}>
                       {row.detected.confidence === "high" ? "✓ confident" : `⚠ ${row.detected.confidence} confidence`}
                     </span>
@@ -654,8 +715,30 @@ export default function ScanPage() {
             >
               {phase === "saving"
                 ? "Saving…"
-                : `Add ${rows.filter((r) => r.card).reduce((s, r) => s + r.quantity, 0)} card(s) to collection`}
+                : (() => {
+                    const n = rows.filter((r) => r.card).reduce((sum, r) => sum + r.quantity, 0);
+                    return `Add ${n} card${n === 1 ? "" : "s"} to collection`;
+                  })()}
             </button>
+            {/* Named rather than implied. "Add 5" next to six rows is
+                confusing until you notice which one it left out, so say
+                which one and take them to it. */}
+            {unsureRows.length > 0 && (
+              <button
+                className="mt-1.5 w-full py-2 text-center text-sm text-slate-500 underline"
+                onClick={() => {
+                  const first = unsureRows[0];
+                  document
+                    .getElementById(`scan-row-${first.key}`)
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  setPickerRow(first);
+                }}
+              >
+                {unsureRows.length === 1
+                  ? `Fix “${unsureRows[0].detected.name}” first`
+                  : `Fix the ${unsureRows.length} unsure ones first`}
+              </button>
+            )}
           </div>
         </div>
       )}

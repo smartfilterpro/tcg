@@ -365,6 +365,34 @@ async function runScan(opts: {
       results.push(...matched);
     }
 
+    // How many of each of these they already own.
+    //
+    // Answered here rather than by the client because we are already holding
+    // the matched ids and the user's session — one query instead of a round
+    // trip, and it means the results screen can say "×3 now" instead of
+    // making someone remember.
+    try {
+      const ids = [...new Set(results.filter((r) => r.match).map((r) => r.match!.id))];
+      if (ids.length > 0) {
+        const { data: owned } = await supabase
+          .from("collection_items")
+          .select("card_id, quantity")
+          .eq("user_id", userId)
+          .in("card_id", ids);
+        const countById = new Map<string, number>();
+        for (const row of owned ?? []) {
+          const id = row.card_id as string;
+          countById.set(id, (countById.get(id) ?? 0) + ((row.quantity as number) ?? 0));
+        }
+        for (const r of results) {
+          if (r.match) r.owned = countById.get(r.match.id) ?? 0;
+        }
+      }
+    } catch {
+      // Best-effort: a missing count shows as "new", which is the safe
+      // reading — it never claims someone owns something they don't.
+    }
+
     // Apply the scanner's learned finish memory: if this exact guess on this
     // exact card has been corrected by members before, suggest the corrected
     // finish instead of repeating the mistake.
