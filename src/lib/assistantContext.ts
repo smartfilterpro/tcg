@@ -13,10 +13,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  *  to decide how much to include, so an estimate is fine. */
 export const approxTokens = (s: string) => Math.ceil(s.length / 4);
 
-/** How many collection lines to spell out before switching to set-level
- *  totals. 700 lines is around 6k tokens — enough to name almost anyone's
- *  binder, cheap enough to send every turn. */
-const MAX_CARD_LINES = 700;
+/** How many cards to spell out before falling back to set-level totals.
+ *
+ *  Raised from 700 when the rendering changed: grouping by set stopped the
+ *  set name being rewritten on every line, which was 2,987 tokens of pure
+ *  duplication at 700 cards. The cheaper rows buy more of them — 1,200 cards
+ *  now costs less than 700 did, so the assistant is both cheaper AND less
+ *  likely to say "you don't own that" about something you do. */
+const MAX_CARD_LINES = 1200;
 
 interface Row {
   quantity: number;
@@ -110,9 +114,22 @@ export async function buildContext(
   }
 
   if (shown.length > 0) {
+    // Grouped by set, so the set name is written once per group instead of
+    // once per card. Ranking is still by value — that decides WHICH cards
+    // survive truncation — and grouping only changes how the survivors are
+    // laid out, so the most valuable cards are still the ones that make it.
+    const bySetGroup = new Map<string, string[]>();
+    for (const [name, v] of shown) {
+      const line = `${name}\t${v.qty}`;
+      const list = bySetGroup.get(v.set);
+      if (list) list.push(line);
+      else bySetGroup.set(v.set, [line]);
+    }
     parts.push(
-      "CARDS OWNED (name xQty · set):\n" +
-        shown.map(([name, v]) => `${name} x${v.qty} · ${v.set}`).join("\n")
+      "CARDS OWNED, grouped by set. Each row is: card name<TAB>how many you own.\n" +
+        [...bySetGroup.entries()]
+          .map(([set, lines]) => `[${set}]\n${lines.join("\n")}`)
+          .join("\n\n")
     );
   }
   if (truncated > 0) {
