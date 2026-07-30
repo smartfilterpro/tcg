@@ -7,12 +7,19 @@
 // crawled a few hundred cards and reported 51 of 120 with no price at all.
 // The data existed; we just never asked for it.
 //
-// Two rules shape the whole file:
+// The rules, each an owner decision:
 //
-//   GAP-FILL, NEVER OVERWRITE. A card that already has a price keeps it.
-//   Replacing the valuation source wholesale is a different decision from
-//   using an allowance, and quietly doing the first while being asked for
-//   the second would be wrong.
+//   PRICES ALWAYS UPDATE. Their numbers are TCGplayer market prices — the
+//   same underlying source our import reads, refreshed daily instead of
+//   whenever the import last ran. Same source, fresher, wins. (Members'
+//   own price_override values live on collection_items and are never
+//   touched by any of this.)
+//
+//   EVERYTHING ELSE GAP-FILLS. Images fill only where we have none, and
+//   member photos and admin-locked art are never touched.
+//
+//   CARDS WE DON'T HOLD ARE ADDED, under a minted tcgp-<id> row that the
+//   catalogue import later folds into the real card.
 //
 //   MATCH EXACTLY OR SKIP. A wrong match writes a wrong price onto a real
 //   card, and nobody would ever notice. Name and collector number must both
@@ -139,7 +146,7 @@ export interface TheirCard {
   pokemonType?: string;
   hp?: number;
   stage?: string;
-  prices?: { market?: number; low?: number };
+  prices?: { market?: number; low?: number; primaryPrinting?: string };
   imageCdnUrl800?: string;
   imageCdnUrl400?: string;
   imageCdnUrl?: string;
@@ -197,7 +204,8 @@ export function rowFromTheirs(
     image_small: image,
     image_large: image,
     market_price: market,
-    prices: market != null ? { normal: market } : null,
+    prices:
+      market != null ? { [variantKeyFor(theirs.prices?.primaryPrinting) ?? "normal"]: market } : null,
     price_updated_at: new Date().toISOString(),
     tcgplayer_id: tcgId,
   };
@@ -236,6 +244,21 @@ export function buildIndex(cards: OurCard[]): {
   return { byKey, ambiguous };
 }
 
+/** Their printing names → our per-finish price keys. Unknown names return
+ *  null and the per-finish map is left alone — writing a guessed key would
+ *  invent a finish the card doesn't come in, and availableVariants() treats
+ *  the map's keys as the list of finishes that exist. */
+export function variantKeyFor(printing: string | null | undefined): string | null {
+  const t = (printing ?? "").trim().toLowerCase();
+  if (!t || t === "normal" || t === "unlimited") return "normal";
+  if (t === "holofoil") return "holofoil";
+  if (t === "reverse holofoil") return "reverseHolofoil";
+  if (t === "1st edition" || t === "1st edition normal") return "1stEditionNormal";
+  if (t === "1st edition holofoil") return "1stEditionHolofoil";
+  if (t === "unlimited holofoil") return "unlimitedHolofoil";
+  return null;
+}
+
 export interface Patch {
   id: string;
   market_price?: number;
@@ -259,13 +282,22 @@ export function patchFor(ours: OurCard, theirs: TheirCard): Patch | null {
     useful = true;
   }
 
-  // GAP-FILL. A card that already has a price keeps it.
+  // PRICES ALWAYS UPDATE — same source as the import (TCGplayer), fresher.
+  // Skipped when equal, so an already-current card writes nothing.
   const market = theirs.prices?.market;
-  if (ours.market_price == null && typeof market === "number" && market > 0) {
+  if (typeof market === "number" && market > 0 && market !== ours.market_price) {
     patch.market_price = market;
-    // Seed the per-finish map too, or the collection's finish-aware pricing
-    // still shows nothing for a card whose headline price we just set.
-    patch.prices = { ...(ours.prices ?? {}), normal: market };
+    const key = variantKeyFor(theirs.prices?.primaryPrinting);
+    const existing = ours.prices ?? {};
+    if (key) {
+      patch.prices = { ...existing, [key]: market };
+    } else if (Object.keys(existing).length === 0) {
+      // No finish stated and no map to respect: seed the headline finish so
+      // finish-aware pricing shows something rather than nothing.
+      patch.prices = { normal: market };
+    }
+    // A stated-but-unknown finish updates market_price only, leaving the
+    // per-finish map to the source that understands it.
     useful = true;
   }
 
