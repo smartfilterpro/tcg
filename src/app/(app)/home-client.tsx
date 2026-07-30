@@ -21,7 +21,18 @@ import {
 
 type SortKey = "newest" | "name" | "price" | "set";
 
-export default function CollectionPage() {
+export default function CollectionPage({
+  plan = "free",
+  isAdmin = false,
+}: {
+  plan?: string;
+  isAdmin?: boolean;
+}) {
+  // The export itself is built in the browser from data the page already
+  // holds, so this gate is a product decision made visible — not a security
+  // boundary. Anyone who wants the same rows can still read them from
+  // /api/collection. Enforce it server-side only if that ever matters.
+  const canExport = isAdmin || plan !== "free";
   const [items, setItems] = useState<CollectionItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -538,11 +549,22 @@ export default function CollectionPage() {
           {grouped.length} card{grouped.length === 1 ? "" : "s"} shown
           {filtered.length !== grouped.length && ` · ${filtered.length} finishes`}
         </span>
-        {filtered.length > 0 && (
-          <button className="text-poke-blue hover:underline" onClick={exportCsv}>
-            ⬇ Export CSV
-          </button>
-        )}
+        {filtered.length > 0 &&
+          (canExport ? (
+            <button className="text-brand-accent hover:underline" onClick={exportCsv}>
+              ⬇ Export CSV
+            </button>
+          ) : (
+            // A pitch, not a wall: it says what it is and where to get it,
+            // and nothing else on the page changes.
+            <Link
+              href="/pricing"
+              className="text-brand-ink4 hover:text-brand-ink hover:underline"
+              title="CSV export is part of Pro — everything else on this page stays free"
+            >
+              🔒 Export CSV · Pro
+            </Link>
+          ))}
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">

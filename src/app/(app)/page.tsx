@@ -8,5 +8,12 @@ import Landing from "@/components/marketing/Landing";
 export default async function Home() {
   const auth = await getUserAndProfile();
   if (!auth) return <Landing />;
-  return <CollectionHome />;
+  // CSV export is a paid feature, so the plan has to reach the client. Admins
+  // are never gated.
+  return (
+    <CollectionHome
+      plan={auth.profile?.plan ?? "free"}
+      isAdmin={auth.profile?.role === "admin"}
+    />
+  );
 }
