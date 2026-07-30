@@ -8,6 +8,7 @@
 // that flips a column nothing reads would be theatre.
 
 import { useCallback, useEffect, useState } from "react";
+import { MONTHLY_GRANT } from "@/lib/credits";
 
 interface Member {
   userId: string;
@@ -103,7 +104,7 @@ export default function FamilyPage() {
           <>
             <p className="mb-4 mt-0 text-[14.5px] text-brand-ink3">
               You&apos;re on the Family plan — set up your household. Up to 5 profiles share a
-              2,000-credit pool, each with their own binder and decks.
+              {MONTHLY_GRANT.family.toLocaleString()}-credit pool, each with their own binder and decks.
             </p>
             {error && <div className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
             <button
@@ -117,7 +118,7 @@ export default function FamilyPage() {
         ) : (
           <>
             <p className="mb-4 mt-0 text-[14.5px] text-brand-ink3">
-              Family is up to 5 trainers on one bill: a shared 2,000-credit pool, per-profile
+              Family is up to 5 trainers on one bill: a shared {MONTHLY_GRANT.family.toLocaleString()}-credit pool, per-profile
               caps, and parent controls — $19/month.
             </p>
             <a href="/pricing" className="inline-block rounded-full bg-brand-ink px-5 py-[11px] text-sm font-medium text-brand-canvas">

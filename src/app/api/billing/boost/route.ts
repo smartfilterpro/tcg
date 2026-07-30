@@ -6,7 +6,7 @@ import { BOOST_PACKS, ensureCustomer, stripeEnabled, stripeFetch, StripeError } 
 
 export const maxDuration = 30;
 
-/** POST { pack: "250" | "750" | "2000" } → a Stripe Checkout url for a
+/** POST { pack: "250" | "750" | "1500" } → a Stripe Checkout url for a
  *  one-off boost. No subscription is created or changed.
  *
  *  A pending boost_purchases row is written BEFORE checkout opens, keyed by
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
     const { pack } = (await req.json().catch(() => ({}))) as { pack?: string };
     const spec = pack ? BOOST_PACKS[pack] : undefined;
     if (!spec) {
-      return NextResponse.json({ error: "Pick a boost pack: 250, 750 or 2000." }, { status: 400 });
+      return NextResponse.json({ error: `Pick a boost pack: ${Object.keys(BOOST_PACKS).join(", ")}.` }, { status: 400 });
     }
 
     // A kid profile never reaches Stripe: their boost becomes a parent

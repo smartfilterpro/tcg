@@ -66,7 +66,7 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
   const packs = [
     { id: "250", credits: "250 credits", note: `≈ 60–120 ${AI_NAME} actions`, price: "$3", best: false },
     { id: "750", credits: "750 credits", note: "Best value — a whole new set", price: "$8", best: true },
-    { id: "2000", credits: "2,000 credits", note: "For the shoebox in the closet", price: "$19", best: false },
+    { id: "1500", credits: "1,500 credits", note: "For the shoebox in the closet", price: "$19", best: false },
   ];
   const chosen = packs.find((p) => p.id === pack)!;
 
