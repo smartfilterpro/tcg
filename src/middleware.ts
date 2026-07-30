@@ -18,6 +18,10 @@ const PUBLIC_PATHS = [
   // their own (stricter) checks could run.
   "/api/billing/webhook",
   "/api/cron",
+  // eBay's account-deletion endpoint. eBay calls it with no cookies and will
+  // mark the endpoint down if it 401s, which costs the production keyset. It
+  // holds no data and answers a hash challenge, so it is safe to expose.
+  "/api/ebay/account-deletion",
   "/terms",
 ];
 
