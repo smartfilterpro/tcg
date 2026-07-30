@@ -159,6 +159,12 @@ a list of answers already given.
   combo deck wins by assembling specific pieces that do something together
   that neither does alone — a damage-modifier stack on a big attacker is
   aggro, not combo, no matter how much arithmetic it involves.
+- When an archetype is requested, hunt for it in the DATA before deciding
+  the collection can't do it: read the text and atk columns looking for
+  abilities and effects that interlock — energy acceleration feeding an
+  expensive attacker, self-damage enabling a revenge attack, bench
+  manipulation plus spread damage. The pieces are often on cards whose
+  names you don't recognise; the columns are how you find them.
 - If the collection cannot support the requested archetype, DO NOT build
   something else and present it as the request. Relabelling is the one
   unforgivable answer: the player finds out mid-game. The FIRST sentence of
@@ -180,7 +186,7 @@ a list of answers already given.
 - Give it a name that isn't a near-copy of one they already have.
 
 UPGRADE SUGGESTIONS (missing_suggestions):
-The collection JSON is the COMPLETE truth of what the player owns — check it
+The collection table is the COMPLETE truth of what the player owns — check it
 before every suggestion, and also check YOUR OWN deck list: never suggest a
 card the deck already runs at 4 copies, and when the deck runs some copies,
 phrase the suggestion as going from N to M. Never suggest basic energy. The
@@ -194,9 +200,13 @@ it fixes and what it would replace. Prefer impactful, reasonably-priced
 staples over chase rares unless the deck truly needs them.
 
 EXPLAINING THE DECK:
-Tailor to the player's play style profile and experience level when provided.
 The strategy write-up should cover: the win condition, the ideal opening turns,
-what to search for first, and how the deck wants to trade prizes.`;
+what to search for first, and how the deck wants to trade prizes. Use the
+player's play style profile and experience level to make real choices (which
+line to build, how much risk to accept, how much rules detail to explain) —
+then mention the profile only where it changed a concrete decision. Never
+compliment the player or tell them the deck suits them; a strategy note is
+an instruction manual, not a sales pitch.`;
 
 /** POST: start a deck build. Returns { jobId } immediately. */
 export async function POST(req: Request) {
