@@ -17,7 +17,7 @@ export interface AppNavItem {
 export default function AppNav({ items }: { items: AppNavItem[] }) {
   const pathname = usePathname();
   return (
-    <nav className="no-scrollbar flex min-w-0 items-stretch gap-0.5 self-stretch overflow-x-auto text-sm">
+    <nav className="no-scrollbar ml-2 flex min-w-0 items-stretch gap-0.5 self-stretch overflow-x-auto text-sm">
       {items.map((item) => {
         const active =
           item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
@@ -25,7 +25,7 @@ export default function AppNav({ items }: { items: AppNavItem[] }) {
           <Link
             key={item.href}
             href={item.href}
-            className={`flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 pt-0.5 ${
+            className={`flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 ${
               active
                 ? "border-brand-highlight text-white"
                 : "border-transparent text-dark-ink3 hover:text-white"

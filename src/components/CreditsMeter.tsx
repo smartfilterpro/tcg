@@ -173,7 +173,7 @@ export default function CreditsMeter() {
 
   if (data.admin) {
     return (
-      <div className="card-panel mb-4 p-3 text-xs text-slate-500">
+      <div className="mb-3.5 rounded-2xl border border-brand-line bg-white px-5 py-3 text-xs text-brand-ink3">
         🤖 {AI_NAME}: admin — unmetered · {data.calls} call{data.calls === 1 ? "" : "s"} this month
       </div>
     );
@@ -189,7 +189,7 @@ export default function CreditsMeter() {
   if (c.balance <= 0) {
     return (
       <>
-        <div className="card-panel mb-4 p-4">
+        <div className="mb-3.5 rounded-2xl border border-brand-line bg-white p-5">
           <div className="mb-1.5 font-display text-[17px] font-bold">You&apos;re out of credits</div>
           <p className="m-0 mb-3.5 text-sm leading-relaxed text-brand-ink3">
             {c.monthlyGrant > 0 ? (
@@ -242,7 +242,7 @@ export default function CreditsMeter() {
 
   return (
     <>
-      <div className="card-panel mb-4 px-5 py-[18px]">
+      <div className="mb-3.5 rounded-2xl border border-brand-line bg-white px-5 py-[18px]">
         <div className="flex flex-wrap items-center gap-7">
           <div className="min-w-[280px] flex-[1_1_380px]">
             <div className="mb-2.5 flex items-baseline justify-between gap-3">
@@ -310,7 +310,7 @@ export function BulkScanNudge({ cards }: { cards: number }) {
   }, []);
   if (plan !== "free" || cards < 20) return null;
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-[18px] rounded-2xl bg-brand-ink px-5 py-[18px] text-brand-canvas">
+    <div className="mb-[18px] flex flex-wrap items-center gap-[18px] rounded-2xl bg-brand-ink px-5 py-[18px] text-brand-canvas">
       <span className="rounded-full bg-brand-highlight px-2.5 py-1 font-mono text-[10.5px] font-medium tracking-[.06em] text-brand-ink">
         FREE PLAN
       </span>
