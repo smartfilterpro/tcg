@@ -22,6 +22,43 @@ interface Msg {
   pending?: boolean;
 }
 
+/** A definite verdict from the server — as opposed to a network blip,
+ *  which just means "poll again". */
+class ChatFailed extends Error {}
+
+/** Poll a reply job until it lands. Polling (not a held-open stream) is the
+ *  whole cure for the sleeping phone: every fetch here is independent, so
+ *  the phone can sleep through any number of them and the first poll after
+ *  waking collects the answer. */
+async function watchJob(jobId: string): Promise<{ answer: string; refused?: boolean }> {
+  // Generous, and only enforced while the job still says "running" — a
+  // phone asleep past the deadline whose job finished still gets the
+  // answer from its first poll after waking.
+  const deadline = Date.now() + 3 * 60 * 1000;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const res = await fetch(`/api/assistant?job=${encodeURIComponent(jobId)}`);
+      const json = await res.json();
+      const job = json?.job;
+      if (job?.status === "done" && typeof job.result?.answer === "string") {
+        return job.result as { answer: string; refused?: boolean };
+      }
+      if (job?.status === "error" || (job?.status === "done" && !job.result?.answer)) {
+        throw new ChatFailed(job.error || "The chat failed");
+      }
+      if (!job && json?.migrated !== false) throw new ChatFailed("The chat failed");
+    } catch (e) {
+      if (e instanceof ChatFailed) throw e;
+      // Network blip or sleeping phone — the reply is still being written
+      // server-side, so keep asking.
+    }
+    if (Date.now() > deadline) {
+      throw new ChatFailed("That reply is taking too long — reopen the chat in a minute.");
+    }
+  }
+}
+
 const STARTERS = [
   "What should I add to my best deck?",
   "What's the most valuable card I own?",
@@ -48,9 +85,24 @@ export default function TrainerChat() {
       if (res.ok) {
         setMigrated(json.migrated !== false);
         setMsgs(json.messages ?? []);
+        // A reply is still being written server-side — the phone slept or
+        // the page reloaded mid-answer. The question is already in the
+        // history above (it's saved before the model runs); pick the
+        // answer up where it was left.
+        if (json.job?.id) {
+          setBusy(true);
+          watchJob(json.job.id as string)
+            .then((r) => {
+              setMsgs((m) => [...m, { role: "assistant", content: r.answer, refused: r.refused }]);
+              credits.refresh();
+            })
+            .catch((e) => setError(e instanceof Error ? e.message : "The chat failed"))
+            .finally(() => setBusy(false));
+        }
       }
     } catch {}
     setLoaded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // History is fetched when the panel is first opened, not on every page
@@ -78,6 +130,11 @@ export default function TrainerChat() {
     setError(null);
     setBusy(true);
     setMsgs((m) => [...m, { role: "user", content: question }]);
+    // Whether the question made it into a server-side job. Before that
+    // point a failure means the question went nowhere, so it goes back in
+    // the box; after it, the question is in the saved history and the
+    // reply may still arrive — removing the bubble would misreport.
+    let accepted = false;
     try {
       const res = await fetch("/api/assistant", {
         method: "POST",
@@ -86,15 +143,28 @@ export default function TrainerChat() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "The chat failed");
-      setMsgs((m) => [...m, { role: "assistant", content: json.answer, refused: json.refused }]);
+      let reply: { answer: string; refused?: boolean };
+      if (typeof json.answer === "string") {
+        // The no-cost fast path (off-topic refusals) still answers inline.
+        reply = json;
+      } else if (json.jobId) {
+        // The reply is a job now: the model runs server-side and the
+        // answer lands in history whatever happens to this tab, so a
+        // phone that locks mid-answer costs nothing but the wait.
+        accepted = true;
+        reply = await watchJob(json.jobId as string);
+      } else {
+        throw new Error("The chat failed");
+      }
+      setMsgs((m) => [...m, { role: "assistant", content: reply.answer, refused: reply.refused }]);
       // Re-read the balance: this is the one surface someone uses repeatedly
       // in a sitting, so it's where the lock has to appear on time rather
       // than at the next page load.
       credits.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The chat failed");
-      // Put the question back so it isn't lost to a failed send.
-      setMsgs((m) => m.slice(0, -1));
+      if (!accepted) setMsgs((m) => m.slice(0, -1));
+      // Put the question back so a retry is one tap.
       setDraft(question);
     }
     setBusy(false);
