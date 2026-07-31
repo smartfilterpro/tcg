@@ -1779,7 +1779,30 @@ function PriceRefreshPanel({
   const [elapsed, setElapsed] = useState(0);
   const [result, setResult] = useState<typeof info>(info);
   const [error, setError] = useState<string | null>(null);
+  const [holdBusy, setHoldBusy] = useState<string | null>(null);
   const current = result ?? info;
+
+  /** Settle one held price: apply the feed's new number, or keep ours. */
+  async function decideHold(cardId: string, action: "apply" | "keep") {
+    setHoldBusy(cardId);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/price-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cardId, action }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Review failed");
+      setResult((r) => {
+        const base = r ?? info;
+        return base ? { ...base, suspicious: json.suspicious ?? [] } : base;
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Review failed");
+    }
+    setHoldBusy(null);
+  }
 
   async function runNow() {
     setBusy(true);
@@ -1861,15 +1884,34 @@ function PriceRefreshPanel({
         </p>
       )}
       {(current?.suspicious?.length ?? 0) > 0 && (
-        <div className="rounded-lg bg-yellow-50 p-2 text-xs text-yellow-800">
-          <b>Held for review (price jumped &gt;5×, not applied):</b>{" "}
-          {current!.suspicious
-            .map((s) => `${s.name}: $${(s.old ?? 0).toFixed(2)} → $${(s.next ?? 0).toFixed(2)}`)
-            .join(" · ")}
+        <div className="rounded-lg bg-yellow-50 p-2.5 text-xs text-yellow-800">
+          <b>Held for review (price jumped &gt;5×, not applied):</b>
           <span className="block text-yellow-700">
-            If a jump is real, fix that card&apos;s price from its detail view (price
-            override) or wait — it&apos;ll be rechecked on later runs.
+            Apply takes the feed&apos;s new price. Keep stands by the current one and stops
+            it re-flagging tomorrow — if the feed still disagrees weeks from now, it comes
+            back.
           </span>
+          {current!.suspicious.map((s) => (
+            <div key={s.id} className="mt-1.5 flex flex-wrap items-center gap-2">
+              <span>
+                {s.name}: ${(s.old ?? 0).toFixed(2)} → ${(s.next ?? 0).toFixed(2)}
+              </span>
+              <button
+                className="btn-secondary px-2.5 py-0.5 text-[11px]"
+                disabled={holdBusy === s.id}
+                onClick={() => decideHold(s.id, "apply")}
+              >
+                Apply ${(s.next ?? 0).toFixed(2)}
+              </button>
+              <button
+                className="btn-secondary px-2.5 py-0.5 text-[11px]"
+                disabled={holdBusy === s.id}
+                onClick={() => decideHold(s.id, "keep")}
+              >
+                Keep ${(s.old ?? 0).toFixed(2)}
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>
