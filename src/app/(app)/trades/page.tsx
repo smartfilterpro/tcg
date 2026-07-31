@@ -81,6 +81,9 @@ function TradeBoard() {
   const [migrated, setMigrated] = useState(true);
   const [boardEnabled, setBoardEnabled] = useState(true);
   const [myId, setMyId] = useState<string | null>(null);
+  /** Admins may remove any post or reply — the moderation power section 6
+   *  of the Terms promises. */
+  const [isAdmin, setIsAdmin] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lookingFor, setLookingFor] = useState("");
   const [offering, setOffering] = useState("");
@@ -107,6 +110,7 @@ function TradeBoard() {
         setBoardEnabled(json.boardEnabled !== false);
         setPosts(json.posts ?? []);
         if (json.myId) setMyId(json.myId);
+        setIsAdmin(json.isAdmin === true);
       }
     } catch {}
   }, []);
@@ -171,9 +175,29 @@ function TradeBoard() {
   }
 
   async function removePost(post: TradePost) {
-    if (!confirm("Delete this post?")) return;
+    const mine = myId === post.user_id;
+    if (!confirm(mine ? "Delete this post?" : `Remove ${post.authorName}'s post? (admin)`)) return;
     await fetch(`/api/market/${post.id}`, { method: "DELETE" });
     load();
+  }
+
+  async function removeComment(post: TradePost, commentId: string) {
+    if (!confirm("Remove this reply?")) return;
+    const res = await fetch(`/api/market/${post.id}/comments`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commentId }),
+    });
+    if (res.ok) {
+      setPosts((ps) =>
+        ps.map((p) =>
+          p.id === post.id ? { ...p, comments: p.comments.filter((c) => c.id !== commentId) } : p
+        )
+      );
+    } else {
+      const j = await res.json().catch(() => ({}));
+      alert(j.error ?? "Couldn't remove the reply");
+    }
   }
 
   async function reply(post: TradePost) {
@@ -247,6 +271,9 @@ function TradeBoard() {
                 key={p.id}
                 post={p}
                 mine={myId === p.user_id}
+                moderator={isAdmin}
+                myId={myId}
+                onDeleteComment={removeComment}
                 ownedCardIds={ownedCardIds}
                 replyValue={replyText[p.id] ?? ""}
                 onReplyChange={(v) => setReplyText((r) => ({ ...r, [p.id]: v }))}
@@ -377,6 +404,8 @@ const COMMENT_PREVIEW = 3;
 function PostCard({
   post,
   mine,
+  moderator,
+  myId,
   ownedCardIds,
   replyValue,
   onReplyChange,
@@ -386,9 +415,13 @@ function PostCard({
   onToggleComments,
   onSetStatus,
   onDelete,
+  onDeleteComment,
 }: {
   post: TradePost;
   mine: boolean;
+  /** True for admins: may remove any post or reply, per the Terms. */
+  moderator: boolean;
+  myId: string | null;
   ownedCardIds: Set<string> | null;
   replyValue: string;
   onReplyChange: (v: string) => void;
@@ -398,6 +431,7 @@ function PostCard({
   onToggleComments: () => void;
   onSetStatus: (p: TradePost, s: "open" | "closed") => void;
   onDelete: (p: TradePost) => void;
+  onDeleteComment: (p: TradePost, commentId: string) => void;
 }) {
   const shown = expanded ? post.comments : post.comments.slice(0, COMMENT_PREVIEW);
   const hidden = post.comments.length - shown.length;
@@ -442,7 +476,7 @@ function PostCard({
             {shown.map((c) => (
               <div key={c.id} className="flex items-start gap-2.5">
                 <Avatar seed={c.user_id} name={c.authorName} size={24} />
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="text-[12.5px] leading-[1.55] text-brand-ink2">
                     <b className="font-medium">{c.authorName}</b>{" "}
                     <span className="whitespace-pre-wrap">{c.body}</span>
@@ -454,6 +488,15 @@ function PostCard({
                     {shortAgo(c.created_at)}
                   </div>
                 </div>
+                {(moderator || c.user_id === myId) && (
+                  <button
+                    className="shrink-0 rounded px-1 font-mono text-[11px] text-brand-ink5 hover:bg-[#FDF0EE] hover:text-brand-negative"
+                    title={c.user_id === myId ? "Remove your reply" : "Remove this reply (admin)"}
+                    onClick={() => onDeleteComment(post, c.id)}
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -497,19 +540,21 @@ function PostCard({
           )
         )}
 
-        {mine && (
+        {(mine || moderator) && (
           <div className="mt-2.5 flex gap-1.5 text-xs">
-            <button
-              className="rounded-full px-2.5 py-1 text-brand-ink4 hover:bg-brand-sunken"
-              onClick={() => onSetStatus(post, post.status === "open" ? "closed" : "open")}
-            >
-              {post.status === "open" ? "Mark traded" : "Reopen"}
-            </button>
+            {mine && (
+              <button
+                className="rounded-full px-2.5 py-1 text-brand-ink4 hover:bg-brand-sunken"
+                onClick={() => onSetStatus(post, post.status === "open" ? "closed" : "open")}
+              >
+                {post.status === "open" ? "Mark traded" : "Reopen"}
+              </button>
+            )}
             <button
               className="rounded-full px-2.5 py-1 text-brand-negative hover:bg-[#FDF0EE]"
               onClick={() => onDelete(post)}
             >
-              Delete
+              {mine ? "Delete" : "Remove (admin)"}
             </button>
           </div>
         )}

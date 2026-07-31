@@ -688,20 +688,31 @@ export default function CollectionPage({
                 <div className="flex aspect-[63/88] w-40 flex-col items-center justify-center gap-2 self-center rounded-lg bg-slate-100 p-3 text-center text-xs text-slate-400 sm:self-start">
                   <span className="text-2xl">📷</span>
                   No card art available
-                  <button
-                    className="btn-primary px-3 py-1.5 text-xs"
-                    disabled={photoBusy || findBusy}
-                    onClick={() => findImageOnline(selected)}
-                  >
-                    {findBusy ? "Searching…" : "🔍 Find image online"}
-                  </button>
-                  <button
-                    className="btn-secondary px-3 py-1.5 text-xs"
-                    disabled={photoBusy || findBusy}
-                    onClick={() => detailPhotoRef.current?.click()}
-                  >
-                    {photoBusy ? "Uploading…" : "📷 Use your photo"}
-                  </button>
+                  {/* Pictures come from the pipeline (import, price tracker,
+                      art mirror) or the admin — the manual buttons are
+                      admin-only now, and the server enforces the same. */}
+                  {isAdmin ? (
+                    <>
+                      <button
+                        className="btn-primary px-3 py-1.5 text-xs"
+                        disabled={photoBusy || findBusy}
+                        onClick={() => findImageOnline(selected)}
+                      >
+                        {findBusy ? "Searching…" : "🔍 Find image online"}
+                      </button>
+                      <button
+                        className="btn-secondary px-3 py-1.5 text-xs"
+                        disabled={photoBusy || findBusy}
+                        onClick={() => detailPhotoRef.current?.click()}
+                      >
+                        {photoBusy ? "Uploading…" : "📷 Use your photo"}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-[11px] leading-snug">
+                      The picture arrives automatically as the card database fills in.
+                    </span>
+                  )}
                 </div>
               )}
               <div className="w-full min-w-0 sm:flex-1">

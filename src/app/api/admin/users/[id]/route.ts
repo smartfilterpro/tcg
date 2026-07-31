@@ -10,12 +10,44 @@ export async function PATCH(req: Request, { params }: Params) {
   try {
     const { user } = await requireAdmin();
     const { id } = await params;
-    const { aiBudgetUsd, suspended } = (await req.json()) as {
-      aiBudgetUsd?: number;
-      suspended?: boolean;
-    };
+    const { aiBudgetUsd, suspended, resetDisplayName, canShareDecks, canPostTrades, role } =
+      (await req.json()) as {
+        aiBudgetUsd?: number;
+        suspended?: boolean;
+        /** Wipe an inappropriate display name; the member falls back to
+         *  their email prefix everywhere until they pick a new one (which
+         *  goes through the AI name screen like anyone's). */
+        resetDisplayName?: boolean;
+        canShareDecks?: boolean;
+        canPostTrades?: boolean;
+        /** Promote to admin or demote to member. Never your own row — an
+         *  admin who demotes themselves locks everyone out of the tools. */
+        role?: string;
+      };
 
     const patch: Record<string, unknown> = {};
+    if (role !== undefined) {
+      if (role !== "admin" && role !== "member") {
+        return NextResponse.json({ error: "Role must be 'admin' or 'member'." }, { status: 400 });
+      }
+      if (id === user.id) {
+        return NextResponse.json({ error: "You can't change your own role." }, { status: 400 });
+      }
+      patch.role = role;
+    }
+    if (resetDisplayName === true) patch.display_name = null;
+    if (canShareDecks !== undefined) {
+      if (typeof canShareDecks !== "boolean") {
+        return NextResponse.json({ error: "Invalid canShareDecks flag" }, { status: 400 });
+      }
+      patch.can_share_decks = canShareDecks;
+    }
+    if (canPostTrades !== undefined) {
+      if (typeof canPostTrades !== "boolean") {
+        return NextResponse.json({ error: "Invalid canPostTrades flag" }, { status: 400 });
+      }
+      patch.can_post_trades = canPostTrades;
+    }
     if (aiBudgetUsd !== undefined) {
       if (
         typeof aiBudgetUsd !== "number" ||
@@ -46,6 +78,12 @@ export async function PATCH(req: Request, { params }: Params) {
     const admin = createAdminClient();
     const { error } = await admin.from("profiles").update(patch).eq("id", id);
     if (error) {
+      if (/can_share_decks|can_post_trades/i.test(error.message ?? "")) {
+        return NextResponse.json(
+          { error: "Moderation switches need a database update — run supabase/migrations/038_moderation.sql first." },
+          { status: 400 }
+        );
+      }
       if (/ai_budget_usd|suspended/i.test(error.message ?? "")) {
         return NextResponse.json(
           { error: "This needs a database update — run supabase/migrations/011_budget_suspend.sql first." },
@@ -53,6 +91,17 @@ export async function PATCH(req: Request, { params }: Params) {
         );
       }
       throw error;
+    }
+
+    // Turning sharing off also takes down what's already up — the switch
+    // would be theatre if the offending decks stayed on the Friends page.
+    if (canShareDecks === false) {
+      await admin.from("decks").update({ shared: false }).eq("user_id", id).then(() => {});
+      const { data: theirDecks } = await admin.from("decks").select("id").eq("user_id", id);
+      const ids = (theirDecks ?? []).map((d) => d.id as string);
+      if (ids.length > 0) {
+        await admin.from("deck_shares").delete().in("deck_id", ids).then(() => {});
+      }
     }
     return NextResponse.json({ ok: true });
   } catch (err) {

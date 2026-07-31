@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { isFreeTier } from "@/lib/credits";
+import { nameAllowed } from "@/lib/moderation";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -78,6 +79,17 @@ export async function PATCH(req: Request, { params }: Params) {
     // would be stuck sharing forever.
     const wantsSharing =
       body.shared === true || body.shareScope !== undefined || !!body.addShareUserId;
+    // The admin's moderation switch outranks the plan: a paying member who
+    // abused sharing is still switched off.
+    if (
+      wantsSharing &&
+      (profile as { can_share_decks?: boolean | null } | null)?.can_share_decks === false
+    ) {
+      return NextResponse.json(
+        { error: "The admin has turned off deck sharing for this account." },
+        { status: 403 }
+      );
+    }
     if (wantsSharing && (await isFreeTier(user, profile))) {
       return NextResponse.json(
         {
@@ -93,6 +105,10 @@ export async function PATCH(req: Request, { params }: Params) {
     if (body.name !== undefined) {
       if (typeof body.name !== "string" || !body.name.trim() || body.name.length > 100) {
         return NextResponse.json({ error: "Invalid deck name" }, { status: 400 });
+      }
+      const verdict = await nameAllowed("deck name", body.name);
+      if (!verdict.ok) {
+        return NextResponse.json({ error: verdict.reason }, { status: 400 });
       }
       patch.name = body.name.trim();
     }
