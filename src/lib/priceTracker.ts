@@ -26,6 +26,8 @@
 // Do not raise the limit to "get more options": the extractor already ranks
 // the four image sizes a single card carries.
 
+import { createAdminClient } from "@/lib/supabase/admin";
+
 const BASE = (process.env.POKEMONPRICETRACKER_BASE ?? "https://www.pokemonpricetracker.com/api/v2")
   .trim()
   .replace(/\/$/, "");
@@ -92,6 +94,59 @@ function takeBudget(): boolean {
   if (state.used >= state.cap) return false;
   spentToday += 1;
   return true;
+}
+
+/* The restart-amnesia problem: this counter is process memory, and a deploy
+ * restarts the process — so the admin panel read "0 of 15,000 used today"
+ * minutes after a sync had spent thousands. Two truths fix it. The durable
+ * one: the day's tally is persisted (throttled, best-effort) and re-adopted
+ * on the first request after a restart. The authoritative one: the API
+ * reports its own daily-remaining header on every response, and the local
+ * counter is floored to cap-minus-remaining whenever it appears — upstream
+ * never forgets, whatever our process did. */
+
+const BUDGET_STATE_KEY = "pt_budget";
+let hydrated = false;
+let lastPersist = 0;
+
+export async function hydrateBudget(): Promise<void> {
+  if (hydrated) return;
+  hydrated = true;
+  try {
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from("app_state")
+      .select("value")
+      .eq("key", BUDGET_STATE_KEY)
+      .maybeSingle();
+    const v = data?.value as { day?: string; used?: number; remaining?: number | null } | null;
+    if (v && v.day === today() && typeof v.used === "number") {
+      budgetState(); // roll the day first so we never adopt into yesterday
+      if (v.used > spentToday) spentToday = v.used;
+      if (lastRemaining == null && typeof v.remaining === "number") lastRemaining = v.remaining;
+    }
+  } catch {
+    // Display/brake state only — never block lookups on it.
+  }
+}
+
+function persistBudget(): void {
+  const now = Date.now();
+  if (now - lastPersist < 15_000) return;
+  lastPersist = now;
+  try {
+    const admin = createAdminClient();
+    void admin
+      .from("app_state")
+      .upsert({
+        key: BUDGET_STATE_KEY,
+        value: { day: budgetDay, used: spentToday, remaining: lastRemaining },
+        updated_at: new Date().toISOString(),
+      })
+      .then(() => {});
+  } catch {
+    // Best-effort.
+  }
 }
 
 /* ------------------------------------------------------------------ cache */
@@ -232,6 +287,7 @@ export async function ptFetch(
   params: Record<string, string> = {}
 ): Promise<unknown> {
   if (!priceTrackerEnabled()) throw new PriceTrackerError("No API key configured.", 503);
+  await hydrateBudget();
   if (!takeBudget()) {
     throw new PriceTrackerError(
       `Daily budget of ${dailyBudget().toLocaleString()} requests is used up.`,
@@ -254,7 +310,12 @@ export async function ptFetch(
     spentToday += consumed - 1;
   }
   const remaining = Number(res.headers.get("x-ratelimit-daily-remaining"));
-  if (Number.isFinite(remaining)) lastRemaining = remaining;
+  if (Number.isFinite(remaining) && remaining >= 0) {
+    lastRemaining = remaining;
+    // Their count is the truth; ours is a guess that restarts can zero.
+    spentToday = Math.max(spentToday, dailyBudget() - remaining);
+  }
+  persistBudget();
 
   const text = await res.text();
   if (!res.ok) {

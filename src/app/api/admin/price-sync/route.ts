@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { budgetState, priceTrackerEnabled } from "@/lib/priceTracker";
+import { budgetState, hydrateBudget, priceTrackerEnabled } from "@/lib/priceTracker";
 import { readSyncState, runPriceSync } from "@/lib/priceTrackerSync";
 
 // A slice of sets is a lot of HTTP and a lot of row updates.
@@ -14,6 +14,9 @@ export async function GET() {
   try {
     await requireAdmin();
     const admin = createAdminClient();
+    // Re-adopt the persisted tally before reporting — otherwise the first
+    // panel load after a deploy shows the restart's zeroed counter.
+    await hydrateBudget();
     return NextResponse.json({
       enabled: priceTrackerEnabled(),
       running: running.__priceSyncRunning === true,
