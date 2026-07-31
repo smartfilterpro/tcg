@@ -5,12 +5,6 @@ import type { Profile } from "@/lib/types";
 import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc } from "@/lib/art";
 
-interface Invite {
-  id: string;
-  email: string;
-  created_at: string;
-}
-
 interface ScanStats {
   scans: number;
   avgSeconds: number | null;
@@ -149,10 +143,8 @@ function formatTokens(n: number): string {
 
 export default function AdminPage() {
   const [users, setUsers] = useState<Profile[]>([]);
-  const [invites, setInvites] = useState<Invite[]>([]);
   const [usage, setUsage] = useState<Record<string, UserUsage>>({});
   const [lastSignIn, setLastSignIn] = useState<Record<string, string | null>>({});
-  const [email, setEmail] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -176,7 +168,6 @@ export default function AdminPage() {
       setError(json.error || "Failed to load (are you an admin?)");
     } else {
       setUsers(json.users);
-      setInvites(json.invites);
       setUsage(json.usage ?? {});
       setLastSignIn(json.lastSignIn ?? {});
     }
@@ -233,11 +224,15 @@ export default function AdminPage() {
   // Sub-pages within the Admin tab — everything was getting too long for
   // one scroll. The chosen tab lives in the URL hash so refreshes and
   // shared links keep it.
-  type AdminTab = "analytics" | "members" | "cards" | "support";
+  type AdminTab = "analytics" | "members" | "content" | "catalogue" | "support";
   const [tab, setTab] = useState<AdminTab>("analytics");
   useEffect(() => {
     const h = window.location.hash.replace("#", "");
-    if (["analytics", "members", "cards", "support"].includes(h)) setTab(h as AdminTab);
+    // "cards" survives as an alias — old bookmarks land on the catalogue tab.
+    if (h === "cards") setTab("catalogue");
+    else if (["analytics", "members", "content", "catalogue", "support"].includes(h)) {
+      setTab(h as AdminTab);
+    }
   }, []);
   function switchTab(t: AdminTab) {
     setTab(t);
@@ -280,27 +275,6 @@ export default function AdminPage() {
     setTicketBusy(false);
   }
 
-  async function invite(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setMessage(null);
-    const res = await fetch("/api/admin/invite", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setError(json.error);
-    } else {
-      setMessage(
-        `${email} is invited! Send them the app link — they can create their account on the login page.`
-      );
-      setEmail("");
-      load();
-    }
-  }
-
   async function resetPassword(id: string, userEmail: string) {
     const password = prompt(
       `Set a new password for ${userEmail} (8+ characters).\nShare it with them privately — they can keep using it or you can change it again later.`
@@ -314,15 +288,6 @@ export default function AdminPage() {
     const json = await res.json();
     if (!res.ok) setError(json.error);
     else setMessage(`Password updated for ${userEmail}.`);
-  }
-
-  async function revoke(inviteEmail: string) {
-    await fetch("/api/admin/invite", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: inviteEmail }),
-    });
-    load();
   }
 
   async function removeUser(id: string, userEmail: string) {
@@ -500,8 +465,8 @@ export default function AdminPage() {
       <div>
         <h1 className="font-display text-[26px] font-bold tracking-[-.025em]">Admin</h1>
         <p className="mt-[3px] max-w-[70ch] text-sm leading-[1.6] text-brand-ink3">
-          The business view, members and their AI spend, card images awaiting review, and support
-          tickets.
+          Analytics is the business view. Members holds every per-person control, Content the
+          moderation surfaces, Catalogue the card-database tools, and Support the tickets.
         </p>
       </div>
 
@@ -521,7 +486,8 @@ export default function AdminPage() {
           [
             ["analytics", "📊 Analytics"],
             ["members", `👥 Members (${users.length})`],
-            ["cards", `🖼 Cards (${reviewRows.length})`],
+            ["content", "🛡️ Content"],
+            ["catalogue", `🎴 Catalogue${reviewRows.length > 0 ? ` (${reviewRows.length})` : ""}`],
             ["support", `🎫 Support (${tickets.filter((t) => t.status !== "resolved").length})`],
           ] as Array<[AdminTab, string]>
         ).map(([key, label]) => (
@@ -541,25 +507,6 @@ export default function AdminPage() {
 
       {tab === "members" && (
       <>
-      <div className="card-panel p-4">
-        <h2 className="mb-2 font-display text-[17px] font-bold">Invite a friend</h2>
-        <p className="mb-2 text-xs text-brand-ink4">
-          Adds their email to the allow-list. Then just send them the app link — they&apos;ll
-          create their own password on the login page.
-        </p>
-        <form onSubmit={invite} className="flex gap-2">
-          <input
-            type="email"
-            required
-            className="input"
-            placeholder="friend@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-          <button className="btn-primary shrink-0">Send invite</button>
-        </form>
-      </div>
-
       <div className="card-panel p-4">
         <h2 className="mb-2 font-display text-[17px] font-bold">Members ({users.length})</h2>
         <p className="mb-1 text-xs text-brand-ink5">
@@ -745,6 +692,11 @@ export default function AdminPage() {
           ))}
         </ul>
       </div>
+
+      <div className="card-panel p-4">
+        <h2 className="mb-2 font-display text-[17px] font-bold">🎟️ Give credits</h2>
+        <GrantCreditsPanel />
+      </div>
       </>
       )}
 
@@ -879,30 +831,6 @@ export default function AdminPage() {
             </div>
           )}
 
-          <h3 className="mb-1 mt-4 text-sm font-semibold">📣 Site notice</h3>
-          <SiteNoticePanel />
-
-          <h3 className="mb-1 mt-4 text-sm font-semibold">🎟️ Give credits</h3>
-          <GrantCreditsPanel />
-
-          <h3 className="mb-1 mt-4 text-sm font-semibold">🛡️ Shared decks</h3>
-          <SharedDecksPanel />
-
-          <h3 className="mb-1 mt-4 text-sm font-semibold">🧬 Merge duplicate cards</h3>
-          <DedupeCardsPanel />
-
-          <h3 className="mb-1 mt-4 text-sm font-semibold">🩹 Fill price &amp; image gaps</h3>
-          <PriceSyncPanel />
-
-          <h3 className="mb-1 mt-4 text-sm font-semibold">💰 Price freshness</h3>
-          <PriceRefreshPanel info={analytics.priceRefresh ?? null} />
-
-          <h3 className="mb-1 mt-4 text-sm font-semibold">📚 Card catalogue</h3>
-          <CardImportPanel />
-
-          <h3 className="mb-1 mt-4 text-sm font-semibold">🖼️ Mirror card art</h3>
-          <MirrorArtPanel />
-
           <h3 className="mb-1 mt-4 text-sm font-semibold">🎨 Finish detection</h3>
           {analytics.finish?.tracking === false ? (
             <p className="text-xs text-yellow-800">
@@ -937,6 +865,24 @@ export default function AdminPage() {
             </>
           )}
         </div>
+      )}
+
+      {tab === "content" && (
+        <>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">📣 Site notice</h2>
+            <SiteNoticePanel />
+          </div>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🛡️ Shared decks</h2>
+            <SharedDecksPanel />
+          </div>
+          <p className="text-xs leading-[1.6] text-brand-ink5">
+            Trade board moderation lives on the Trades page — as admin you see &ldquo;Remove
+            (admin)&rdquo; on every post and an ✕ on every reply. Per-member switches (block
+            trades, block sharing, reset name) are on the Members tab.
+          </p>
+        </>
       )}
 
       {tab === "support" && (
@@ -1100,7 +1046,7 @@ export default function AdminPage() {
         </div>
       )}
 
-      {tab === "cards" && (
+      {tab === "catalogue" && (
       <div className="card-panel p-4">
         <h2 className="mb-2 font-display text-[17px] font-bold">🖼 Card image review ({reviewRows.length})</h2>
         <p className="mb-2 text-xs text-brand-ink4">
@@ -1285,28 +1231,31 @@ export default function AdminPage() {
       </div>
       )}
 
-      {tab === "members" && (
-      <div className="card-panel p-4">
-        <h2 className="mb-2 font-display text-[17px] font-bold">Pending invites ({invites.length})</h2>
-        {invites.length === 0 ? (
-          <p className="text-sm text-brand-ink5">No pending invites.</p>
-        ) : (
-          <ul className="divide-y divide-brand-line-soft">
-            {invites.map((inv) => (
-              <li key={inv.id} className="flex items-center justify-between py-2">
-                <div className="text-sm">{inv.email}</div>
-                <button
-                  className="btn text-xs text-red-600 hover:bg-red-50"
-                  onClick={() => revoke(inv.email)}
-                >
-                  Revoke
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      {tab === "catalogue" && (
+        <>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">📚 Card catalogue</h2>
+            <CardImportPanel />
+          </div>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🩹 Fill price &amp; image gaps</h2>
+            <PriceSyncPanel />
+          </div>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">💰 Price freshness</h2>
+            <PriceRefreshPanel info={analytics?.priceRefresh ?? null} />
+          </div>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🖼️ Mirror card art</h2>
+            <MirrorArtPanel />
+          </div>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🧬 Merge duplicate cards</h2>
+            <DedupeCardsPanel />
+          </div>
+        </>
       )}
+
     </div>
   );
 }
