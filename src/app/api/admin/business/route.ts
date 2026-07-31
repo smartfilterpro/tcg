@@ -21,7 +21,7 @@ export async function GET() {
     const d30 = new Date(now - 30 * 86400_000).toISOString();
     const m7 = new Date(now - 7 * 30 * 86400_000).toISOString();
 
-    const [profilesRes, usageRes, ledgerRes, boostsRes, scansRes, ticketsRes, stateRes] =
+    const [profilesRes, usageRes, ledgerRes, boostsRes, scansRes, ticketsRes, stateRes, sharedRes] =
       await Promise.all([
         fetchAllRows(() =>
           admin.from("profiles").select("id, email, display_name, plan, role, created_at").order("id")
@@ -50,9 +50,28 @@ export async function GET() {
         // Subject included so refund requests can be spotted: refunds are
         // never automated (payments are final by policy), so a refund ask
         // arrives as an ordinary ticket and deserves its own alert row.
-        admin.from("support_tickets").select("id, status, subject").neq("status", "resolved"),
-        admin.from("app_state").select("value").eq("key", "price_refresh").maybeSingle(),
+        admin
+          .from("support_tickets")
+          .select("id, status, subject, created_at")
+          .neq("status", "resolved"),
+        // Every background job that can strand work reports here: the price
+        // refresh's held prices, the catalogue import's stop-on-error, the
+        // art mirror's failures. One query, picked apart by key below.
+        admin
+          .from("app_state")
+          .select("key, value")
+          .in("key", ["price_refresh", "card_import", "art_mirror"]),
+        // Decks newly shared this week (proxied by creation date — sharing
+        // itself isn't timestamped), for the moderation skim alert.
+        admin
+          .from("decks")
+          .select("id", { count: "exact", head: true })
+          .eq("shared", true)
+          .gte("created_at", new Date(Date.now() - 7 * 86400_000).toISOString()),
       ]);
+    const stateByKey = new Map(
+      ((stateRes.data ?? []) as Array<{ key: string; value: unknown }>).map((r) => [r.key, r.value])
+    );
 
     const profiles = (profilesRes.data ?? []) as Array<Record<string, unknown>>;
     const usage = (usageRes.data ?? []) as Array<Record<string, unknown>>;
@@ -190,7 +209,8 @@ export async function GET() {
 
     // ===== needs-a-human alerts, from real sources only =====
     const suspicious =
-      ((stateRes.data?.value as { suspicious?: unknown[] } | null)?.suspicious ?? []).length;
+      ((stateByKey.get("price_refresh") as { suspicious?: unknown[] } | null)?.suspicious ?? [])
+        .length;
     // Each alert carries where the human acts on it — the concept's
     // "Needs a human" list has a button per row, not just prose.
     const alerts: Array<{
@@ -209,7 +229,11 @@ export async function GET() {
         action: "Review",
       });
     }
-    const tickets = (ticketsRes.data ?? []) as Array<{ status: string; subject: string | null }>;
+    const tickets = (ticketsRes.data ?? []) as Array<{
+      status: string;
+      subject: string | null;
+      created_at: string | null;
+    }>;
     // Refund asks get their own red row: there's no automated refund to
     // hide behind — payments are final by policy, so each of these is a
     // person waiting on the owner's judgment, not a queue item.
@@ -226,9 +250,33 @@ export async function GET() {
         action: "Decide",
       });
     }
-    const openTickets = tickets.filter(
+    // The month itself upside down beats every per-account signal.
+    if (cost30 > revenue30Cents / 100 && cost30 > 1) {
+      alerts.push({
+        severity: "red",
+        title: "AI cost exceeds revenue this month",
+        body: `$${cost30.toFixed(2)} of AI against $${(revenue30Cents / 100).toFixed(2)} of revenue over 30 days. The heaviest spenders are in the table below.`,
+        href: "#members",
+        action: "See spenders",
+      });
+    }
+
+    // Aging beats existing: a ticket a day old is a person giving up on you.
+    const dayAgo = new Date(now - 86400_000).toISOString();
+    const nonRefundOpen = tickets.filter(
       (t) => t.status === "open" && !refundRe.test(t.subject ?? "")
-    ).length;
+    );
+    const aged = nonRefundOpen.filter((t) => (t.created_at ?? "") < dayAgo).length;
+    if (aged > 0) {
+      alerts.push({
+        severity: "red",
+        title: `${aged} support ticket${aged === 1 ? "" : "s"} unanswered over 24h`,
+        body: "Still marked open a day after arriving.",
+        href: "#support",
+        action: "Open inbox",
+      });
+    }
+    const openTickets = nonRefundOpen.length - aged;
     if (openTickets > 0) {
       alerts.push({
         severity: "amber",
@@ -236,6 +284,55 @@ export async function GET() {
         body: "Waiting in the support inbox.",
         href: "#support",
         action: "Open inbox",
+      });
+    }
+
+    // The catalogue import stops on a hard error and then waits, silently,
+    // for someone to press Continue — this is the someone-being-told part.
+    const importState = stateByKey.get("card_import") as {
+      error?: string | null;
+      done?: boolean;
+    } | null;
+    if (importState?.error && importState.done !== true) {
+      alerts.push({
+        severity: "amber",
+        title: "The catalogue import stopped on an error",
+        body: `${String(importState.error).slice(0, 140)} — progress is saved; Continue picks up where it stopped.`,
+        href: "#catalogue",
+        action: "Continue import",
+      });
+    }
+
+    // Mirror trouble: a failing image source the admin would otherwise
+    // never see, because the page quietly falls back to hotlinking.
+    const mirrorState = stateByKey.get("art_mirror") as {
+      lastError?: string | null;
+      lastRunFailed?: number;
+    } | null;
+    const mirrorFailures = mirrorState?.lastRunFailed ?? 0;
+    if (mirrorState?.lastError || mirrorFailures > 0) {
+      alerts.push({
+        severity: "amber",
+        title: mirrorState?.lastError
+          ? "The art mirror hit an error on its last run"
+          : `The art mirror failed on ${mirrorFailures} card${mirrorFailures === 1 ? "" : "s"} last run`,
+        body:
+          (mirrorState?.lastError ? `${String(mirrorState.lastError).slice(0, 140)}. ` : "") +
+          "Failed cards stay hotlinked and are retried on a later sweep.",
+        href: "#catalogue",
+        action: "Check mirror",
+      });
+    }
+
+    // Moderation skim: sharing is where a bad deck name reaches everyone.
+    const sharedThisWeek = sharedRes.count ?? 0;
+    if (sharedThisWeek > 0) {
+      alerts.push({
+        severity: "amber",
+        title: `${sharedThisWeek} deck${sharedThisWeek === 1 ? "" : "s"} newly shared this week`,
+        body: "Worth a skim of the names — the AI screen catches most, not all.",
+        href: "#content",
+        action: "Skim names",
       });
     }
     if (suspicious > 0) {

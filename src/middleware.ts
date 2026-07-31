@@ -22,6 +22,9 @@ const PUBLIC_PATHS = [
   // mark the endpoint down if it 401s, which costs the production keyset. It
   // holds no data and answers a hash challenge, so it is safe to expose.
   "/api/ebay/account-deletion",
+  // The bulk-scan feeder rig posts photos with a per-job device key, no
+  // session — the route itself refuses anything without a matching key.
+  "/api/bulk/photo",
   // Family invitations are answered by people who may not have an account
   // yet — that is the entire point of the change. The page itself resolves
   // the token through a security-definer function and shows nothing for a
