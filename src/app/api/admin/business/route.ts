@@ -188,12 +188,22 @@ export async function GET() {
     // ===== needs-a-human alerts, from real sources only =====
     const suspicious =
       ((stateRes.data?.value as { suspicious?: unknown[] } | null)?.suspicious ?? []).length;
-    const alerts: Array<{ severity: "red" | "amber"; title: string; body: string }> = [];
+    // Each alert carries where the human acts on it — the concept's
+    // "Needs a human" list has a button per row, not just prose.
+    const alerts: Array<{
+      severity: "red" | "amber";
+      title: string;
+      body: string;
+      href: string;
+      action: string;
+    }> = [];
     if (overPlan > 0) {
       alerts.push({
         severity: "red",
         title: `${overPlan} paying account${overPlan === 1 ? " is" : "s are"} costing more than they pay`,
         body: "30-day AI cost above plan price. Consider a nudge to Family, or a cap.",
+        href: "#members",
+        action: "Review",
       });
     }
     const openTickets = (ticketsRes.data ?? []).length;
@@ -202,13 +212,17 @@ export async function GET() {
         severity: "amber",
         title: `${openTickets} open support ticket${openTickets === 1 ? "" : "s"}`,
         body: "Waiting in the support inbox.",
+        href: "#support",
+        action: "Open inbox",
       });
     }
     if (suspicious > 0) {
       alerts.push({
         severity: "amber",
         title: `Price refresh held ${suspicious} suspicious price${suspicious === 1 ? "" : "s"}`,
-        body: "Values moved more than 5× and were not auto-applied — review on the analytics tab.",
+        body: "Values moved more than 5× and were not auto-applied — review under Price freshness.",
+        href: "#catalogue",
+        action: "Review",
       });
     }
 
