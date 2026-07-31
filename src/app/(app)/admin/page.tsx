@@ -2026,12 +2026,13 @@ function PriceSyncPanel() {
             Set {st.setIndex ?? 0} of {total} ({pct}%) ·{" "}
             {(st.cardsSeen ?? 0).toLocaleString()} cards seen ·{" "}
             <b>{(st.pricesFilled ?? 0).toLocaleString()} prices updated</b>,{" "}
-            {(st.imagesFilled ?? 0).toLocaleString()} images,{" "}
+            {(st.imagesFilled ?? 0).toLocaleString()} missing image
+            {(st.imagesFilled ?? 0) === 1 ? "" : "s"} filled,{" "}
             {(st.idsFilled ?? 0).toLocaleString()} ids filled
             {(st.cardsAdded ?? 0) > 0 && (
               <>
                 {" "}
-                · <b>{(st.cardsAdded ?? 0).toLocaleString()} new cards added</b>
+                · <b>{(st.cardsAdded ?? 0).toLocaleString()} new cards added (with pictures)</b>
               </>
             )}
             {(st.skippedAmbiguous ?? 0) > 0 && ` · ${st.skippedAmbiguous} skipped as ambiguous`}
