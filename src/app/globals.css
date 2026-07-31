@@ -48,6 +48,123 @@ h1, h2, h3 {
   }
 }
 
+/* ── The admin page runs dark end to end (owner-dashboard concept). ──────
+   Scoped overrides rather than a component fork: the page reuses the app's
+   light components (card-panel, btn, input, chip, StatTile), so the dark
+   skin is applied where they're USED. Values come from the `dark` palette
+   in tailwind.config.ts. Ordering matters — the specific text shades come
+   after the blanket rule so they win at equal specificity. */
+body.admin-dark-body {
+  background-color: #0f1013;
+}
+.admin-dark {
+  color: #d8d7d4;
+}
+.admin-dark .card-panel {
+  background-color: #171a1f;
+  border-color: #24262c;
+}
+.admin-dark .bg-white {
+  background-color: #1d2027 !important;
+}
+.admin-dark .bg-brand-sunken,
+.admin-dark .bg-brand-panel-alt,
+.admin-dark .bg-slate-50,
+.admin-dark .bg-slate-100 {
+  background-color: #22242a !important;
+}
+.admin-dark [class*="border-brand-line"] {
+  border-color: #24262c;
+}
+.admin-dark .divide-brand-line-soft > :not([hidden]) ~ :not([hidden]) {
+  border-color: #24262c;
+}
+.admin-dark [class*="text-brand-ink"] {
+  color: #d8d7d4;
+}
+.admin-dark .text-brand-ink,
+.admin-dark .text-brand-ink2 {
+  color: #f4f3f1;
+}
+.admin-dark .text-brand-ink3 {
+  color: #a9aaaf;
+}
+.admin-dark .text-brand-ink4,
+.admin-dark .text-brand-ink5 {
+  color: #8a8c93;
+}
+.admin-dark .text-slate-400,
+.admin-dark .text-slate-500 {
+  color: #8a8c93;
+}
+.admin-dark .text-slate-600,
+.admin-dark .text-slate-700 {
+  color: #a9aaaf;
+}
+.admin-dark .text-slate-300 {
+  color: #4a4c53;
+}
+.admin-dark .btn-secondary {
+  background-color: #1d2027;
+  border-color: #2e3037;
+  color: #f4f3f1;
+}
+.admin-dark .btn-secondary:hover {
+  background-color: #22242a;
+}
+.admin-dark .btn-primary {
+  background-color: #f4f3f1;
+  color: #16171b;
+}
+.admin-dark .btn-primary:hover {
+  background-color: #2c5cff;
+  color: #ffffff;
+}
+.admin-dark .input {
+  background-color: #1d2027;
+  border-color: #2e3037;
+  color: #f4f3f1;
+}
+.admin-dark .input::placeholder {
+  color: #7c7e85;
+}
+/* Status tints: translucent over dark instead of pastel over white. */
+.admin-dark .bg-red-50 {
+  background-color: rgba(216, 69, 47, 0.14) !important;
+}
+.admin-dark .bg-red-100 {
+  background-color: rgba(216, 69, 47, 0.22) !important;
+}
+.admin-dark .text-red-600,
+.admin-dark .text-red-700 {
+  color: #ff8a75;
+}
+.admin-dark .text-green-600,
+.admin-dark .text-green-700 {
+  color: #5bd66e;
+}
+.admin-dark .text-yellow-700,
+.admin-dark .text-yellow-800,
+.admin-dark .text-yellow-900 {
+  color: #f0c24b;
+}
+.admin-dark .hover\:bg-slate-100:hover,
+.admin-dark .hover\:bg-brand-sunken:hover {
+  background-color: #22242a !important;
+}
+.admin-dark .hover\:bg-red-50:hover {
+  background-color: rgba(216, 69, 47, 0.12) !important;
+}
+.admin-dark .hover\:bg-green-50:hover {
+  background-color: rgba(91, 214, 110, 0.12) !important;
+}
+.admin-dark .hover\:bg-yellow-50:hover {
+  background-color: rgba(240, 194, 75, 0.12) !important;
+}
+.admin-dark .shadow-sm {
+  box-shadow: none;
+}
+
 /* Hide scrollbars on scrollable strips (e.g. the mobile nav) */
 .no-scrollbar {
   -ms-overflow-style: none;

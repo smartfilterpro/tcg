@@ -241,6 +241,13 @@ export default function AdminPage() {
     window.addEventListener("hashchange", apply);
     return () => window.removeEventListener("hashchange", apply);
   }, []);
+
+  // The page canvas behind the content goes dark with the page, and comes
+  // back when the admin leaves for a light-themed screen.
+  useEffect(() => {
+    document.body.classList.add("admin-dark-body");
+    return () => document.body.classList.remove("admin-dark-body");
+  }, []);
   function switchTab(t: AdminTab) {
     setTab(t);
     try {
@@ -468,7 +475,11 @@ export default function AdminPage() {
     // Full content column. This page used to cap itself at max-w-2xl, which
     // left it a 672px strip under a 1060px header — and squeezed the business
     // dashboard, whose table alone needs 560px before padding.
-    <div className="space-y-4">
+    //
+    // admin-dark: the whole page runs dark (owner-dashboard concept), via
+    // scoped overrides in globals.css — the shared light components are
+    // re-skinned where they're used, not forked.
+    <div className="admin-dark space-y-4">
       <div>
         <h1 className="font-display text-[26px] font-bold tracking-[-.025em]">Admin</h1>
         <p className="mt-[3px] max-w-[70ch] text-sm leading-[1.6] text-brand-ink3">
@@ -1427,6 +1438,12 @@ interface BusinessData {
   }>;
 }
 
+/** Gross-margin target, set 2026-07 from the pricing-model review: at 1¢ a
+ *  credit, Pro nets ~41% at full credit burn and ~59% at typical (~70%)
+ *  burn; Family 17% / 42%. Blended with boost margins (45–52%), a healthy
+ *  month lands in the mid-fifties — so 55% is the line the tile judges. */
+const MARGIN_TARGET = 55;
+
 /** The owner dashboard (the monetization-concept mock): the business, on one
  *  dark panel, every figure from real tables via /api/admin/business. The
  *  concept's deltas are computed from the months series — where history
@@ -1506,10 +1523,10 @@ function BusinessDashboard({ priceCron }: { priceCron: string | null }) {
     URL.revokeObjectURL(url);
   }
 
-  const kpi = (label: string, value: string, note: React.ReactNode) => (
+  const kpi = (label: string, value: string, note: React.ReactNode, valueClass = "text-dark-ink") => (
     <div key={label} className="rounded-[14px] bg-dark-panel-alt p-3.5">
       <div className="font-mono text-[10px] uppercase tracking-[.1em] text-dark-ink4">{label}</div>
-      <div className="mt-1 font-display text-[22px] font-bold tracking-tight text-dark-ink">{value}</div>
+      <div className={`mt-1 font-display text-[22px] font-bold tracking-tight ${valueClass}`}>{value}</div>
       <div className="mt-0.5 text-[11.5px] text-dark-ink4">{note}</div>
     </div>
   );
@@ -1559,9 +1576,19 @@ function BusinessDashboard({ priceCron }: { priceCron: string | null }) {
           "Gross margin",
           k.grossMarginPct == null ? "—" : `${k.grossMarginPct}%`,
           <>
-            of 30d revenue
+            target {MARGIN_TARGET}%
             {marginDelta != null && <> · {delta(marginDelta, "pt", true, prevLabel)}</>}
-          </>
+          </>,
+          // The owner's dial: green at or above target, amber within ten
+          // points, red below that. Chosen from the pricing-model review —
+          // blended margin at typical ~70% credit utilization.
+          k.grossMarginPct == null
+            ? "text-dark-ink"
+            : k.grossMarginPct >= MARGIN_TARGET
+              ? "text-[#5BD66E]"
+              : k.grossMarginPct >= MARGIN_TARGET - 10
+                ? "text-brand-warning"
+                : "text-brand-negative"
         )}
         {kpi("Free → paid", k.conversionPct == null ? "—" : `${k.conversionPct}%`, "of all accounts")}
       </div>
