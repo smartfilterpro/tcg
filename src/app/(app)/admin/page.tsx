@@ -715,6 +715,11 @@ export default function AdminPage() {
         <h2 className="mb-2 font-display text-[17px] font-bold">🎟️ Give credits</h2>
         <GrantCreditsPanel />
       </div>
+
+      <div className="card-panel p-4">
+        <h2 className="mb-2 font-display text-[17px] font-bold">📥 Load a CSV into a collection</h2>
+        <CsvLoadPanel />
+      </div>
       </>
       )}
 
@@ -2300,6 +2305,139 @@ function PriceSyncPanel() {
 /** Fold duplicate card rows — the same card held under two ids because two
  *  sources spelled its number differently ("#050" vs "#50"). Dry run first,
  *  always: this rewrites what people own. */
+/** Bulk-load a CSV of cards into one member's collection — for seeding a
+ *  test account without scanning a shoebox by hand. Preview first, always:
+ *  the server matches against the catalogue and refuses to guess, so the
+ *  dry run shows exactly what would land and what needs a better column. */
+function CsvLoadPanel() {
+  const [email, setEmail] = useState("");
+  const [csv, setCsv] = useState("");
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [out, setOut] = useState<{
+    dryRun: boolean;
+    member: string;
+    rows: number;
+    matched: number;
+    added: number;
+    updated: number;
+    unmatched: Array<{ line: number; name: string; reason: string }>;
+    unmatchedTotal: number;
+    problems: string[];
+    note: string;
+  } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function run(dryRun: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/import-collection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, csv, dryRun }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Import failed");
+      setOut(json);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Import failed");
+      setOut(null);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div>
+      <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+        Columns (header row required, extra columns ignored): <code>name</code>,{" "}
+        <code>number</code>, <code>set</code>, <code>quantity</code>, <code>variant</code> —
+        only <code>name</code> is mandatory, but number and set are what pick the exact
+        printing. Rows that don&apos;t match one catalogue card exactly are reported, never
+        guessed. Preview first; nothing is written until Load.
+      </p>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".csv,text/csv"
+        className="hidden"
+        onChange={async (e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (!f) return;
+          setCsv(await f.text());
+          setFileName(f.name);
+          setOut(null);
+        }}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="email"
+          className="input w-64"
+          placeholder="member@example.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <button className="btn-secondary text-sm" onClick={() => fileRef.current?.click()}>
+          {fileName ? `📄 ${fileName}` : "Choose CSV file"}
+        </button>
+        <button
+          className="btn-secondary text-sm"
+          disabled={busy || !email.trim() || !csv.trim()}
+          onClick={() => run(true)}
+        >
+          {busy ? "Working…" : "Preview"}
+        </button>
+        {out && out.dryRun && out.matched > 0 && (
+          <button className="btn-primary text-sm" disabled={busy} onClick={() => run(false)}>
+            Load {out.matched} card{out.matched === 1 ? "" : "s"} → {out.member}
+          </button>
+        )}
+      </div>
+      <textarea
+        className="input mt-2 min-h-20 font-mono text-[11.5px]"
+        placeholder={"…or paste CSV here\nname,number,set,quantity,variant\nGengar,50,Perfect Order,2,holo"}
+        value={csv}
+        onChange={(e) => {
+          setCsv(e.target.value);
+          setFileName(null);
+          setOut(null);
+        }}
+      />
+      {out && (
+        <div className="mt-2 text-xs text-brand-ink3">
+          <p className="m-0">
+            {out.rows} row{out.rows === 1 ? "" : "s"} · <b>{out.matched} matched</b>
+            {!out.dryRun && ` · ${out.added} added · ${out.updated} quantities merged`}
+            {out.unmatchedTotal > 0 && (
+              <span className="text-brand-warning"> · {out.unmatchedTotal} unmatched</span>
+            )}
+            {" — "}
+            {out.note}
+          </p>
+          {out.unmatched.length > 0 && (
+            <div className="mt-1 max-h-32 overflow-y-auto font-mono text-[11px]">
+              {out.unmatched.map((u, i) => (
+                <div key={i}>
+                  line {u.line}: {u.name} — {u.reason}
+                </div>
+              ))}
+              {out.unmatchedTotal > out.unmatched.length && (
+                <div>…and {out.unmatchedTotal - out.unmatched.length} more</div>
+              )}
+            </div>
+          )}
+          {out.problems.length > 0 && (
+            <p className="m-0 mt-1 text-brand-warning">{out.problems.join(" · ")}</p>
+          )}
+        </div>
+      )}
+      {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
+    </div>
+  );
+}
+
 function SharedDecksPanel() {
   const [decks, setDecks] = useState<Array<{
     id: string;
