@@ -119,6 +119,7 @@ export default function FriendsPage() {
   const [palIds, setPalIds] = useState<Set<string>>(new Set());
   const [friends, setFriends] = useState<Friend[]>([]);
   const [sharedDecks, setSharedDecks] = useState<SharedDeck[]>([]);
+  const [decksLocked, setDecksLocked] = useState(false);
   const [viewingDeck, setViewingDeck] = useState<SharedDeck | null>(null);
 
   // Trade state
@@ -155,6 +156,7 @@ export default function FriendsPage() {
       setNameDraft(json.myName ?? "");
       setFriends(json.friends ?? []);
       setSharedDecks(json.sharedDecks ?? []);
+      setDecksLocked(json.decksLocked === true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     }
@@ -534,7 +536,15 @@ export default function FriendsPage() {
                 Pick one of these when you start a battle and you play it as if it were yours —
                 handy when a kid wants a go with a proper deck. Share yours from the Decks page.
               </p>
-              {sharedDecks.length === 0 ? (
+              {decksLocked ? (
+                <p className="text-sm text-brand-ink4">
+                  🔒 Deck sharing is part of the paid plans.{" "}
+                  <a className="underline" href="/pricing">
+                    Upgrade
+                  </a>{" "}
+                  to share your decks and borrow the ones pals share with you.
+                </p>
+              ) : sharedDecks.length === 0 ? (
                 <p className="text-sm text-brand-ink4">No shared decks yet.</p>
               ) : (
                 <div className="grid gap-2.5 sm:grid-cols-2">

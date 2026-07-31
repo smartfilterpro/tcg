@@ -11,6 +11,7 @@ import Modal, { ModalClose, PROSE } from "@/components/Modal";
 import Markdown from "@/components/Markdown";
 import { CreditLock } from "@/components/CreditLock";
 import { useCredits } from "@/components/useCredits";
+import { FREE_DECK_LIMIT } from "@/lib/limits";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -1087,9 +1088,19 @@ export default function DecksPage() {
                 </p>
               </div>
               <div className="flex gap-2">
-                <button className="btn-primary text-sm" onClick={saveDeck}>
-                  Save deck
-                </button>
+                {credits.freeTier && decks.length >= FREE_DECK_LIMIT ? (
+                  <a
+                    className="btn-secondary text-sm"
+                    href="/pricing"
+                    title={`Free accounts keep up to ${FREE_DECK_LIMIT} saved decks — upgrade for unlimited`}
+                  >
+                    🔒 Deck limit — upgrade
+                  </a>
+                ) : (
+                  <button className="btn-primary text-sm" onClick={saveDeck}>
+                    Save deck
+                  </button>
+                )}
                 <button className="btn-secondary text-sm" onClick={() => setBuilt(null)}>
                   Discard
                 </button>
@@ -1126,6 +1137,16 @@ export default function DecksPage() {
       {/* Saved decks */}
       <div>
         <h2 className="mb-2 font-semibold">Saved decks</h2>
+        {credits.freeTier && (
+          <p className="mb-2 text-xs text-slate-500">
+            Free accounts keep up to {FREE_DECK_LIMIT} saved decks (
+            {Math.min(decks.length, FREE_DECK_LIMIT)} of {FREE_DECK_LIMIT} used).{" "}
+            <a className="underline" href="/pricing">
+              Upgrade
+            </a>{" "}
+            for unlimited decks and deck sharing.
+          </p>
+        )}
         {decks.length === 0 ? (
           <p className="text-sm text-slate-400">No decks yet — build one above!</p>
         ) : (
@@ -1182,18 +1203,28 @@ export default function DecksPage() {
               >
                 ✏️ Edit
               </button>
-              <select
-                className="input w-auto py-1.5 text-sm"
-                title="Who can see this deck on the Friends page"
-                value={viewing.shared ? (viewing.share_scope === "friends" ? "friends" : "everyone") : "off"}
-                onChange={(e) =>
-                  setDeckSharing(viewing, e.target.value as "off" | "everyone" | "friends")
-                }
-              >
-                <option value="off">🔒 Not shared</option>
-                <option value="everyone">🌍 Everyone</option>
-                <option value="friends">🤝 Pals only</option>
-              </select>
+              {credits.freeTier ? (
+                <a
+                  className="self-center whitespace-nowrap text-xs text-slate-500 underline"
+                  href="/pricing"
+                  title="Deck sharing is part of the paid plans"
+                >
+                  🔒 Sharing: paid plans
+                </a>
+              ) : (
+                <select
+                  className="input w-auto py-1.5 text-sm"
+                  title="Who can see this deck on the Friends page"
+                  value={viewing.shared ? (viewing.share_scope === "friends" ? "friends" : "everyone") : "off"}
+                  onChange={(e) =>
+                    setDeckSharing(viewing, e.target.value as "off" | "everyone" | "friends")
+                  }
+                >
+                  <option value="off">🔒 Not shared</option>
+                  <option value="everyone">🌍 Everyone</option>
+                  <option value="friends">🤝 Pals only</option>
+                </select>
+              )}
               <button
                 className="btn text-sm text-red-600 hover:bg-red-50"
                 onClick={() => deleteDeck(viewing.id)}
@@ -1201,7 +1232,7 @@ export default function DecksPage() {
                 Delete
               </button>
             </div>
-            <DeckDirectShares deckId={viewing.id} />
+            {!credits.freeTier && <DeckDirectShares deckId={viewing.id} />}
 
             {/* Two columns once there's room for them. Everything used to be
                 one stack, so on a wide screen the write-up ran as a narrow

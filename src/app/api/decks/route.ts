@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { isFreeTier } from "@/lib/credits";
+import { FREE_DECK_LIMIT } from "@/lib/limits";
 import type { DeckCardEntry, DeckSuggestion } from "@/lib/types";
 
 export async function GET() {
@@ -21,7 +23,7 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
     const body = (await req.json()) as {
       name?: string;
       strategy?: string;
@@ -33,6 +35,27 @@ export async function POST(req: Request) {
     }
     const suggestions = Array.isArray(body.suggestions) ? body.suggestions.slice(0, 10) : [];
     const supabase = await createClient();
+
+    // The free tier keeps a shelf, not a library. Enforced here, not just in
+    // the UI, and counted at save time so deleting a deck immediately frees
+    // the slot.
+    if (await isFreeTier(user, profile)) {
+      const { count } = await supabase
+        .from("decks")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id);
+      if ((count ?? 0) >= FREE_DECK_LIMIT) {
+        return NextResponse.json(
+          {
+            error:
+              `Free accounts keep up to ${FREE_DECK_LIMIT} saved decks. ` +
+              `Delete one you've outgrown, or upgrade for unlimited decks.`,
+            code: "deck_limit",
+          },
+          { status: 403 }
+        );
+      }
+    }
     let { data, error } = await supabase
       .from("decks")
       .insert({

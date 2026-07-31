@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { isFreeTier } from "@/lib/credits";
 import type { Deck } from "@/lib/types";
 
 export interface Friend {
@@ -17,8 +18,15 @@ export interface SharedDeck extends Deck {
  *  and whether the current user is sharing. */
 export async function GET() {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
     const supabase = await createClient();
+    // Deck sharing (both directions) is a paid feature. This feed is the
+    // one source of shared decks for the Friends page AND the battle
+    // borrow picker, so emptying it here closes both surfaces. A product
+    // gate at the API, like the collection-export gate — RLS itself still
+    // permits the rows, which matters only to someone driving the database
+    // by hand.
+    const free = await isFreeTier(user, profile);
 
     // select("*") — share_collection only exists after migration 008
     const { data: profiles, error: profErr } = await supabase
@@ -49,7 +57,7 @@ export async function GET() {
     );
 
     let sharedDecks: SharedDeck[] = [];
-    if (migrated) {
+    if (migrated && !free) {
       // No .eq("shared") filter: row-level security decides what's visible —
       // everyone-scope decks, pals-only decks (if we're pals), and decks
       // shared directly with this user (migration 020).
@@ -81,6 +89,8 @@ export async function GET() {
       myCardCount: myCardCount ?? 0,
       friends,
       sharedDecks,
+      // The Friends page shows an upgrade note instead of the deck list.
+      decksLocked: free,
     });
   } catch (err) {
     return errorResponse(err);

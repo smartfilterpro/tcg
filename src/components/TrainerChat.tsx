@@ -171,7 +171,11 @@ export default function TrainerChat() {
   }
 
   async function clearHistory() {
-    if (!confirm(`Forget this conversation? ${AI_NAME} won't remember what you've discussed.`)) {
+    if (
+      !confirm(
+        `Start a new conversation? The current one is cleared and ${AI_NAME} won't remember what you've discussed.`
+      )
+    ) {
       return;
     }
     await fetch("/api/assistant", { method: "DELETE" });
@@ -221,10 +225,10 @@ export default function TrainerChat() {
             </div>
             {msgs.length > 0 && (
               <button
-                className="shrink-0 text-[11.5px] text-brand-ink5 hover:text-brand-ink hover:underline"
+                className="shrink-0 text-right text-[11.5px] leading-tight text-brand-ink5 hover:text-brand-ink hover:underline"
                 onClick={clearHistory}
               >
-                Clear
+                Start new conversation
               </button>
             )}
             <button

@@ -285,6 +285,28 @@ export async function expirePlanCredits(
   return error ? 0 : toExpire;
 }
 
+/** The free-tier test for PRODUCT gates — the deck cap, deck sharing — as
+ *  opposed to the credit meter, which gates AI spend. A family member's own
+ *  profile still reads 'free' (the family plan lives on the group owner's
+ *  row), so membership has to be resolved before calling someone free.
+ *
+ *  Fails OPEN on lookup errors: a database hiccup must never lock a paying
+ *  member out of a feature, and the worst case of failing open is a free
+ *  user briefly slipping past a product gate, which costs nothing. */
+export async function isFreeTier(
+  user: { id: string },
+  profile: { role?: string; plan?: string } | null
+): Promise<boolean> {
+  if (profile?.role === "admin") return false;
+  if ((profile?.plan ?? "free") !== "free") return false;
+  try {
+    const admin = createAdminClient();
+    return (await familyContext(admin, user.id)) == null;
+  } catch {
+    return false;
+  }
+}
+
 export interface CreditStatus {
   ok: boolean;
   message?: string;

@@ -22,6 +22,11 @@ export interface CreditState {
   /** Nothing left to spend. False while still loading — a lock that flashes
    *  on every page load would be worse than one that arrives a moment late. */
   empty: boolean;
+  /** On the free plan and not part of a family pool — the audience for
+   *  product gates like the deck cap and deck sharing. False while loading
+   *  or when the lookup failed: the server enforces the real gate, and a
+   *  lock shown on bad data would wrongly nag paying members. */
+  freeTier: boolean;
   loading: boolean;
   refresh: () => void;
 }
@@ -64,6 +69,11 @@ export function useCredits(): CreditState {
     credits: state?.credits ?? null,
     admin: state?.admin === true,
     empty: state != null && state.admin !== true && (state.credits?.balance ?? 1) <= 0,
+    freeTier:
+      state?.credits != null &&
+      state.admin !== true &&
+      state.credits.plan === "free" &&
+      state.credits.pooled !== true,
     loading: state == null,
     refresh,
   };
