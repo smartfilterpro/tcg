@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { isFreeTier } from "@/lib/credits";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -59,7 +60,7 @@ export async function GET(_req: Request, { params }: Params) {
  *          addShareUserId?: string, removeShareUserId?: string } */
 export async function PATCH(req: Request, { params }: Params) {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
     const { id } = await params;
     const body = (await req.json()) as {
       shared?: boolean;
@@ -71,6 +72,21 @@ export async function PATCH(req: Request, { params }: Params) {
       cards?: Array<{ name?: string; quantity?: number; category?: string; card_id?: string | null }>;
     };
     const supabase = await createClient();
+
+    // Sharing is a paid feature. Only TURNING SHARING ON is gated — turning
+    // it off and removing pals must always work, or a downgraded account
+    // would be stuck sharing forever.
+    const wantsSharing =
+      body.shared === true || body.shareScope !== undefined || !!body.addShareUserId;
+    if (wantsSharing && (await isFreeTier(user, profile))) {
+      return NextResponse.json(
+        {
+          error: "Deck sharing is part of the paid plans — upgrade to share decks with pals.",
+          code: "sharing_locked",
+        },
+        { status: 403 }
+      );
+    }
 
     const patch: Record<string, unknown> = {};
     if (typeof body.shared === "boolean") patch.shared = body.shared;
