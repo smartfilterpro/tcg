@@ -148,6 +148,12 @@ export async function POST(req: Request) {
     if (!boardEnabled(profile)) {
       return NextResponse.json({ error: BOARD_OFF_ERROR }, { status: 403 });
     }
+    if ((profile as { can_post_trades?: boolean | null } | null)?.can_post_trades === false) {
+      return NextResponse.json(
+        { error: "The admin has turned off trade posting for this account." },
+        { status: 403 }
+      );
+    }
     const body = (await req.json()) as {
       lookingFor?: string;
       offering?: string;

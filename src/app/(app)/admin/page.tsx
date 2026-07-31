@@ -353,6 +353,21 @@ export default function AdminPage() {
     load();
   }
 
+  /** One PATCH for the moderation switches — name reset, trade posting,
+   *  deck sharing. Blocking sharing also takes down what's already shared
+   *  (the server does that part). */
+  async function moderateUser(u: Profile, body: Record<string, unknown>, doneMsg: string) {
+    const res = await fetch(`/api/admin/users/${u.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else setMessage(doneMsg);
+    load();
+  }
+
   async function setAiBudget(u: Profile) {
     const current = u.ai_budget_usd != null ? Number(u.ai_budget_usd) : 10;
     const answer = prompt(
@@ -622,6 +637,59 @@ export default function AdminPage() {
                 {u.role !== "admin" && (
                   <>
                     <button
+                      className="btn text-xs text-brand-ink4 hover:bg-slate-100"
+                      title="Wipe an inappropriate display name — they fall back to their email prefix until they pick a new one (screened)."
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Reset ${u.display_name || u.email}'s display name? They'll show as their email prefix until they pick a new one.`
+                          )
+                        ) {
+                          moderateUser(u, { resetDisplayName: true }, `Display name reset.`);
+                        }
+                      }}
+                    >
+                      Reset name
+                    </button>
+                    {(() => {
+                      const m = u as Profile & {
+                        can_post_trades?: boolean | null;
+                        can_share_decks?: boolean | null;
+                      };
+                      const tradesOff = m.can_post_trades === false;
+                      const sharingOff = m.can_share_decks === false;
+                      return (
+                        <>
+                          <button
+                            className={`btn text-xs ${tradesOff ? "text-green-700 hover:bg-green-50" : "text-brand-ink4 hover:bg-slate-100"}`}
+                            title="Whether this member may post on the trade board."
+                            onClick={() =>
+                              moderateUser(
+                                u,
+                                { canPostTrades: tradesOff },
+                                `Trade posting ${tradesOff ? "restored" : "blocked"} for ${u.display_name || u.email}.`
+                              )
+                            }
+                          >
+                            {tradesOff ? "Allow trades" : "Block trades"}
+                          </button>
+                          <button
+                            className={`btn text-xs ${sharingOff ? "text-green-700 hover:bg-green-50" : "text-brand-ink4 hover:bg-slate-100"}`}
+                            title="Whether this member may share decks. Blocking also unshares everything they've already shared."
+                            onClick={() =>
+                              moderateUser(
+                                u,
+                                { canShareDecks: sharingOff },
+                                `Deck sharing ${sharingOff ? "restored" : "blocked"} for ${u.display_name || u.email}.`
+                              )
+                            }
+                          >
+                            {sharingOff ? "Allow sharing" : "Block sharing"}
+                          </button>
+                        </>
+                      );
+                    })()}
+                    <button
                       className={`btn text-xs ${
                         u.suspended === true
                           ? "text-green-700 hover:bg-green-50"
@@ -783,6 +851,9 @@ export default function AdminPage() {
 
           <h3 className="mb-1 mt-4 text-sm font-semibold">🎟️ Give credits</h3>
           <GrantCreditsPanel />
+
+          <h3 className="mb-1 mt-4 text-sm font-semibold">🛡️ Shared decks</h3>
+          <SharedDecksPanel />
 
           <h3 className="mb-1 mt-4 text-sm font-semibold">🧬 Merge duplicate cards</h3>
           <DedupeCardsPanel />
@@ -2056,6 +2127,100 @@ function PriceSyncPanel() {
 /** Fold duplicate card rows — the same card held under two ids because two
  *  sources spelled its number differently ("#050" vs "#50"). Dry run first,
  *  always: this rewrites what people own. */
+function SharedDecksPanel() {
+  const [decks, setDecks] = useState<Array<{
+    id: string;
+    name: string;
+    scope: string;
+    ownerName: string;
+  }> | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/shared-decks");
+      const json = await res.json();
+      if (res.ok) setDecks(json.decks ?? []);
+      else setError(json.error ?? "Couldn't load shared decks");
+    } catch {
+      setError("Couldn't load shared decks");
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function act(deckId: string, action: "rename" | "unshare", name?: string) {
+    setBusy(deckId);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/shared-decks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, deckId, name }),
+      });
+      const json = await res.json();
+      if (!res.ok) setError(json.error ?? "Action failed");
+      else await load();
+    } catch {
+      setError("Action failed");
+    }
+    setBusy(null);
+  }
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-white p-3">
+      <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+        Every deck currently shared to the Friends page, whoever it belongs to — including
+        pals-only shares between other members. Rename one with an inappropriate name, or
+        unshare it entirely. To stop a repeat offender sharing at all, use “Block sharing”
+        on their row in Members.
+      </p>
+      {decks == null ? (
+        <p className="m-0 text-xs text-brand-ink4">Loading…</p>
+      ) : decks.length === 0 ? (
+        <p className="m-0 text-xs text-brand-ink4">Nothing is shared right now.</p>
+      ) : (
+        <ul className="m-0 flex max-h-64 list-none flex-col gap-1 overflow-y-auto p-0">
+          {decks.map((d) => (
+            <li key={d.id} className="flex items-center gap-2 rounded border border-brand-line-soft px-2 py-1.5">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-medium">{d.name}</div>
+                <div className="truncate text-[11px] text-brand-ink4">
+                  by {d.ownerName} · {d.scope}
+                </div>
+              </div>
+              <button
+                className="btn shrink-0 text-xs text-brand-ink4 hover:bg-slate-100"
+                disabled={busy === d.id}
+                onClick={() => {
+                  const name = prompt(`Rename "${d.name}" to:`, d.name);
+                  if (name && name.trim() && name.trim() !== d.name) act(d.id, "rename", name.trim());
+                }}
+              >
+                Rename
+              </button>
+              <button
+                className="btn shrink-0 text-xs text-red-600 hover:bg-red-50"
+                disabled={busy === d.id}
+                onClick={() => {
+                  if (confirm(`Unshare "${d.name}" (by ${d.ownerName})? The deck itself is kept.`)) {
+                    act(d.id, "unshare");
+                  }
+                }}
+              >
+                Unshare
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
+    </div>
+  );
+}
+
 function MirrorArtPanel() {
   const [status, setStatus] = useState<{
     withImages: number;

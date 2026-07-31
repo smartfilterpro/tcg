@@ -36,6 +36,14 @@ URLs. If you cannot find the exact card, respond with the single word NONE.`;
 export async function POST(req: Request, { params }: Params) {
   try {
     const { user, profile } = await requireUser();
+    // Admin-only, same rule as the manual photo endpoint: pictures come
+    // from the pipeline or the admin, not from member uploads.
+    if (profile?.role !== "admin") {
+      return NextResponse.json(
+        { error: "Card pictures are managed by the app now — tell the admin if one is wrong." },
+        { status: 403 }
+      );
+    }
     const { id } = await params;
     const supabase = await createClient();
 

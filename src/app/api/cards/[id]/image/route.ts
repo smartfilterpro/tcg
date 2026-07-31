@@ -10,6 +10,16 @@ type Params = { params: Promise<{ id: string }> };
 export async function PATCH(req: Request, { params }: Params) {
   try {
     const { user, profile } = await requireUser();
+    // Owner decision: card pictures are set by the pipeline (import, price
+    // tracker, mirror) and curated by the admin — members no longer set
+    // them by hand. Scan photos are unaffected: they ride card CREATION
+    // for cards with no image, not this endpoint.
+    if (profile?.role !== "admin") {
+      return NextResponse.json(
+        { error: "Card pictures are managed by the app now — tell the admin if one is wrong." },
+        { status: 403 }
+      );
+    }
     const { id } = await params;
     const { imageUrl } = (await req.json()) as { imageUrl?: string };
 
