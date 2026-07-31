@@ -227,12 +227,19 @@ export default function AdminPage() {
   type AdminTab = "analytics" | "members" | "content" | "catalogue" | "support";
   const [tab, setTab] = useState<AdminTab>("analytics");
   useEffect(() => {
-    const h = window.location.hash.replace("#", "");
-    // "cards" survives as an alias — old bookmarks land on the catalogue tab.
-    if (h === "cards") setTab("catalogue");
-    else if (["analytics", "members", "content", "catalogue", "support"].includes(h)) {
-      setTab(h as AdminTab);
-    }
+    const apply = () => {
+      const h = window.location.hash.replace("#", "");
+      // "cards" survives as an alias — old bookmarks land on the catalogue tab.
+      if (h === "cards") setTab("catalogue");
+      else if (["analytics", "members", "content", "catalogue", "support"].includes(h)) {
+        setTab(h as AdminTab);
+      }
+    };
+    apply();
+    // Live, not just on mount: the dashboard's "Needs a human" buttons are
+    // plain #tab links, and they should switch the tab when clicked.
+    window.addEventListener("hashchange", apply);
+    return () => window.removeEventListener("hashchange", apply);
   }, []);
   function switchTab(t: AdminTab) {
     setTab(t);
@@ -700,7 +707,9 @@ export default function AdminPage() {
       </>
       )}
 
-      {tab === "analytics" && <BusinessDashboard />}
+      {tab === "analytics" && (
+        <BusinessDashboard priceCron={analytics?.priceRefresh?.ranAt ?? null} />
+      )}
 
       {tab === "analytics" && analytics && (
         <div className="card-panel p-4">
@@ -1405,18 +1414,29 @@ interface BusinessData {
   modelSplit: Array<{ model: string; cost: number }>;
   endpointSplit: Array<{ endpoint: string; cost: number }>;
   scanStats: { scans: number; matchRate: number | null; secondsPerCard: number | null; cardsPerScan: number | null };
-  alerts: Array<{ severity: "red" | "amber"; title: string; body: string }>;
+  alerts: Array<{
+    severity: "red" | "amber";
+    title: string;
+    body: string;
+    href?: string;
+    action?: string;
+  }>;
   customers: Array<{
     email: string; name: string | null; plan: string; cost30: number; revenue30: number;
     margin: number; joined: string | null;
   }>;
 }
 
-/** The owner dashboard (Owner Dashboard.dc.html): the business, on one dark
- *  panel, every figure from real tables via /api/admin/business. */
-function BusinessDashboard() {
+/** The owner dashboard (the monetization-concept mock): the business, on one
+ *  dark panel, every figure from real tables via /api/admin/business. The
+ *  concept's deltas are computed from the months series — where history
+ *  doesn't exist yet (conversion), the tile simply carries no delta rather
+ *  than inventing one. */
+function BusinessDashboard({ priceCron }: { priceCron: string | null }) {
   const [data, setData] = useState<BusinessData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [custQuery, setCustQuery] = useState("");
+  const [planFilter, setPlanFilter] = useState("");
 
   useEffect(() => {
     fetch("/api/admin/business")
@@ -1430,7 +1450,63 @@ function BusinessDashboard() {
   const k = data.kpis;
   const maxBar = Math.max(...data.months.map((m) => Math.max(m.revenue, m.cost)), 0.01);
   const maxModel = Math.max(...data.modelSplit.map((m) => m.cost), 0.01);
-  const kpi = (label: string, value: string, note: string) => (
+
+  // Month-over-month deltas, from the same series the chart draws.
+  const cur = data.months[data.months.length - 1];
+  const prev = data.months[data.months.length - 2];
+  const pctDelta = (a: number, b: number) =>
+    b > 0 ? Math.round(((a - b) / b) * 1000) / 10 : null;
+  const revDelta = cur && prev ? pctDelta(cur.revenue, prev.revenue) : null;
+  const costDelta = cur && prev ? pctDelta(cur.cost, prev.cost) : null;
+  const marginPctOf = (m: { revenue: number; cost: number }) =>
+    m.revenue > 0 ? ((m.revenue - m.cost) / m.revenue) * 100 : null;
+  const mCur = cur ? marginPctOf(cur) : null;
+  const mPrev = prev ? marginPctOf(prev) : null;
+  const marginDelta = mCur != null && mPrev != null ? Math.round((mCur - mPrev) * 10) / 10 : null;
+  const delta = (v: number | null, unit: string, goodWhenUp: boolean, vs: string) =>
+    v == null ? null : (
+      <span className={v === 0 ? "text-dark-ink4" : (v > 0) === goodWhenUp ? "text-[#5BD66E]" : "text-brand-negative"}>
+        {v > 0 ? "+" : "−"}
+        {Math.abs(v)}
+        {unit} vs {vs}
+      </span>
+    );
+  const prevLabel = prev?.label ?? "last month";
+
+  // The concept's cost story: which surfaces spend the money.
+  const subsRevenue = Math.max(0, k.revenue30 - data.credits.boostRevenue30);
+  const [ep1, ep2] = data.endpointSplit;
+  const epRest = data.endpointSplit.slice(2).reduce((s, e) => s + e.cost, 0);
+  const costNote = ep1
+    ? `${ep1.endpoint} $${ep1.cost.toFixed(0)}${ep2 ? ` · ${ep2.endpoint} $${ep2.cost.toFixed(0)}` : ""}${epRest > 0 ? ` · other $${epRest.toFixed(0)}` : ""}`
+    : "via estimateCostUsd";
+
+  function exportCsv() {
+    if (!data) return;
+    const rows = [
+      ["email", "name", "plan", "ai_cost_30d_usd", "revenue_30d_usd", "margin_usd", "joined"],
+      ...data.customers.map((c) => [
+        c.email,
+        c.name ?? "",
+        c.plan,
+        c.cost30,
+        c.revenue30,
+        c.margin,
+        c.joined ?? "",
+      ]),
+    ];
+    const csv = rows
+      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "trainerdeck-customers.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const kpi = (label: string, value: string, note: React.ReactNode) => (
     <div key={label} className="rounded-[14px] bg-dark-panel-alt p-3.5">
       <div className="font-mono text-[10px] uppercase tracking-[.1em] text-dark-ink4">{label}</div>
       <div className="mt-1 font-display text-[22px] font-bold tracking-tight text-dark-ink">{value}</div>
@@ -1440,18 +1516,53 @@ function BusinessDashboard() {
 
   return (
     <div className="mb-4 rounded-[18px] bg-dark-canvas p-4 text-dark-ink sm:p-5">
-      <div className="mb-3 flex items-baseline justify-between gap-3">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h2 className="m-0 font-display text-lg font-bold">📈 The business</h2>
-        <span className="font-mono text-[10.5px] uppercase tracking-[.08em] text-dark-ink4">
-          last 30 days · real token spend
-        </span>
+        <div className="flex items-center gap-2.5">
+          {priceCron && (
+            <span
+              className="font-mono text-[10px] uppercase tracking-[.08em] text-dark-ink4"
+              title={new Date(priceCron).toLocaleString()}
+            >
+              <span className="text-[#5BD66E]">●</span> price cron ran{" "}
+              {new Date(priceCron).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          )}
+          <button
+            className="rounded-full bg-dark-panel-alt px-3 py-1 text-[11.5px] font-medium text-dark-ink2 hover:text-dark-ink"
+            onClick={exportCsv}
+          >
+            Export CSV
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {kpi("MRR", `$${k.mrr.toLocaleString()}`, `${k.payingCustomers} paying · ${k.totalAccounts} accounts`)}
-        {kpi("Revenue 30d", `$${k.revenue30.toFixed(2)}`, "subs + boosts")}
-        {kpi("AI cost 30d", `$${k.aiCost30.toFixed(2)}`, "via estimateCostUsd")}
-        {kpi("Gross margin", k.grossMarginPct == null ? "—" : `${k.grossMarginPct}%`, "of 30d revenue")}
+        {kpi(
+          "Revenue 30d",
+          `$${k.revenue30.toFixed(2)}`,
+          <>
+            subs ${subsRevenue.toFixed(0)} · boosts ${data.credits.boostRevenue30.toFixed(0)}
+            {revDelta != null && <> · {delta(revDelta, "%", true, prevLabel)}</>}
+          </>
+        )}
+        {kpi(
+          "AI cost 30d",
+          `$${k.aiCost30.toFixed(2)}`,
+          <>
+            {costNote}
+            {costDelta != null && <> · {delta(costDelta, "%", false, prevLabel)}</>}
+          </>
+        )}
+        {kpi(
+          "Gross margin",
+          k.grossMarginPct == null ? "—" : `${k.grossMarginPct}%`,
+          <>
+            of 30d revenue
+            {marginDelta != null && <> · {delta(marginDelta, "pt", true, prevLabel)}</>}
+          </>
+        )}
         {kpi("Free → paid", k.conversionPct == null ? "—" : `${k.conversionPct}%`, "of all accounts")}
       </div>
 
@@ -1526,32 +1637,84 @@ function BusinessDashboard() {
             <div className="text-[12.5px] text-dark-ink4">Nothing waiting. 🎉</div>
           ) : (
             data.alerts.map((a) => (
-              <div key={a.title} className="border-t border-dark-line2 py-2 first:border-t-0">
-                <div className={`text-[13px] font-medium ${a.severity === "red" ? "text-brand-negative" : "text-brand-warning"}`}>{a.title}</div>
-                <div className="text-[12px] text-dark-ink3">{a.body}</div>
+              <div
+                key={a.title}
+                className="flex items-start gap-2 border-t border-dark-line2 py-2 first:border-t-0"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className={`text-[13px] font-medium ${a.severity === "red" ? "text-brand-negative" : "text-brand-warning"}`}>{a.title}</div>
+                  <div className="text-[12px] text-dark-ink3">{a.body}</div>
+                </div>
+                {a.href && (
+                  <a
+                    className="shrink-0 rounded-full bg-dark-panel-alt px-3 py-1 text-[11.5px] font-medium text-dark-ink2 hover:text-dark-ink"
+                    href={a.href}
+                  >
+                    {a.action ?? "Open"}
+                  </a>
+                )}
               </div>
             ))
           )}
         </div>
       </div>
 
-      <div className="mt-4 overflow-x-auto rounded-[14px] bg-dark-panel">
-        <div className="grid min-w-[560px] grid-cols-[1.8fr_70px_90px_90px_90px] gap-2 border-b border-dark-line2 px-3.5 py-2.5 font-mono text-[10px] uppercase tracking-[.08em] text-dark-ink4">
-          <span>Customer · by AI cost</span><span>Plan</span><span>Cost 30d</span><span>Rev 30d</span><span>Margin</span>
+      <div className="mt-4 rounded-[14px] bg-dark-panel">
+        <div className="flex flex-wrap items-center gap-2 px-3.5 pt-3">
+          <span className="mr-auto font-mono text-[10px] uppercase tracking-[.1em] text-dark-ink4">
+            Customers · sorted by AI cost — who could turn a $9 plan negative
+          </span>
+          <input
+            className="w-40 rounded-full bg-dark-panel-alt px-3 py-1 text-[11.5px] text-dark-ink outline-none placeholder:text-dark-ink4"
+            placeholder="Search email…"
+            value={custQuery}
+            onChange={(e) => setCustQuery(e.target.value)}
+          />
+          <select
+            className="rounded-full bg-dark-panel-alt px-2.5 py-1 text-[11.5px] text-dark-ink2 outline-none"
+            value={planFilter}
+            onChange={(e) => setPlanFilter(e.target.value)}
+          >
+            <option value="">All plans</option>
+            <option value="pro">Pro</option>
+            <option value="family">Family</option>
+            <option value="free">Free</option>
+          </select>
         </div>
-        {data.customers.map((c) => (
-          <div key={c.email} className="grid min-w-[560px] grid-cols-[1.8fr_70px_90px_90px_90px] items-center gap-2 border-b border-dark-line px-3.5 py-2 text-[12.5px]">
-            <span className="truncate text-dark-ink2">{c.name ? `${c.name} · ` : ""}{c.email}</span>
-            <span className={`justify-self-start rounded-full px-2 py-0.5 font-mono text-[10px] ${c.plan === "family" ? "bg-brand-highlight text-brand-ink" : c.plan === "pro" ? "bg-brand-accent text-white" : "bg-dark-tile text-dark-ink3"}`}>
-              {c.plan.toUpperCase()}
-            </span>
-            <span className="font-mono text-[11.5px]">${c.cost30.toFixed(2)}</span>
-            <span className="font-mono text-[11.5px]">${c.revenue30.toFixed(2)}</span>
-            <span className={`font-mono text-[11.5px] ${c.margin < 0 ? "text-brand-negative" : "text-[#5BD66E]"}`}>
-              {c.margin < 0 ? "−" : "+"}${Math.abs(c.margin).toFixed(2)}
-            </span>
+        <div className="overflow-x-auto">
+          <div className="mt-2 grid min-w-[640px] grid-cols-[1.8fr_70px_90px_90px_90px_70px] gap-2 border-b border-dark-line2 px-3.5 py-2.5 font-mono text-[10px] uppercase tracking-[.08em] text-dark-ink4">
+            <span>Customer</span><span>Plan</span><span>Cost 30d</span><span>Rev 30d</span><span>Margin</span><span>Joined</span>
           </div>
-        ))}
+          {data.customers
+            .filter(
+              (c) =>
+                (!planFilter || c.plan === planFilter) &&
+                (!custQuery.trim() ||
+                  `${c.name ?? ""} ${c.email}`.toLowerCase().includes(custQuery.trim().toLowerCase()))
+            )
+            .map((c) => (
+              <div key={c.email} className="grid min-w-[640px] grid-cols-[1.8fr_70px_90px_90px_90px_70px] items-center gap-2 border-b border-dark-line px-3.5 py-2 text-[12.5px]">
+                <span className="truncate text-dark-ink2">{c.name ? `${c.name} · ` : ""}{c.email}</span>
+                <span className={`justify-self-start rounded-full px-2 py-0.5 font-mono text-[10px] ${c.plan === "family" ? "bg-brand-highlight text-brand-ink" : c.plan === "pro" ? "bg-brand-accent text-white" : "bg-dark-tile text-dark-ink3"}`}>
+                  {c.plan.toUpperCase()}
+                </span>
+                <span className="font-mono text-[11.5px]">${c.cost30.toFixed(2)}</span>
+                <span className="font-mono text-[11.5px]">${c.revenue30.toFixed(2)}</span>
+                <span className={`font-mono text-[11.5px] ${c.margin < 0 ? "text-brand-negative" : "text-[#5BD66E]"}`}>
+                  {c.margin < 0 ? "−" : "+"}${Math.abs(c.margin).toFixed(2)}
+                </span>
+                <span className="font-mono text-[11px] text-dark-ink3">
+                  {c.joined
+                    ? new Date(c.joined).toLocaleDateString([], { month: "short", year: "2-digit" })
+                    : "—"}
+                </span>
+              </div>
+            ))}
+        </div>
+        <div className="px-3.5 py-2 text-[11.5px] text-dark-ink4">
+          Showing the {data.customers.length} heaviest AI spenders of {k.totalAccounts} accounts —
+          the full list lives on the Members tab.
+        </div>
       </div>
     </div>
   );
