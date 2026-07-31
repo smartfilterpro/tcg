@@ -634,6 +634,39 @@ export default function AdminPage() {
                 >
                   Reset password
                 </button>
+                {/* Promote/demote. The server refuses your own row, so an
+                    admin can never demote themselves into a lockout. */}
+                {u.role === "admin" ? (
+                  <button
+                    className="btn text-xs text-yellow-700 hover:bg-yellow-50"
+                    onClick={() => {
+                      if (
+                        confirm(
+                          `Remove admin from ${u.display_name || u.email}? They become a regular member — metered credits, no admin tools.`
+                        )
+                      ) {
+                        moderateUser(u, { role: "member" }, `${u.display_name || u.email} is now a member.`);
+                      }
+                    }}
+                  >
+                    Remove admin
+                  </button>
+                ) : (
+                  <button
+                    className="btn text-xs text-brand-ink4 hover:bg-slate-100"
+                    onClick={() => {
+                      if (
+                        confirm(
+                          `Make ${u.display_name || u.email} an admin? They get everything you have: unmetered AI, the whole admin page, member management (including suspending or removing members), moderation, and billing panels.`
+                        )
+                      ) {
+                        moderateUser(u, { role: "admin" }, `${u.display_name || u.email} is now an admin.`);
+                      }
+                    }}
+                  >
+                    Make admin
+                  </button>
+                )}
                 {u.role !== "admin" && (
                   <>
                     <button

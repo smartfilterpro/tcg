@@ -10,7 +10,7 @@ export async function PATCH(req: Request, { params }: Params) {
   try {
     const { user } = await requireAdmin();
     const { id } = await params;
-    const { aiBudgetUsd, suspended, resetDisplayName, canShareDecks, canPostTrades } =
+    const { aiBudgetUsd, suspended, resetDisplayName, canShareDecks, canPostTrades, role } =
       (await req.json()) as {
         aiBudgetUsd?: number;
         suspended?: boolean;
@@ -20,9 +20,21 @@ export async function PATCH(req: Request, { params }: Params) {
         resetDisplayName?: boolean;
         canShareDecks?: boolean;
         canPostTrades?: boolean;
+        /** Promote to admin or demote to member. Never your own row — an
+         *  admin who demotes themselves locks everyone out of the tools. */
+        role?: string;
       };
 
     const patch: Record<string, unknown> = {};
+    if (role !== undefined) {
+      if (role !== "admin" && role !== "member") {
+        return NextResponse.json({ error: "Role must be 'admin' or 'member'." }, { status: 400 });
+      }
+      if (id === user.id) {
+        return NextResponse.json({ error: "You can't change your own role." }, { status: 400 });
+      }
+      patch.role = role;
+    }
     if (resetDisplayName === true) patch.display_name = null;
     if (canShareDecks !== undefined) {
       if (typeof canShareDecks !== "boolean") {
