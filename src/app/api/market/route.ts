@@ -59,7 +59,13 @@ export async function GET() {
     // board: returning the posts and hiding them client-side would leave the
     // whole board sitting in the page source.
     if (!boardEnabled(profile)) {
-      return NextResponse.json({ migrated: true, posts: [], myId: user.id, boardEnabled: false });
+      return NextResponse.json({
+        migrated: true,
+        posts: [],
+        myId: user.id,
+        boardEnabled: false,
+        isAdmin: profile?.role === "admin",
+      });
     }
     const supabase = await createClient();
 
@@ -120,7 +126,15 @@ export async function GET() {
       comments: byPost.get(p.id) ?? [],
     }));
 
-    return NextResponse.json({ migrated: true, posts: result, myId: user.id, boardEnabled: true });
+    return NextResponse.json({
+      migrated: true,
+      posts: result,
+      myId: user.id,
+      boardEnabled: true,
+      // The Terms promise the administrator may remove any User Content;
+      // this is the flag that puts the button where that promise lives.
+      isAdmin: profile?.role === "admin",
+    });
   } catch (err) {
     return errorResponse(err);
   }
