@@ -47,7 +47,10 @@ export async function GET() {
           .select("user_id, credits, amount_cents, status, created_at")
           .gte("created_at", m7),
         admin.from("scan_events").select("*").gte("created_at", d30),
-        admin.from("support_tickets").select("id, status").eq("status", "open"),
+        // Subject included so refund requests can be spotted: refunds are
+        // never automated (payments are final by policy), so a refund ask
+        // arrives as an ordinary ticket and deserves its own alert row.
+        admin.from("support_tickets").select("id, status, subject").neq("status", "resolved"),
         admin.from("app_state").select("value").eq("key", "price_refresh").maybeSingle(),
       ]);
 
@@ -206,7 +209,26 @@ export async function GET() {
         action: "Review",
       });
     }
-    const openTickets = (ticketsRes.data ?? []).length;
+    const tickets = (ticketsRes.data ?? []) as Array<{ status: string; subject: string | null }>;
+    // Refund asks get their own red row: there's no automated refund to
+    // hide behind — payments are final by policy, so each of these is a
+    // person waiting on the owner's judgment, not a queue item.
+    const refundRe = /refund|money\s*back|chargeback/i;
+    const refundTickets = tickets.filter((t) => refundRe.test(t.subject ?? "")).length;
+    if (refundTickets > 0) {
+      alerts.push({
+        severity: "red",
+        title: `${refundTickets} refund request${refundTickets === 1 ? "" : "s"} in the ticket queue`,
+        body:
+          "Payments are final by policy — any refund is goodwill you choose, case by case. " +
+          "Decide and reply.",
+        href: "#support",
+        action: "Decide",
+      });
+    }
+    const openTickets = tickets.filter(
+      (t) => t.status === "open" && !refundRe.test(t.subject ?? "")
+    ).length;
     if (openTickets > 0) {
       alerts.push({
         severity: "amber",
