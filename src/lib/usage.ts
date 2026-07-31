@@ -30,7 +30,10 @@ export async function logAiUsage(
     | "trade_chat"
     | "deck_review"
     | "grade"
-    | "card_fx",
+    | "card_fx"
+    // The mail-in scanning service. Never metered against a member's
+    // credits — the admin runs it and the job carries its own bill.
+    | "bulk_scan",
   model: string,
   usage: { input_tokens?: number | null; output_tokens?: number | null } | undefined
 ): Promise<void> {

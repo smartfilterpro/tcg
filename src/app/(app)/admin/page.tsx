@@ -224,14 +224,14 @@ export default function AdminPage() {
   // Sub-pages within the Admin tab — everything was getting too long for
   // one scroll. The chosen tab lives in the URL hash so refreshes and
   // shared links keep it.
-  type AdminTab = "analytics" | "members" | "content" | "catalogue" | "support";
+  type AdminTab = "analytics" | "members" | "content" | "catalogue" | "bulk" | "support";
   const [tab, setTab] = useState<AdminTab>("analytics");
   useEffect(() => {
     const apply = () => {
       const h = window.location.hash.replace("#", "");
       // "cards" survives as an alias — old bookmarks land on the catalogue tab.
       if (h === "cards") setTab("catalogue");
-      else if (["analytics", "members", "content", "catalogue", "support"].includes(h)) {
+      else if (["analytics", "members", "content", "catalogue", "bulk", "support"].includes(h)) {
         setTab(h as AdminTab);
       }
     };
@@ -506,6 +506,7 @@ export default function AdminPage() {
             ["members", `👥 Members (${users.length})`],
             ["content", "🛡️ Content"],
             ["catalogue", `🎴 Catalogue${reviewRows.length > 0 ? ` (${reviewRows.length})` : ""}`],
+            ["bulk", "📦 Bulk scan"],
             ["support", `🎫 Support (${tickets.filter((t) => t.status !== "resolved").length})`],
           ] as Array<[AdminTab, string]>
         ).map(([key, label]) => (
@@ -909,6 +910,8 @@ export default function AdminPage() {
           </p>
         </>
       )}
+
+      {tab === "bulk" && <BulkScanPanel />}
 
       {tab === "support" && (
       <div className="card-panel p-4">
@@ -2305,6 +2308,353 @@ function PriceSyncPanel() {
 /** Fold duplicate card rows — the same card held under two ids because two
  *  sources spelled its number differently ("#050" vs "#50"). Dry run first,
  *  always: this rewrites what people own. */
+interface BulkJob {
+  id: string;
+  label: string;
+  status: string;
+  expected_cards: number | null;
+  ai_cost_usd: number;
+  uploaded_at: string | null;
+  created_at: string;
+  pass1: number;
+  pass2: number;
+  verified: number;
+  needsReview: number;
+  reviewed: number;
+  device_key?: string;
+}
+
+interface BulkRow {
+  id: string;
+  seq: number;
+  photo1: string | null;
+  photo2: string | null;
+  read1: { name?: string; number?: string; cardName?: string | null; error?: string } | null;
+  read2: { name?: string; number?: string; cardName?: string | null; error?: string } | null;
+  card: { id: string; name: string; number: string; set_name: string | null } | null;
+  variant: string;
+  confidence: string | null;
+  reviewed: boolean;
+  note: string | null;
+}
+
+/** The mail-in scanning service's job board and review desk. */
+function BulkScanPanel() {
+  const [jobs, setJobs] = useState<BulkJob[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [label, setLabel] = useState("");
+  const [newKey, setNewKey] = useState<{ id: string; key: string } | null>(null);
+  const [open, setOpen] = useState<string | null>(null); // job id being reviewed
+  const [rows, setRows] = useState<BulkRow[]>([]);
+  const [rowCount, setRowCount] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [pick, setPick] = useState<Record<string, string>>({}); // row id → card id text
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/bulk");
+      const json = await res.json();
+      if (!res.ok) setError(json.error);
+      else setJobs(json.jobs ?? []);
+    } catch {
+      setError("Couldn't load bulk jobs");
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const loadRows = useCallback(async (jobId: string) => {
+    const res = await fetch(`/api/admin/bulk/${jobId}?rows=review`);
+    const json = await res.json();
+    if (res.ok) {
+      setRows(json.rows ?? []);
+      setRowCount(json.rowCount ?? 0);
+    }
+  }, []);
+
+  async function createJob() {
+    if (!label.trim()) return;
+    setBusy(true);
+    setError(null);
+    const res = await fetch("/api/admin/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else {
+      setNewKey({ id: json.job.id, key: json.job.device_key });
+      setLabel("");
+      load();
+    }
+    setBusy(false);
+  }
+
+  async function jobAction(jobId: string, action: string, extra: Record<string, unknown> = {}) {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    const method = action === "finalize" || action === "reopen" || action === "cancel" ? "PATCH" : "POST";
+    const res = await fetch(`/api/admin/bulk/${jobId}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...extra }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else {
+      if (action === "finalize" && json.result) {
+        setMessage(
+          `Paired ${json.result.total} cards: ${json.result.verified} verified, ${json.result.review} for review` +
+            (json.result.aligned ? "." : " — pass counts differ, so nothing auto-verified.")
+        );
+      }
+      if (action === "upload") setMessage(`Loaded ${json.cards} cards (${json.lines} lines) into ${json.member}'s collection.`);
+      if (action === "undo") setMessage(`Undone: ${json.removed} rows removed, ${json.decremented} quantities decremented.`);
+      load();
+      if (open === jobId) loadRows(jobId);
+    }
+    setBusy(false);
+  }
+
+  async function exportCsv(jobId: string, jobLabel: string) {
+    const res = await fetch(`/api/admin/bulk/${jobId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "export" }),
+    });
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}));
+      setError(json.error ?? "Export failed");
+      return;
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bulk-${jobLabel.replace(/[^a-zA-Z0-9-]/g, "_")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function saveRow(row: BulkRow, cardId: string | null) {
+    if (!open) return;
+    const res = await fetch(`/api/admin/bulk/${open}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ row: row.id, cardId: cardId ?? row.card?.id ?? null }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else {
+      setRows((rs) => rs.filter((r) => r.id !== row.id));
+      setRowCount((c) => Math.max(0, c - 1));
+      load();
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="card-panel p-4">
+        <h2 className="mb-2 font-display text-[17px] font-bold">📦 Mail-in scanning jobs</h2>
+        <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+          One job per customer stack. The rig posts one photo per card with the job&apos;s device
+          key — pass 1 in feed order, pass 2 with the stack reversed. Two passes agreeing on the
+          same catalogue card is what verifies a card with no human; everything else lands in
+          the review queue below. AI spend is metered on the job, never on a member.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <input
+            className="input w-64"
+            placeholder='Job name, e.g. "Smith shoebox"'
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+          <button className="btn-primary text-sm" disabled={busy || !label.trim()} onClick={createJob}>
+            Create job
+          </button>
+        </div>
+        {newKey && (
+          <div className="mt-2 rounded-lg border border-brand-line p-2.5 font-mono text-[11px]">
+            <div className="mb-1 text-brand-ink3">Device key for the rig (also shown on the job row):</div>
+            <div className="select-all break-all">{newKey.key}</div>
+            <div className="mt-1.5 text-brand-ink4">
+              curl -X POST {typeof window !== "undefined" ? window.location.origin : ""}/api/bulk/photo -H
+              &quot;x-bulk-key: {newKey.key.slice(0, 8)}…&quot; -F job={newKey.id} -F pass=1 -F
+              photo=@card.jpg
+            </div>
+          </div>
+        )}
+
+        {jobs == null ? (
+          <p className="mt-3 text-xs text-brand-ink4">Loading…</p>
+        ) : jobs.length === 0 ? (
+          <p className="mt-3 text-xs text-brand-ink4">No jobs yet.</p>
+        ) : (
+          <ul className="mt-3 flex list-none flex-col gap-2 p-0">
+            {jobs.map((j) => (
+              <li key={j.id} className="rounded-[14px] border border-brand-line p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <b className="text-sm">{j.label}</b>
+                  <span className="chip bg-slate-100 text-slate-600">{j.status}</span>
+                  <span className="font-mono text-[11px] text-brand-ink4">
+                    pass1 {j.pass1} · pass2 {j.pass2} · ✓{j.verified} · 👀{j.needsReview} · ✍️
+                    {j.reviewed} · ${j.ai_cost_usd.toFixed(2)} AI
+                  </span>
+                  <span className="ml-auto flex flex-wrap gap-1.5">
+                    {j.status !== "uploaded" && j.status !== "cancelled" && (
+                      <button className="btn text-xs text-brand-ink4 hover:bg-slate-100" disabled={busy} onClick={() => jobAction(j.id, "finalize")}>
+                        {j.status === "ready" ? "Re-pair" : "Finalize"}
+                      </button>
+                    )}
+                    {j.needsReview > 0 && (
+                      <button
+                        className="btn text-xs text-brand-ink4 hover:bg-slate-100"
+                        onClick={() => {
+                          setOpen(open === j.id ? null : j.id);
+                          if (open !== j.id) loadRows(j.id);
+                        }}
+                      >
+                        {open === j.id ? "Close review" : `Review ${j.needsReview}`}
+                      </button>
+                    )}
+                    {j.status === "ready" && (
+                      <>
+                        <button className="btn text-xs text-brand-ink4 hover:bg-slate-100" onClick={() => exportCsv(j.id, j.label)}>
+                          Export CSV
+                        </button>
+                        <button
+                          className="btn text-xs text-brand-ink4 hover:bg-slate-100"
+                          disabled={busy}
+                          onClick={() => {
+                            const email = prompt(`Load "${j.label}" into which member's collection? (email)`);
+                            if (email?.trim()) jobAction(j.id, "upload", { email: email.trim() });
+                          }}
+                        >
+                          Add to member
+                        </button>
+                      </>
+                    )}
+                    {j.status === "uploaded" && (
+                      <button
+                        className="btn text-xs text-red-600 hover:bg-red-50"
+                        disabled={busy}
+                        onClick={() => {
+                          if (confirm(`Undo the upload of "${j.label}"? Exactly what it wrote is removed.`)) {
+                            jobAction(j.id, "undo");
+                          }
+                        }}
+                      >
+                        Undo upload
+                      </button>
+                    )}
+                    {j.status === "ready" && (
+                      <button className="btn text-xs text-brand-ink4 hover:bg-slate-100" disabled={busy} onClick={() => jobAction(j.id, "reopen")}>
+                        Reopen
+                      </button>
+                    )}
+                    {j.status !== "cancelled" && j.status !== "uploaded" && (
+                      <button
+                        className="btn text-xs text-red-600 hover:bg-red-50"
+                        disabled={busy}
+                        onClick={() => {
+                          if (confirm(`Cancel "${j.label}"?`)) jobAction(j.id, "cancel");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {message && <p className="mb-0 mt-2 text-xs text-brand-positive">{message}</p>}
+        {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
+      </div>
+
+      {open && (
+        <div className="card-panel p-4">
+          <h2 className="mb-2 font-display text-[17px] font-bold">
+            👀 Review queue ({rowCount} left)
+          </h2>
+          <p className="m-0 mb-3 text-xs leading-[1.6] text-brand-ink3">
+            Both photos, both reads, and what the system picked. Accept the pick, or paste the
+            right catalogue card id (find it with card search) and save. Saving marks the card
+            human-reviewed — the upload button refuses to run while anything here is unreviewed.
+          </p>
+          {rows.length === 0 ? (
+            <p className="text-sm text-brand-ink4">Queue clear. 🎉</p>
+          ) : (
+            <ul className="flex list-none flex-col gap-3 p-0">
+              {rows.map((r) => (
+                <li key={r.id} className="rounded-[14px] border border-brand-line p-3">
+                  <div className="mb-1.5 flex items-center gap-2 text-xs text-brand-ink3">
+                    <b>Card #{r.seq}</b>
+                    <span className="text-brand-warning">{r.note}</span>
+                  </div>
+                  <div className="flex flex-wrap items-start gap-3">
+                    {[r.photo1, r.photo2].map(
+                      (p, i) =>
+                        p && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img key={i} src={p} alt={`pass ${i + 1}`} className="h-40 rounded-lg border border-brand-line object-contain" />
+                        )
+                    )}
+                    <div className="min-w-56 flex-1 text-xs leading-[1.7]">
+                      <div>
+                        Pass 1 read: <b>{r.read1?.error ?? `${r.read1?.name ?? "—"} #${r.read1?.number ?? "?"}`}</b>
+                      </div>
+                      <div>
+                        Pass 2 read: <b>{r.read2?.error ?? (r.read2 ? `${r.read2.name ?? "—"} #${r.read2.number ?? "?"}` : "no pass 2")}</b>
+                      </div>
+                      <div className="mt-1">
+                        System pick:{" "}
+                        <b>
+                          {r.card ? `${r.card.name} #${r.card.number} · ${r.card.set_name ?? "?"} (${r.card.id})` : "none"}
+                        </b>{" "}
+                        · {r.variant}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {r.card && (
+                          <button className="btn-primary text-xs" onClick={() => saveRow(r, r.card!.id)}>
+                            Accept pick
+                          </button>
+                        )}
+                        <input
+                          className="input w-56 py-1 text-[11.5px]"
+                          placeholder="…or correct card id (e.g. sv8pt5-50)"
+                          value={pick[r.id] ?? ""}
+                          onChange={(e) => setPick((p) => ({ ...p, [r.id]: e.target.value }))}
+                        />
+                        <button
+                          className="btn-secondary text-xs"
+                          disabled={!(pick[r.id] ?? "").trim()}
+                          onClick={() => saveRow(r, (pick[r.id] ?? "").trim())}
+                        >
+                          Save correction
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {rowCount > rows.length && rows.length > 0 && (
+            <button className="btn-secondary mt-3 text-sm" onClick={() => open && loadRows(open)}>
+              Load next batch
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Bulk-load a CSV of cards into one member's collection — for seeding a
  *  test account without scanning a shoebox by hand. Preview first, always:
  *  the server matches against the catalogue and refuses to guess, so the
