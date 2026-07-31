@@ -285,9 +285,6 @@ export async function expirePlanCredits(
   return error ? 0 : toExpire;
 }
 
-/** How many saved decks a free account keeps. */
-export const FREE_DECK_LIMIT = 5;
-
 /** The free-tier test for PRODUCT gates — the deck cap, deck sharing — as
  *  opposed to the credit meter, which gates AI spend. A family member's own
  *  profile still reads 'free' (the family plan lives on the group owner's

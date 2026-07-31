@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
-import { isFreeTier, FREE_DECK_LIMIT } from "@/lib/credits";
+import { isFreeTier } from "@/lib/credits";
+import { FREE_DECK_LIMIT } from "@/lib/limits";
 import type { DeckCardEntry, DeckSuggestion } from "@/lib/types";
 
 export async function GET() {

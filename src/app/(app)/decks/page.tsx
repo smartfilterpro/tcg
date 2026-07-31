@@ -11,6 +11,7 @@ import Modal, { ModalClose, PROSE } from "@/components/Modal";
 import Markdown from "@/components/Markdown";
 import { CreditLock } from "@/components/CreditLock";
 import { useCredits } from "@/components/useCredits";
+import { FREE_DECK_LIMIT } from "@/lib/limits";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -1087,11 +1088,11 @@ export default function DecksPage() {
                 </p>
               </div>
               <div className="flex gap-2">
-                {credits.freeTier && decks.length >= 5 ? (
+                {credits.freeTier && decks.length >= FREE_DECK_LIMIT ? (
                   <a
                     className="btn-secondary text-sm"
                     href="/pricing"
-                    title="Free accounts keep up to 5 saved decks — upgrade for unlimited"
+                    title={`Free accounts keep up to ${FREE_DECK_LIMIT} saved decks — upgrade for unlimited`}
                   >
                     🔒 Deck limit — upgrade
                   </a>
@@ -1138,7 +1139,8 @@ export default function DecksPage() {
         <h2 className="mb-2 font-semibold">Saved decks</h2>
         {credits.freeTier && (
           <p className="mb-2 text-xs text-slate-500">
-            Free accounts keep up to 5 saved decks ({Math.min(decks.length, 5)} of 5 used).{" "}
+            Free accounts keep up to {FREE_DECK_LIMIT} saved decks (
+            {Math.min(decks.length, FREE_DECK_LIMIT)} of {FREE_DECK_LIMIT} used).{" "}
             <a className="underline" href="/pricing">
               Upgrade
             </a>{" "}
