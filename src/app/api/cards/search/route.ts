@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
 import { searchCards, numberKey, cleanCardName, numberVariants } from "@/lib/pokemontcg";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
-import { parseCardQuery } from "@/lib/cardQuery";
+import { parseCardQuery, type ParsedCardQuery } from "@/lib/cardQuery";
 import { normalizeForSearch } from "@/lib/text";
-import type { CardSummary } from "@/lib/types";
+import { rowToSummary, type CardSummary, type CardSummaryRow } from "@/lib/types";
 
 /** The primary API has been flaky — an error there must not kill the search,
- *  because the TCGdex fallback can still answer. */
+ *  because our catalogue and the TCGdex fallback can still answer. */
 async function safeSearch(
   opts: Parameters<typeof searchCards>[0]
 ): Promise<ReturnType<typeof searchCards> extends Promise<infer T> ? T : never> {
@@ -18,7 +19,90 @@ async function safeSearch(
   }
 }
 
-/** Live card search against pokemontcg.io — used by the "fix this card" picker. */
+const SUMMARY_COLS =
+  "id, name, supertype, subtypes, types, hp, number, rarity, set_id, set_name, set_series, set_printed_total, release_date, image_small, image_large, market_price, prices";
+
+/** Every spelling a collector number might be stored under. Our own rows
+ *  come from three databases that disagree about leading zeros — the same
+ *  card is "050" from one source and "50" from another — so a search for
+ *  either spelling has to reach both. */
+function storedNumberVariants(n: string): string[] {
+  const raw = n.trim();
+  const out = new Set<string>([raw, raw.toUpperCase(), raw.toLowerCase()]);
+  const prefixed = raw.match(/^([A-Za-z]*)(\d+)$/);
+  if (prefixed) {
+    const letters = prefixed[1];
+    const unpadded = prefixed[2].replace(/^0+(?=\d)/, "");
+    for (const d of [unpadded, unpadded.padStart(2, "0"), unpadded.padStart(3, "0")]) {
+      if (letters) {
+        out.add(letters.toUpperCase() + d);
+        out.add(letters.toLowerCase() + d);
+      } else {
+        out.add(d);
+      }
+    }
+  }
+  return [...out];
+}
+
+/** Our own card catalogue, searched first. It's the only source that is
+ *  instant, never rate-limited, and never down — the external APIs turned
+ *  "search" into a coin flip (pokemontcg.io's 500s are on record), which is
+ *  exactly what made numbers with leading zeros feel haunted: each retry
+ *  path handled zeros differently. Here one variant list handles them. */
+async function searchCatalogue(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  parsed: ParsedCardQuery
+): Promise<CardSummary[]> {
+  const name = parsed.name ? cleanCardName(parsed.name) : "";
+  const variants = parsed.number ? storedNumberVariants(parsed.number) : [];
+
+  const run = async (withTotal: boolean, withName: boolean) => {
+    let q = supabase.from("cards").select(SUMMARY_COLS).limit(200);
+    if (variants.length > 0) q = q.in("number", variants);
+    if (withName && name) q = q.ilike("name", `%${name}%`);
+    if (withTotal && parsed.printedTotal) {
+      q = q.eq("set_printed_total", Number(parsed.printedTotal));
+    }
+    const { data } = await q;
+    return (data ?? []) as unknown as CardSummaryRow[];
+  };
+
+  // Full constraints first, then relax: printedTotal counts only the base
+  // set (secret rares exceed it), and an ilike name can miss punctuation
+  // spellings — each relaxation keeps the stronger signal (the number).
+  let rows = await run(true, true);
+  if (rows.length === 0 && parsed.printedTotal) rows = await run(false, true);
+  if (rows.length === 0 && name && variants.length > 0) {
+    const all = await run(false, false);
+    const wanted = normalizeForSearch(name);
+    rows = all.filter((r) => normalizeForSearch(r.name).includes(wanted));
+    // The number alone still identifies a short list — better to show the
+    // right number under a slightly different name than nothing.
+    if (rows.length === 0) rows = all.slice(0, 40);
+  }
+  // Punctuation-blind name fallback: fetch on the longest word, match the
+  // rest normalized ("farfetchd" → Farfetch'd).
+  if (rows.length === 0 && name && variants.length === 0) {
+    const tokens = name.split(/\s+/).filter((t) => t.length >= 3);
+    const anchor = tokens.sort((a, b) => b.length - a.length)[0];
+    if (anchor) {
+      const { data } = await supabase
+        .from("cards")
+        .select(SUMMARY_COLS)
+        .ilike("name", `%${anchor}%`)
+        .limit(200);
+      const all = (data ?? []) as unknown as CardSummaryRow[];
+      rows = all.filter((r) => {
+        const n = normalizeForSearch(r.name);
+        return tokens.every((t) => n.includes(normalizeForSearch(t)));
+      });
+    }
+  }
+  return rows.map((r) => rowToSummary(r));
+}
+
+/** Live card search — used by the Add card and "fix this card" pickers. */
 export async function GET(req: Request) {
   try {
     await requireUser();
@@ -28,168 +112,143 @@ export async function GET(req: Request) {
 
     const parsed = parseCardQuery(q);
     const wantedKey = parsed.number ? numberKey(parsed.number) : "";
+    const wantedName = parsed.name ? normalizeForSearch(cleanCardName(parsed.name)) : "";
     const hasWantedNumber = (list: CardSummary[]) =>
       !wantedKey || list.some((c) => numberKey(c.number) === wantedKey);
 
-    // A single query shape can't cover how people type. A prefix match
-    // misses "Surfing Pikachu" when you search "pikachu"; a contains match
-    // is broad but the API may refuse a leading wildcard; token matching
-    // gets past apostrophes and punctuation. Rather than keep guessing which
-    // one the upstream matcher honours — the reason a full name returned
-    // less than a partial one — run them together and merge, so a longer
-    // query can never come back with fewer cards than a shorter one.
+    const supabase = await createClient();
+    const local = await searchCatalogue(supabase, parsed);
+
+    // The external cascade is a supplement now, not the search. It runs only
+    // when the catalogue couldn't fully answer: the requested number wasn't
+    // found locally, or a name-only search came back thin (the catalogue is
+    // still importing, so absence local isn't absence).
+    const needExternal = wantedKey ? !hasWantedNumber(local) : local.length < 8;
+
     let cards: CardSummary[] = [];
-    if (parsed.name) {
-      const shapes = await Promise.all([
-        safeSearch({ ...parsed, pageSize: 60 }),
-        safeSearch({
-          nameContains: parsed.name,
-          number: parsed.number,
-          printedTotal: parsed.printedTotal,
-          pageSize: 60,
-        }),
-        safeSearch({
-          nameTokens: parsed.name,
-          number: parsed.number,
-          printedTotal: parsed.printedTotal,
-          pageSize: 60,
-        }),
-      ]);
-      const seen = new Set<string>();
-      for (const shape of shapes) {
-        for (const c of shape) {
-          if (seen.has(c.id)) continue;
-          seen.add(c.id);
-          cards.push(c);
+    let source = local.length > 0 ? "catalogue" : "pokemontcg.io";
+    if (needExternal) {
+      // A single query shape can't cover how people type. A prefix match
+      // misses "Surfing Pikachu" when you search "pikachu"; a contains match
+      // is broad but the API may refuse a leading wildcard; token matching
+      // gets past apostrophes and punctuation. Run them together and merge.
+      if (parsed.name) {
+        const shapes = await Promise.all([
+          safeSearch({ ...parsed, pageSize: 60 }),
+          safeSearch({
+            nameContains: parsed.name,
+            number: parsed.number,
+            printedTotal: parsed.printedTotal,
+            pageSize: 60,
+          }),
+          safeSearch({
+            nameTokens: parsed.name,
+            number: parsed.number,
+            printedTotal: parsed.printedTotal,
+            pageSize: 60,
+          }),
+        ]);
+        const seen = new Set<string>();
+        for (const shape of shapes) {
+          for (const c of shape) {
+            if (seen.has(c.id)) continue;
+            seen.add(c.id);
+            cards.push(c);
+          }
+        }
+      } else {
+        cards = await safeSearch({ ...parsed, pageSize: 30 });
+      }
+
+      // The upstream API doesn't reliably honour a parenthesised OR of the
+      // ways a collector number can be spelled — retry each spelling on its
+      // own before relaxing anything else.
+      if (parsed.number && !hasWantedNumber(cards) && !hasWantedNumber(local)) {
+        for (const variant of numberVariants(parsed.number)) {
+          const exact = await safeSearch({
+            name: parsed.name,
+            numberExact: variant,
+            printedTotal: parsed.printedTotal,
+            pageSize: 16,
+          });
+          if (hasWantedNumber(exact) && exact.length > 0) {
+            cards = [...exact, ...cards];
+            break;
+          }
         }
       }
-      // Closest match first: the exact name, then names starting with what
-      // was typed, then names merely containing it — newest printing first
-      // within each band.
-      const wanted = normalizeForSearch(cleanCardName(parsed.name));
-      const rank = (c: CardSummary) => {
-        const n = normalizeForSearch(c.name);
-        if (n === wanted) return 0;
-        if (n.startsWith(wanted)) return 1;
-        if (n.includes(wanted)) return 2;
-        return 3;
-      };
-      cards.sort(
-        (a, b) => rank(a) - rank(b) || (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "")
-      );
-      cards = cards.slice(0, 40);
-    } else {
-      cards = await safeSearch({ ...parsed, pageSize: 16 });
-    }
 
-    // The upstream API doesn't reliably honour a parenthesised OR of the
-    // different ways a collector number can be spelled, so a card printed
-    // "013/223" could miss while "13/223" hit. Retry each spelling on its
-    // own before relaxing anything else.
-    if (parsed.number && !hasWantedNumber(cards)) {
-      for (const variant of numberVariants(parsed.number)) {
-        const exact = await safeSearch({
-          name: parsed.name,
-          numberExact: variant,
-          printedTotal: parsed.printedTotal,
-          pageSize: 16,
+      // Number searches can be over-constrained (printedTotal counts only
+      // the base set; promo-set codes vary) — relax progressively.
+      if (cards.length === 0 && (parsed.printedTotal || parsed.setName)) {
+        cards = await safeSearch({ name: parsed.name, number: parsed.number, pageSize: 16 });
+      }
+      if (cards.length === 0 && parsed.number && !parsed.name) {
+        cards = await safeSearch({ name: q, pageSize: 16 });
+      }
+      // XY-era Mega Evolutions are named "M Gengar-EX", not "Mega Gengar EX".
+      if (cards.length === 0 && parsed.name && /^mega\s+/i.test(parsed.name)) {
+        const oldStyle = parsed.name.replace(/^mega\s+/i, "M ").replace(/\s*ex$/i, "");
+        cards = await safeSearch({ name: oldStyle, number: parsed.number, pageSize: 16 });
+      }
+      // Punctuation-blind retry ("farfetchd" → Farfetch'd).
+      if (cards.length === 0 && parsed.name) {
+        cards = await safeSearch({ nameTokens: parsed.name, number: parsed.number, pageSize: 16 });
+        if (cards.length === 0 && parsed.number) {
+          cards = await safeSearch({ nameTokens: parsed.name, pageSize: 16 });
+        }
+      }
+
+      // TCGdex usually has new sets/promos months earlier — consult it when
+      // nothing yet carries the number that was searched for.
+      if ((local.length === 0 && cards.length === 0) || !hasWantedNumber([...local, ...cards])) {
+        const alt = await searchTcgdex({
+          name: parsed.name ? cleanCardName(parsed.name) : undefined,
+          number: parsed.number,
+          pageSize: 12,
         });
-        if (hasWantedNumber(exact) && exact.length > 0) {
-          cards = exact;
-          break;
-        }
+        cards.push(...alt);
       }
+      if (cards.length > 0) source = local.length > 0 ? "mixed" : "external";
     }
 
-    // Number-based searches can be over-constrained (e.g. printedTotal counts
-    // only the base set, not secret rares; promo-set codes vary) — relax
-    // progressively.
-    if (cards.length === 0 && (parsed.printedTotal || parsed.setName)) {
-      cards = await safeSearch({ name: parsed.name, number: parsed.number, pageSize: 16 });
-    }
-    if (cards.length === 0 && parsed.number && !parsed.name) {
-      cards = await safeSearch({ name: q, pageSize: 16 });
-    }
-    // XY-era Mega Evolutions are named "M Gengar-EX", not "Mega Gengar EX" —
-    // retry "Mega X" queries with the old naming convention.
-    if (cards.length === 0 && parsed.name && /^mega\s+/i.test(parsed.name)) {
-      const oldStyle = parsed.name.replace(/^mega\s+/i, "M ").replace(/\s*ex$/i, "");
-      cards = await safeSearch({ name: oldStyle, number: parsed.number, pageSize: 16 });
-    }
-    // Punctuation-blind retry: match on word-parts only, so apostrophes,
-    // periods, hyphens, and é can't block a match ("farfetchd" → Farfetch'd)
-    if (cards.length === 0 && parsed.name) {
-      cards = await safeSearch({
-        nameTokens: parsed.name,
-        number: parsed.number,
-        pageSize: 16,
-      });
-      if (cards.length === 0 && parsed.number) {
-        cards = await safeSearch({ nameTokens: parsed.name, pageSize: 16 });
-      }
+    // Merge, with the catalogue's copies first (they carry our images and
+    // prices), and twins folded: the same physical card can arrive from two
+    // sources under different ids AND different zero-paddings.
+    const seen = new Set<string>();
+    const twin = (c: CardSummary) =>
+      `${normalizeForSearch(c.name)}|${numberKey(c.number)}|${(c.setName ?? "").toLowerCase()}`;
+    const merged: CardSummary[] = [];
+    for (const c of [...local, ...cards]) {
+      const t = twin(c);
+      if (seen.has(c.id) || seen.has(t)) continue;
+      seen.add(c.id);
+      seen.add(t);
+      merged.push(c);
     }
 
-    // A single query shape can't cover how people type. A prefix match
-    // misses "Surfing Pikachu" when you search "pikachu"; a contains match
-    // is broad but the API may refuse a leading wildcard; token matching
-    // handles apostrophes and punctuation. Rather than guess which one the
-    // upstream matcher honours — the reason a full name kept returning less
-    // than a partial one — run them together and merge. A longer query can
-    // then never return fewer cards than a shorter one.
-    if (parsed.name) {
-      const shapes = await Promise.all([
-        safeSearch({ name: parsed.name, number: parsed.number, pageSize: 60 }),
-        safeSearch({ nameContains: parsed.name, number: parsed.number, pageSize: 60 }),
-        safeSearch({ nameTokens: parsed.name, number: parsed.number, pageSize: 60 }),
-      ]);
-      const seen = new Set(cards.map((c) => c.id));
-      for (const shape of shapes) {
-        for (const c of shape) {
-          if (seen.has(c.id)) continue;
-          seen.add(c.id);
-          cards.push(c);
-        }
-      }
-      // Closest match first: the exact name, then names starting with what
-      // was typed, then everything else, newest printing first within each.
-      const wanted = normalizeForSearch(cleanCardName(parsed.name));
-      const rank = (c: (typeof cards)[number]) => {
-        const n = normalizeForSearch(c.name);
-        if (n === wanted) return 0;
-        if (n.startsWith(wanted)) return 1;
-        if (n.includes(wanted)) return 2;
-        return 3;
-      };
-      cards.sort(
-        (a, b) => rank(a) - rank(b) || (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "")
-      );
-      cards = cards.slice(0, 40);
-    }
+    // The ranking the complaint was actually about: a card carrying the
+    // EXACT number you typed belongs at the top, zeros ignored — name
+    // closeness only breaks ties. Newest printing first within each band.
+    const rank = (c: CardSummary) => {
+      const numberMiss = wantedKey ? (numberKey(c.number) === wantedKey ? 0 : 1) : 0;
+      const n = normalizeForSearch(c.name);
+      const nameRank = !wantedName
+        ? 0
+        : n === wantedName
+          ? 0
+          : n.startsWith(wantedName)
+            ? 1
+            : n.includes(wantedName)
+              ? 2
+              : 3;
+      return numberMiss * 10 + nameRank;
+    };
+    merged.sort(
+      (a, b) => rank(a) - rank(b) || (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "")
+    );
 
-    // Consult TCGdex (usually has new sets/promos months earlier) when the
-    // primary came up empty — or when it returned cards but NONE carry the
-    // number that was searched for (typical promo case: a name search finds
-    // old printings while the actual promo lives only in TCGdex).
-    let source = "pokemontcg.io";
-    const key = wantedKey;
-    if (cards.length === 0 || !hasWantedNumber(cards)) {
-      const alt = await searchTcgdex({
-        name: parsed.name ? cleanCardName(parsed.name) : undefined,
-        number: parsed.number,
-        pageSize: 12,
-      });
-      const altNumberMatches = key ? alt.filter((c) => numberKey(c.number) === key) : alt;
-      if (cards.length === 0) {
-        cards = alt;
-        if (alt.length > 0) source = "tcgdex";
-      } else if (altNumberMatches.length > 0) {
-        // Put the number-exact fallback results first, keep primary as alternatives
-        cards = [...altNumberMatches, ...cards].slice(0, 40);
-        source = "mixed";
-      }
-    }
-
-    return NextResponse.json({ cards, source });
+    return NextResponse.json({ cards: merged.slice(0, 40), source });
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
