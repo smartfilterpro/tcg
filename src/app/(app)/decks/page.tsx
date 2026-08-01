@@ -674,14 +674,9 @@ function UpgradeList({
                   {asks[u.name]!.count >= 3 && (
                     <> · typically ${asks[u.name]!.median.toFixed(2)}</>
                   )}{" "}
-                  <a
-                    href={asks[u.name]!.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline"
-                  >
-                    {asks[u.name]!.count} listed
-                  </a>
+                  {/* Owner decision: show the market, don't send people to
+                      it. The count is context for the price, not a door. */}
+                  {asks[u.name]!.count} listed
                   {/* Said once per card rather than once per panel: someone
                       scanning a single row shouldn't have to find a footnote
                       to know this is an ask, not a sale. */}

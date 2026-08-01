@@ -24,7 +24,19 @@ export interface PriceRefreshSummary {
   checked: number;
   updated: number;
   unpriced: number;
-  suspicious: Array<{ id: string; name: string; old: number; next: number }>;
+  /** Held price changes. Carries enough of the card to DECIDE — a name and
+   *  two numbers can't answer "is $0.23 right for this Quaxly?", but the
+   *  picture, set and collector number can. */
+  suspicious: Array<{
+    id: string;
+    name: string;
+    old: number;
+    next: number;
+    set?: string | null;
+    number?: string | null;
+    image?: string | null;
+    rarity?: string | null;
+  }>;
   /** PokeTrace source stats (present only when POKETRACE_API_KEY is set). */
   pt?: {
     matched: number;
@@ -188,6 +200,10 @@ export async function refreshStalePrices(
               name: card.name as string,
               old,
               next: nextMarket,
+              set: (card.set_name as string | null) ?? null,
+              number: (card.number as string | null) ?? null,
+              image: (card.image_small as string | null) ?? null,
+              rarity: (card.rarity as string | null) ?? null,
             });
             return; // don't auto-apply a wild swing
           }

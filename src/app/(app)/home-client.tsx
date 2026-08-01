@@ -246,6 +246,10 @@ export default function CollectionPage({
       cards: all.reduce((s, i) => s + i.quantity, 0),
       unique: all.length,
       value: all.reduce((s, i) => s + (itemPrice(i) ?? 0) * i.quantity, 0),
+      // Cards contributing $0 because nothing has priced them yet. Without
+      // this the total silently understates a collection and looks wrong to
+      // the one person who knows what their cards are worth.
+      unpriced: all.filter((i) => itemPrice(i) == null).reduce((s, i) => s + i.quantity, 0),
     };
   }, [items]);
 
@@ -484,6 +488,12 @@ export default function CollectionPage({
             <span className="font-bold text-brand-positive">
               ~${totals.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} value
             </span>
+            {totals.unpriced > 0 && (
+              <span className="text-slate-400">
+                {" "}
+                · {totals.unpriced.toLocaleString()} with no price yet
+              </span>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

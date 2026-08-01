@@ -112,14 +112,48 @@ export default function TermsPage() {
           <p>
             Members can post trade listings, comments, messages, notes, deck names, photos,
             and usernames (&ldquo;User Content&rdquo;). User Content belongs to whoever posts
-            it, and they are solely responsible for it. We do not pre-screen, monitor, or
-            endorse User Content and accept <b>no responsibility for messages or other
-            content exchanged between users</b>, including offensive, misleading, or unlawful
-            content. You grant the Service the license needed to store and display your User
-            Content to the members it is shared with. The administrator may remove any User
-            Content at any time. Do not post content that is unlawful, harassing, hateful,
-            sexually explicit, deceptive, infringing, or that shares another person&apos;s
-            private information.
+            it, and they are solely responsible for it. We do not monitor or endorse User
+            Content and accept <b>no responsibility for messages or other content exchanged
+            between users</b>, including offensive, misleading, or unlawful content. Some
+            content — usernames and deck names — passes an automated check before it is
+            saved, and names that fail are refused. That check is a courtesy, not a
+            guarantee: it is automated, it misses things, and it does not make us
+            responsible for what it lets through. You grant the Service the license needed
+            to store and display your User Content to the members it is shared with. The
+            administrator may remove any User Content, rename a shared deck, reset a
+            username, or switch off one member&apos;s access to sharing or the trade board
+            at any time. Do not post content that is unlawful, harassing, hateful, sexually
+            explicit, deceptive, infringing, or that shares another person&apos;s private
+            information.
+          </p>
+        </Section>
+
+        <Section title="6a. Mail-in scanning service">
+          <p>
+            Where we offer to scan cards you mail to us, these terms apply in addition to
+            the rest of this agreement. <b>Send cards at your own risk.</b> You are
+            responsible for packaging and for the outbound shipment, and we recommend
+            tracking and insurance for anything of value — you are in the best position to
+            declare what your cards are worth, and we will not know a shipment&apos;s value
+            unless you insure it.
+          </p>
+          <p>
+            We handle mailed cards with reasonable care, but we are not a custodian,
+            warehouse, or insurer. To the maximum extent the law allows, our total liability
+            for loss, damage, delay, or misdelivery of mailed cards is limited to the fee
+            you paid for that scanning job, and we are not liable for a card&apos;s
+            collector value, sentimental value, or grading potential. We do not accept
+            responsibility for anything that happens in transit in either direction.
+          </p>
+          <p>
+            Scanning is an identification service, not an appraisal or an authentication.
+            We identify cards from photographs; every card is either machine-verified
+            against two independent photographs or reviewed by a person before it reaches
+            your account, but mistakes remain possible and you should check the results.
+            Nothing in a scan report is a statement that a card is genuine, unaltered, or
+            worth any particular amount. Tell us where to return your cards and by when; if
+            we cannot reach you, we may return them to the address you gave us at your
+            cost.
           </p>
         </Section>
 
