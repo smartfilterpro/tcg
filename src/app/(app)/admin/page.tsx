@@ -3124,6 +3124,45 @@ function MirrorArtPanel() {
     refresh();
   }, [refresh]);
 
+  /** Give back the space spent on cards nobody owns. Loops until the pass
+   *  reports done, same shape as the mirror run. */
+  async function reclaim() {
+    if (!confirm("Point every mirrored card nobody owns back at its source and delete our copies? Nothing is lost — viewing one re-mirrors it.")) return;
+    setRunning(true);
+    setError(null);
+    stopRef.current = false;
+    let cursor: string | null = null;
+    let reverted = 0;
+    let files = 0;
+    try {
+      for (;;) {
+        if (stopRef.current) break;
+        const res = await fetch("/api/admin/mirror-art", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reclaim: true, after: cursor }),
+        });
+        const text = await res.text();
+        let json: { reverted: number; filesRemoved: number; cursor: string | null; done: boolean; error?: string };
+        try {
+          json = JSON.parse(text);
+        } catch {
+          throw new Error(`The server said: ${text.slice(0, 140)}`);
+        }
+        if (!res.ok) throw new Error(json.error || "Reclaim failed");
+        reverted += json.reverted;
+        files += json.filesRemoved;
+        setRun({ mirrored: reverted, failures: [`${files} files removed so far`] });
+        cursor = json.cursor;
+        if (json.done) break;
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Reclaim failed");
+    }
+    setRunning(false);
+    refresh();
+  }
+
   async function start() {
     setRunning(true);
     setError(null);
@@ -3207,13 +3246,22 @@ function MirrorArtPanel() {
             Stop after this batch
           </button>
         ) : (
-          <button
-            className="btn-primary text-sm"
-            disabled={!status || status.remaining === 0}
-            onClick={start}
-          >
-            {status && status.remaining === 0 ? "Everything is mirrored" : "Mirror next batches"}
-          </button>
+          <>
+            <button
+              className="btn-primary text-sm"
+              disabled={!status || status.remaining === 0}
+              onClick={start}
+            >
+              {status && status.remaining === 0 ? "Everything is mirrored" : "Mirror next batches"}
+            </button>
+            <button
+              className="btn-secondary text-sm"
+              title="Point cards nobody owns back at their source and delete our copies. Nothing is lost — the source URL is where the picture came from, and viewing one re-mirrors it."
+              onClick={reclaim}
+            >
+              Reclaim unowned art
+            </button>
+          </>
         )}
       </div>
       {(running || run.mirrored > 0) && (
