@@ -6,6 +6,7 @@ import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import { itemPrice, variantLabel, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { tradingOff, TRADING_OFF_ERROR } from "@/lib/tradeBoard";
 
 export const maxDuration = 120;
 
@@ -102,6 +103,11 @@ function formatTrade(side: string, lines: TradeLine[]): string {
 
 export async function POST(req: Request) {
   try {
+    // Trading is paused product-wide (lib/features). Writes stop here;
+    // reads and admin removal still work, so nothing is stranded.
+    if (tradingOff()) {
+      return NextResponse.json({ error: TRADING_OFF_ERROR }, { status: 403 });
+    }
     const { user, profile } = await requireUser();
     const body = (await req.json()) as {
       friendId?: string;

@@ -7,7 +7,7 @@
 // a real cent.
 //
 // Running out breaks NOTHING except new AI calls. Collection, decks, values,
-// trades, battles and exports never touch this module.
+// grading, battles and exports never touch this module.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -362,7 +362,7 @@ export async function checkCredits(
         pooled: !!family,
         message:
           `You're out of ${AI_NAME} credits. Everything else keeps working — your collection, ` +
-          `decks, values, trades and battles are all still here; only new ${AI_NAME} requests ` +
+          `decks, values, grading and battles are all still here; only new ${AI_NAME} requests ` +
           `pause until your credits refill or you add a boost.`,
       };
     }

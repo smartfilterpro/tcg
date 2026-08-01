@@ -13,7 +13,7 @@
 //             subscriber is an insult dressed as help.
 //
 // Nothing here hard-blocks anything that isn't a model call. Collections,
-// decks, trades and battles keep working with a balance of zero.
+// decks, grading and battles keep working with a balance of zero.
 
 import { useState } from "react";
 import { BoostSheet } from "@/components/CreditsMeter";
@@ -61,7 +61,7 @@ export function OutOfCreditsNote({ plan = "free" }: { plan?: string }) {
   return (
     <p className="m-0 text-[13px] leading-[1.55] text-brand-ink3">
       You&apos;re out of {AI_NAME} credits, so new AI requests pause until they refill.
-      Everything else — your collection, decks, trades and battles — keeps working.{" "}
+      Everything else — your collection, decks, grading and battles — keeps working.{" "}
       <a href="/settings/billing" className="underline">
         Add a boost
       </a>

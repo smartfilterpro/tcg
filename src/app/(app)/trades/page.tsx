@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { APP_NAME } from "@/lib/branding";
+import { TRADING_ENABLED } from "@/lib/features";
 import { artSrc } from "@/lib/art";
 import { avatarColor, initialsFor } from "@/lib/avatar";
 import { matchesSearch, shortAgo } from "@/lib/text";
@@ -945,5 +946,21 @@ function AttachCards({
 }
 
 export default function TradesPage() {
+  // Trading is paused (lib/features). The board and every post survive
+  // intact — this is the door being shut, not the room being emptied.
+  if (!TRADING_ENABLED) {
+    return (
+      <div className="mx-auto max-w-lg py-16 text-center">
+        <h1 className="font-display text-[22px] font-bold">Trading is paused</h1>
+        <p className="mt-2 text-sm leading-[1.6] text-brand-ink3">
+          We&apos;ve switched the trade board off for now. Nothing has been deleted — your
+          collection, decks, grading and battles all work exactly as before.
+        </p>
+        <Link className="btn-primary mt-4 inline-flex" href="/">
+          Back to your collection
+        </Link>
+      </div>
+    );
+  }
   return <TradeBoard />;
 }

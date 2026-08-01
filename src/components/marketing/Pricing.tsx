@@ -92,7 +92,7 @@ export function PricingSection() {
                 Credits are what {AI_NAME} runs on. Each request costs what it actually takes to
                 run — the table below is what to expect — and every charge shows in your history.
                 No mystery tokens, no surprise bill. Run out and nothing breaks: your collection,
-                decks and trades keep working.
+                decks and battles keep working.
               </p>
               <div className="flex flex-col gap-px overflow-hidden rounded-xl border border-brand-line">
                 {CREDIT_COSTS.map((c, i) => (
