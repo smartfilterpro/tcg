@@ -16,6 +16,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllRows } from "@/lib/fetchAll";
 
 const BUCKET = "card-art";
 
@@ -29,6 +30,26 @@ const DOWNLOAD_INTERVAL_MS = 150;
  *  cards × 2 images × ~1s is under half the proxy timeout. */
 const SCAN_WINDOW = 1000;
 const MIRROR_PER_BATCH = 20;
+
+/** Mirror only cards somebody owns.
+ *
+ *  The catalogue is ~33,000 cards and members collectively own a small
+ *  fraction of them. Mirroring the whole thing spent 1.5GB on artwork for
+ *  cards nobody has ever looked at and blew a 1GB storage quota — for no
+ *  benefit, because an unowned card's picture is only ever seen if someone
+ *  searches for it, and view-time mirroring (the /art route) grabs THAT one
+ *  the moment they do.
+ *
+ *  So the sweep works the owned set and the long tail stays hotlinked until
+ *  it is actually wanted.
+ *
+ *  NOW FALSE: on Supabase Pro the whole catalogue's artwork is ~3GB against
+ *  a 100GB allowance, which restores the actual goal — every card the app
+ *  can show is served from our own storage, including cards nobody owns yet
+ *  but that search, the deck builder's buy-list and TrainerAI all display.
+ *  Set back to true if storage ever gets tight; reclaimUnowned() is the
+ *  matching refund. */
+const OWNED_ONLY = false;
 
 const MAX_BYTES = 8_000_000;
 const MIN_BYTES = 1_000;
@@ -143,15 +164,42 @@ export async function mirrorBatch(
   after: string | null
 ): Promise<MirrorBatchResult> {
   const ours = supabaseUrl();
-  let q = admin
-    .from("cards")
-    .select("id, image_small, image_large")
-    .order("id")
-    .limit(SCAN_WINDOW);
-  if (after) q = q.gt("id", after);
-  const { data, error } = await q;
-  if (error) throw new Error(error.message);
-  const rows = (data ?? []) as MirrorRow[];
+  let rows: MirrorRow[];
+  if (OWNED_ONLY) {
+    // The work list is what people own. Read it whole (a few thousand rows
+    // at most), sort it so the cursor means something, and take the slice
+    // after the cursor — the same resumable walk, over a smaller world.
+    const { data: owned } = await fetchAllRows<{ card_id: string }>(() =>
+      admin.from("collection_items").select("card_id").order("card_id")
+    );
+    const ids = [...new Set((owned ?? []).map((r) => r.card_id))]
+      .sort()
+      .filter((id) => !after || id > after)
+      .slice(0, SCAN_WINDOW);
+    if (ids.length === 0) {
+      return { scanned: 0, mirrored: 0, failed: [], lastId: null, done: true };
+    }
+    const chunks: MirrorRow[] = [];
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data } = await admin
+        .from("cards")
+        .select("id, image_small, image_large")
+        .in("id", ids.slice(i, i + 200))
+        .order("id");
+      chunks.push(...((data ?? []) as MirrorRow[]));
+    }
+    rows = chunks.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  } else {
+    let q = admin
+      .from("cards")
+      .select("id, image_small, image_large")
+      .order("id")
+      .limit(SCAN_WINDOW);
+    if (after) q = q.gt("id", after);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    rows = (data ?? []) as MirrorRow[];
+  }
 
   let mirrored = 0;
   let attempts = 0;
@@ -188,6 +236,108 @@ export async function mirrorBatch(
     failed,
     lastId,
     done: examinedAll && rows.length < SCAN_WINDOW,
+  };
+}
+
+/* ------------------------------------------------------------- reclaim */
+
+export interface ReclaimResult {
+  examined: number;
+  reverted: number;
+  filesRemoved: number;
+  done: boolean;
+  cursor: string | null;
+}
+
+/** Give back the space spent on cards nobody owns.
+ *
+ *  The full-catalogue sweep mirrored thousands of cards no member holds.
+ *  Turning the sweep off stops the growth but doesn't refund it — this
+ *  does: for each mirrored card that nobody owns, point the row back at
+ *  the source URL we kept in source_image_* and delete the stored files.
+ *
+ *  Nothing is lost. The source URL is where the picture came from, so the
+ *  card renders exactly as it did before it was ever mirrored, and if
+ *  anyone views it the /art route mirrors it again on the spot. Rows with
+ *  no source URL on file are left alone — reverting those would blank a
+ *  card, and a blank card is worse than a byte of storage.
+ */
+export async function reclaimUnowned(
+  admin: SupabaseClient,
+  cursor: string | null,
+  budget = 300
+): Promise<ReclaimResult> {
+  const ours = supabaseUrl();
+  const mirroredPrefix = `${ours}/storage/v1/object/public/${BUCKET}/`;
+
+  const { data: owned } = await fetchAllRows<{ card_id: string }>(() =>
+    admin.from("collection_items").select("card_id").order("card_id")
+  );
+  const ownedIds = new Set((owned ?? []).map((r) => r.card_id));
+
+  let q = admin
+    .from("cards")
+    .select("id, image_small, image_large, source_image_small, source_image_large, image_locked")
+    .like("image_small", `${mirroredPrefix}%`)
+    .order("id")
+    .limit(budget);
+  if (cursor) q = q.gt("id", cursor);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []) as Array<{
+    id: string;
+    image_small: string | null;
+    image_large: string | null;
+    source_image_small: string | null;
+    source_image_large: string | null;
+    image_locked: boolean | null;
+  }>;
+
+  let reverted = 0;
+  let filesRemoved = 0;
+  let last: string | null = cursor;
+  const paths: string[] = [];
+
+  for (const row of rows) {
+    last = row.id;
+    if (ownedIds.has(row.id)) continue;
+    // An admin chose this picture deliberately; it isn't ours to undo.
+    if (row.image_locked === true) continue;
+    if (!row.source_image_small) continue;
+
+    const { error: upErr } = await admin
+      .from("cards")
+      .update({
+        image_small: row.source_image_small,
+        image_large: row.source_image_large ?? row.source_image_small,
+        source_image_small: null,
+        source_image_large: null,
+      })
+      .eq("id", row.id);
+    if (upErr) continue;
+    reverted++;
+
+    // Delete AFTER the row stops pointing at the file, never before: the
+    // other order leaves a window where the card renders a 404.
+    for (const url of [row.image_small, row.image_large]) {
+      if (url && url.startsWith(mirroredPrefix)) {
+        const path = url.slice(mirroredPrefix.length).split("?")[0];
+        if (path && !paths.includes(path)) paths.push(path);
+      }
+    }
+  }
+
+  for (let i = 0; i < paths.length; i += 100) {
+    const { data: removed } = await admin.storage.from(BUCKET).remove(paths.slice(i, i + 100));
+    filesRemoved += removed?.length ?? 0;
+  }
+
+  return {
+    examined: rows.length,
+    reverted,
+    filesRemoved,
+    done: rows.length < budget,
+    cursor: last,
   };
 }
 
