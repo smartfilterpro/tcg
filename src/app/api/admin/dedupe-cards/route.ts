@@ -18,7 +18,12 @@ export const maxDuration = 300;
 // references it — collection_items.card_id cascades on delete, so deleting
 // first would destroy people's collections.
 //
-// Dry run by default. This rewrites what people own; look before leaping.
+// The admin picks WHICH groups to fold. Grouping is a heuristic on
+// name+number+set, and heuristics are wrong occasionally — two genuinely
+// different printings can share all three (a promo reprint carrying its
+// original number, say). So the dry run returns every group with each row's
+// artwork, and the merge only touches the keys it is handed: a wrong-looking
+// pair gets unticked instead of blocking the other seventy.
 
 const numKey = (n: string | null) => (n ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
 
@@ -42,11 +47,26 @@ interface CardRow {
   tcgplayer_id: string | null;
 }
 
+/** Stable identity for a group, so the UI can hand specific ones back. */
+const keyOf = (c: CardRow) =>
+  `${c.name.toLowerCase()}|${numKey(c.number)}|${(c.set_name ?? "").toLowerCase()}`;
+
+/** Best-provenanced first: the survivor is [0], the twins are the rest. */
+function ordered(group: CardRow[]): CardRow[] {
+  return [...group].sort(
+    (a, b) =>
+      provenance(a.id) - provenance(b.id) ||
+      Number(b.image_locked === true) - Number(a.image_locked === true) ||
+      Number(b.market_price != null) - Number(a.market_price != null)
+  );
+}
+
 export async function POST(req: Request) {
   try {
     await requireAdmin();
-    const body = (await req.json().catch(() => ({}))) as { dryRun?: boolean };
+    const body = (await req.json().catch(() => ({}))) as { dryRun?: boolean; keys?: string[] };
     const dryRun = body.dryRun !== false;
+    const wanted = Array.isArray(body.keys) ? new Set(body.keys) : null;
     const admin = createAdminClient();
 
     const { data: cards, error } = await fetchAllRows<CardRow>(() =>
@@ -61,18 +81,51 @@ export async function POST(req: Request) {
 
     const groups = new Map<string, CardRow[]>();
     for (const c of cards) {
-      const key = `${c.name.toLowerCase()}|${numKey(c.number)}|${(c.set_name ?? "").toLowerCase()}`;
+      const key = keyOf(c);
       const g = groups.get(key);
       if (g) g.push(c);
       else groups.set(key, [c]);
     }
 
-    const dupGroups = [...groups.values()].filter((g) => g.length > 1);
-    const sample = dupGroups.slice(0, 12).map((g) => ({
-      name: g[0].name,
-      set: g[0].set_name,
-      rows: g.map((c) => `${c.id} (#${c.number})`),
-    }));
+    const dupEntries = [...groups.entries()].filter(([, g]) => g.length > 1);
+
+    // How many collection entries hang off each duplicate row — the number
+    // that says whether a merge moves someone's cards or merely tidies the
+    // catalogue. One query per chunk, counted in memory.
+    const dupIds = dupEntries.flatMap(([, g]) => g.map((c) => c.id));
+    const owned = new Map<string, number>();
+    for (let i = 0; i < dupIds.length; i += 300) {
+      const { data: items } = await admin
+        .from("collection_items")
+        .select("card_id, quantity")
+        .in("card_id", dupIds.slice(i, i + 300));
+      for (const it of items ?? []) {
+        owned.set(
+          it.card_id as string,
+          (owned.get(it.card_id as string) ?? 0) + ((it.quantity as number) ?? 0)
+        );
+      }
+    }
+
+    // Every group, with pictures — the admin decides by eye, so the payload
+    // carries what the eye needs.
+    const detail = dupEntries.slice(0, 300).map(([key, g]) => {
+      const rows = ordered(g);
+      return {
+        key,
+        name: rows[0].name,
+        set: rows[0].set_name,
+        rows: rows.map((c, i) => ({
+          id: c.id,
+          number: c.number,
+          image: c.image_small,
+          price: c.market_price,
+          locked: c.image_locked === true,
+          owned: owned.get(c.id) ?? 0,
+          survivor: i === 0,
+        })),
+      };
+    });
 
     let merged = 0;
     let itemsMoved = 0;
@@ -80,15 +133,11 @@ export async function POST(req: Request) {
     const failures: string[] = [];
 
     if (!dryRun) {
-      for (const group of dupGroups) {
-        // Survivor: best provenance; ties broken toward the one with a
-        // locked image (an admin curated it), then the one holding a price.
-        const sorted = [...group].sort(
-          (a, b) =>
-            provenance(a.id) - provenance(b.id) ||
-            Number(b.image_locked === true) - Number(a.image_locked === true) ||
-            Number(b.market_price != null) - Number(a.market_price != null)
-        );
+      // No keys given means every group — the old behaviour, kept so a
+      // scripted call still works. The UI always sends its ticked list.
+      const toMerge = wanted ? dupEntries.filter(([key]) => wanted.has(key)) : dupEntries;
+      for (const [, group] of toMerge) {
+        const sorted = ordered(group);
         const survivor = sorted[0];
         kept++;
 
@@ -159,14 +208,15 @@ export async function POST(req: Request) {
     return NextResponse.json({
       dryRun,
       cards: cards.length,
-      duplicateGroups: dupGroups.length,
-      sample,
+      duplicateGroups: dupEntries.length,
+      groups: detail,
+      truncated: Math.max(0, dupEntries.length - detail.length),
       merged,
       itemsMoved,
       kept,
       failures: failures.slice(0, 10),
       note: dryRun
-        ? "Nothing written. POST {\"dryRun\": false} to fold these."
+        ? "Nothing written. Untick anything that isn't the same card, then merge."
         : "Done. Collections were repointed before any row was removed.",
     });
   } catch (err) {

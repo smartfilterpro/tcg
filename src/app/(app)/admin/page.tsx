@@ -3126,63 +3126,173 @@ function DedupeCardsPanel() {
     duplicateGroups: number;
     merged: number;
     itemsMoved: number;
-    sample: Array<{ name: string; set: string | null; rows: string[] }>;
+    truncated: number;
+    groups: Array<{
+      key: string;
+      name: string;
+      set: string | null;
+      rows: Array<{
+        id: string;
+        number: string;
+        image: string | null;
+        price: number | null;
+        locked: boolean;
+        owned: number;
+        survivor: boolean;
+      }>;
+    }>;
     failures: string[];
     note: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Keys the admin has UNticked. Absent means merge it — the default is
+   *  yes, because the grouping is right the vast majority of the time and
+   *  ticking seventy boxes by hand is its own kind of mistake. */
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
 
   async function run(dryRun: boolean) {
     setBusy(true);
     setError(null);
     try {
+      const keys =
+        !dryRun && out
+          ? out.groups.filter((g) => !skipped.has(g.key)).map((g) => g.key)
+          : undefined;
       const res = await fetch("/api/admin/dedupe-cards", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dryRun }),
+        body: JSON.stringify({ dryRun, ...(keys ? { keys } : {}) }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Dedupe failed");
       setOut(json);
+      if (dryRun) setSkipped(new Set());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Dedupe failed");
     }
     setBusy(false);
   }
 
+  const selected = out ? out.groups.filter((g) => !skipped.has(g.key)).length : 0;
+
   return (
     <div className="rounded-lg border border-brand-line bg-white p-3">
       <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
         Finds cards held twice under different ids — same name, number and set, spelled
-        differently by different sources (&ldquo;#050&rdquo; vs &ldquo;#50&rdquo;). Merging
-        repoints collections before removing anything.
+        differently by different sources (&ldquo;#050&rdquo; vs &ldquo;#50&rdquo;). Check the
+        pictures match before merging: if two rows are genuinely different printings, untick
+        that pair and the rest still fold. The survivor is marked KEEP; merging repoints
+        every collection entry before removing anything.
       </p>
       <div className="flex flex-wrap gap-2">
         <button className="btn-secondary text-sm" disabled={busy} onClick={() => run(true)}>
           {busy ? "Checking…" : "Check (dry run)"}
         </button>
-        {out && out.dryRun && out.duplicateGroups > 0 && (
+        {out && out.dryRun && selected > 0 && (
           <button className="btn-primary text-sm" disabled={busy} onClick={() => run(false)}>
-            Merge {out.duplicateGroups} duplicate{out.duplicateGroups === 1 ? "" : "s"}
+            Merge {selected} selected
           </button>
+        )}
+        {out && out.dryRun && out.groups.length > 0 && (
+          <>
+            <button
+              className="btn-secondary text-sm"
+              onClick={() => setSkipped(new Set(out.groups.map((g) => g.key)))}
+            >
+              Untick all
+            </button>
+            <button className="btn-secondary text-sm" onClick={() => setSkipped(new Set())}>
+              Tick all
+            </button>
+          </>
         )}
       </div>
       {out && (
         <div className="mt-2 text-xs text-brand-ink3">
           <p className="m-0">
             {out.duplicateGroups} duplicate group{out.duplicateGroups === 1 ? "" : "s"}
+            {out.dryRun && ` · ${selected} ticked`}
             {!out.dryRun && ` · ${out.merged} merged · ${out.itemsMoved} collection entries moved`}
             {" — "}
             {out.note}
           </p>
-          {out.sample.length > 0 && (
-            <div className="mt-1 max-h-32 overflow-y-auto font-mono text-[11px]">
-              {out.sample.map((g, i) => (
-                <div key={i}>
-                  {g.name} ({g.set ?? "?"}): {g.rows.join("  ·  ")}
-                </div>
-              ))}
-            </div>
+          {out.truncated > 0 && (
+            <p className="m-0 mt-1 text-brand-warning">
+              Showing the first {out.groups.length}; {out.truncated} more will be listed after
+              this round.
+            </p>
+          )}
+          {out.dryRun && out.groups.length > 0 && (
+            <ul className="mt-2 flex max-h-[26rem] list-none flex-col gap-1.5 overflow-y-auto p-0">
+              {out.groups.map((g) => {
+                const on = !skipped.has(g.key);
+                return (
+                  <li
+                    key={g.key}
+                    className={`rounded-[10px] border p-2 ${on ? "border-brand-line" : "border-brand-line opacity-45"}`}
+                  >
+                    <label className="flex cursor-pointer items-start gap-2">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 shrink-0"
+                        checked={on}
+                        onChange={() =>
+                          setSkipped((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(g.key)) next.delete(g.key);
+                            else next.add(g.key);
+                            return next;
+                          })
+                        }
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[12px] font-medium">
+                          {g.name}
+                          <span className="font-normal opacity-70"> · {g.set ?? "no set"}</span>
+                        </div>
+                        {/* The pictures ARE the check: two thumbnails of the
+                            same art means one card under two ids; two
+                            different arts means leave it alone. */}
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {g.rows.map((r) => (
+                            <div key={r.id} className="w-[74px] shrink-0">
+                              <div className="aspect-[63/88] w-full overflow-hidden rounded bg-brand-sunken">
+                                {r.image ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={artSrc(r.id, r.image)!}
+                                    alt={`${g.name} ${r.id}`}
+                                    className="h-full w-full object-cover"
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <div className="flex h-full w-full items-center justify-center text-[10px] opacity-60">
+                                    no art
+                                  </div>
+                                )}
+                              </div>
+                              <div className="mt-0.5 font-mono text-[9.5px] leading-tight">
+                                <div className={r.survivor ? "text-brand-positive" : "opacity-70"}>
+                                  {r.survivor ? "KEEP" : "merge"} #{r.number}
+                                </div>
+                                <div className="truncate opacity-60" title={r.id}>
+                                  {r.id}
+                                </div>
+                                <div className="opacity-60">
+                                  {r.owned > 0 ? `${r.owned} owned` : "unowned"}
+                                  {r.price != null ? ` · $${r.price.toFixed(2)}` : ""}
+                                  {r.locked ? " · 🔒" : ""}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
           )}
           {out.failures.length > 0 && (
             <p className="m-0 mt-1 text-brand-negative">{out.failures.join(" · ")}</p>
@@ -3193,3 +3303,4 @@ function DedupeCardsPanel() {
     </div>
   );
 }
+
