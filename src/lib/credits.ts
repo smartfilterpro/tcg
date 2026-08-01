@@ -156,11 +156,25 @@ async function ensureGrants(
   userId: string,
   plan: string,
   anchorIso: string,
-  family: FamilyContext | null
+  family: FamilyContext | null,
+  emailConfirmed: boolean
 ): Promise<void> {
-  const rows: Array<{ user_id: string; delta: number; reason: string; ref_id: string }> = [
-    { user_id: userId, delta: SIGNUP_GRANT, reason: "signup_grant", ref_id: "once" },
-  ];
+  // The signup grant waits for a confirmed email.
+  //
+  // 100 credits is a dollar of real model spend handed to anyone who can
+  // type an address, and signup is open — fifty throwaway accounts is fifty
+  // dollars. Confirming costs a genuine user one click and costs a farmer a
+  // working inbox per account, which is the whole difference.
+  //
+  // Safe whichever way the Supabase project is configured: with email
+  // confirmation switched OFF, Supabase stamps email_confirmed_at at signup,
+  // so every real account is confirmed the instant it exists and this gate
+  // is a no-op. The grant is idempotent by (user, reason, ref), so it simply
+  // lands on the first credit check after they confirm.
+  const rows: Array<{ user_id: string; delta: number; reason: string; ref_id: string }> = [];
+  if (emailConfirmed) {
+    rows.push({ user_id: userId, delta: SIGNUP_GRANT, reason: "signup_grant", ref_id: "once" });
+  }
   const grantee = family ? family.ownerId : userId;
   const grantPlan = family ? "family" : plan;
   const monthly = MONTHLY_GRANT[grantPlan] ?? 0;
@@ -323,7 +337,7 @@ export interface CreditStatus {
  *  That is standard metering: the alternative (pre-authorising a guess) blocks
  *  calls the user could afford. */
 export async function checkCredits(
-  user: { id: string },
+  user: { id: string; email_confirmed_at?: string | null },
   profile: { role?: string; plan?: string; created_at?: string; billing_anchor?: string | null } | null
 ): Promise<CreditStatus> {
   const plan = profile?.plan ?? "free";
@@ -339,7 +353,7 @@ export async function checkCredits(
     // so grants line up with invoices the moment someone pays.
     const anchorIso =
       profile?.billing_anchor ?? profile?.created_at ?? new Date().toISOString();
-    await ensureGrants(admin, user.id, plan, anchorIso, family);
+    await ensureGrants(admin, user.id, plan, anchorIso, family, user.email_confirmed_at != null);
 
     const poolIds = family ? family.memberIds : [user.id];
     const balance = await sumDeltas(admin, poolIds);
@@ -355,15 +369,22 @@ export async function checkCredits(
     // abort — an abandoned generation costs us exactly the same as a
     // finished one, and delivers nothing.
     if (balance <= 0) {
+      // An unconfirmed account has a zero balance for a different reason,
+      // and telling them to buy a boost would be both useless and rude —
+      // their free credits are waiting, not spent.
+      const unconfirmed = user.email_confirmed_at == null;
       return {
         ok: false,
         balance,
         plan,
         pooled: !!family,
-        message:
-          `You're out of ${AI_NAME} credits. Everything else keeps working — your collection, ` +
-          `decks, values, grading and battles are all still here; only new ${AI_NAME} requests ` +
-          `pause until your credits refill or you add a boost.`,
+        message: unconfirmed
+          ? `Confirm your email address to unlock your free ${AI_NAME} credits — check your ` +
+            `inbox for the link we sent when you signed up. Everything else in the app works ` +
+            `in the meantime.`
+          : `You're out of ${AI_NAME} credits. Everything else keeps working — your collection, ` +
+            `decks, values, grading and battles are all still here; only new ${AI_NAME} requests ` +
+            `pause until your credits refill or you add a boost.`,
       };
     }
 
@@ -423,7 +444,7 @@ export async function debitCredits(
 
 /** The numbers the meter UI needs, without gating anything. */
 export async function creditSummary(
-  user: { id: string },
+  user: { id: string; email_confirmed_at?: string | null },
   profile: { role?: string; plan?: string; created_at?: string; billing_anchor?: string | null } | null
 ): Promise<{
   balance: number;
@@ -438,7 +459,7 @@ export async function creditSummary(
   const family = await familyContext(admin, user.id);
   const anchorIso =
     profile?.billing_anchor ?? profile?.created_at ?? new Date().toISOString();
-  await ensureGrants(admin, user.id, plan, anchorIso, family);
+  await ensureGrants(admin, user.id, plan, anchorIso, family, user.email_confirmed_at != null);
   const poolIds = family ? family.memberIds : [user.id];
   const start = cycleStart(family ? family.ownerAnchorIso : anchorIso);
 

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, AuthError } from "@/lib/auth";
-import { nameAllowed } from "@/lib/moderation";
+import { nameAllowed, recordNameAttempt } from "@/lib/moderation";
 
 /** GET: everything the account page shows about you. */
 export async function GET() {
@@ -144,6 +144,7 @@ export async function PATCH(req: Request) {
     }
     // Other members are forced to read this name everywhere; screen it.
     const verdict = await nameAllowed("display name", name);
+    recordNameAttempt(user.id, "display name", name, verdict);
     if (!verdict.ok) {
       return NextResponse.json({ error: verdict.reason }, { status: 400 });
     }

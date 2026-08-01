@@ -11,6 +11,7 @@
 //  3. Cheap: one small-model call, ~100 tokens, only when a name is set.
 
 import { anthropic } from "@/lib/anthropic";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 const MOD_MODEL = process.env.MODERATION_MODEL || "claude-haiku-4-5-20251001";
 
@@ -55,5 +56,35 @@ export async function nameAllowed(
     return { ok: true };
   } catch {
     return { ok: true };
+  }
+}
+
+/** Record what was tried and what happened to it.
+ *
+ *  Best-effort and fire-and-forget: an audit write must never be the reason
+ *  someone can't rename their deck. Both outcomes are kept — refusals are
+ *  the evidence of intent, and acceptances are what a human skims to catch
+ *  what the screen let through (it fails open by design).
+ */
+export function recordNameAttempt(
+  userId: string,
+  kind: "display name" | "deck name",
+  attempted: string,
+  verdict: { ok: boolean; reason?: string }
+): void {
+  try {
+    const admin = createAdminClient();
+    void admin
+      .from("name_audit")
+      .insert({
+        user_id: userId,
+        kind,
+        attempted: attempted.slice(0, 200),
+        allowed: verdict.ok,
+        reason: verdict.reason?.slice(0, 300) ?? null,
+      })
+      .then(() => {});
+  } catch {
+    // Pre-042 database, or a bad day. Neither is worth a failed save.
   }
 }

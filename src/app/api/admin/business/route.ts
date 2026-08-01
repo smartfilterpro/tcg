@@ -21,7 +21,7 @@ export async function GET() {
     const d30 = new Date(now - 30 * 86400_000).toISOString();
     const m7 = new Date(now - 7 * 30 * 86400_000).toISOString();
 
-    const [profilesRes, usageRes, ledgerRes, boostsRes, scansRes, ticketsRes, stateRes, sharedRes] =
+    const [profilesRes, usageRes, ledgerRes, boostsRes, scansRes, ticketsRes, stateRes, sharedRes, refusedRes] =
       await Promise.all([
         fetchAllRows(() =>
           admin.from("profiles").select("id, email, display_name, plan, role, created_at").order("id")
@@ -61,12 +61,21 @@ export async function GET() {
           .from("app_state")
           .select("key, value")
           .in("key", ["price_refresh", "card_import", "art_mirror"]),
-        // Decks newly shared this week (proxied by creation date — sharing
-        // itself isn't timestamped), for the moderation skim alert.
+        // Decks newly shared this week, by when sharing was switched on
+        // (migration 041) — an old deck shared today counts, which is the
+        // case the previous created_at proxy missed entirely.
         admin
           .from("decks")
           .select("id", { count: "exact", head: true })
           .eq("shared", true)
+          .gte("shared_at", new Date(Date.now() - 7 * 86400_000).toISOString()),
+        // Names refused by the screen this week (migration 042). Repeated
+        // refusals from one person is the clearest statement of intent the
+        // system ever gets — one is a typo, eight is a project.
+        admin
+          .from("name_audit")
+          .select("user_id")
+          .eq("allowed", false)
           .gte("created_at", new Date(Date.now() - 7 * 86400_000).toISOString()),
       ]);
     const stateByKey = new Map(
@@ -324,8 +333,36 @@ export async function GET() {
       });
     }
 
+    // Someone working the filter. The screen holds, but a person trying
+    // repeatedly is telling you what they intend to do the moment it slips.
+    const refusedRows = (refusedRes.error ? [] : (refusedRes.data ?? [])) as Array<{
+      user_id: string;
+    }>;
+    const refusedByUser = new Map<string, number>();
+    for (const r of refusedRows) {
+      refusedByUser.set(r.user_id, (refusedByUser.get(r.user_id) ?? 0) + 1);
+    }
+    const persistent = [...refusedByUser.values()].filter((n) => n >= 3).length;
+    if (refusedRows.length > 0) {
+      alerts.push({
+        severity: persistent > 0 ? "red" : "amber",
+        title:
+          persistent > 0
+            ? `${persistent} member${persistent === 1 ? "" : "s"} repeatedly tried refused names`
+            : `${refusedRows.length} name${refusedRows.length === 1 ? "" : "s"} refused this week`,
+        body:
+          persistent > 0
+            ? "Three or more refusals each — the screen held, but that is someone working at it. Consider a name reset or a suspension."
+            : "The name screen refused these. Worth a look at what was tried.",
+        href: "#content",
+        action: "Review names",
+      });
+    }
+
     // Moderation skim: sharing is where a bad deck name reaches everyone.
-    const sharedThisWeek = sharedRes.count ?? 0;
+    // A pre-041 database has no shared_at: the query errors rather than
+    // returning zero, and a silent zero would read as "nothing to skim".
+    const sharedThisWeek = sharedRes.error ? 0 : (sharedRes.count ?? 0);
     if (sharedThisWeek > 0) {
       alerts.push({
         severity: "amber",

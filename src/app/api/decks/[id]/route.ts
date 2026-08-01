@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { isFreeTier } from "@/lib/credits";
-import { nameAllowed } from "@/lib/moderation";
+import { nameAllowed, recordNameAttempt } from "@/lib/moderation";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -101,12 +101,18 @@ export async function PATCH(req: Request, { params }: Params) {
     }
 
     const patch: Record<string, unknown> = {};
-    if (typeof body.shared === "boolean") patch.shared = body.shared;
+    if (typeof body.shared === "boolean") {
+      patch.shared = body.shared;
+      // Stamp WHEN it was shared, so the admin's weekly name-skim covers an
+      // old deck shared today — the case a created_at proxy misses entirely.
+      patch.sharedAt = body.shared ? new Date().toISOString() : null;
+    }
     if (body.name !== undefined) {
       if (typeof body.name !== "string" || !body.name.trim() || body.name.length > 100) {
         return NextResponse.json({ error: "Invalid deck name" }, { status: 400 });
       }
       const verdict = await nameAllowed("deck name", body.name);
+      recordNameAttempt(user.id, "deck name", body.name, verdict);
       if (!verdict.ok) {
         return NextResponse.json({ error: verdict.reason }, { status: 400 });
       }
@@ -154,6 +160,7 @@ export async function PATCH(req: Request, { params }: Params) {
     if (Object.keys(patch).length > 0) {
       const update: Record<string, unknown> = {};
       if ("shared" in patch) update.shared = patch.shared;
+      if ("sharedAt" in patch) update.shared_at = patch.sharedAt;
       if ("shareScope" in patch) update.share_scope = patch.shareScope;
       if ("name" in patch) update.name = patch.name;
       if ("strategy" in patch) update.strategy = patch.strategy;
@@ -165,6 +172,17 @@ export async function PATCH(req: Request, { params }: Params) {
         .eq("id", id)
         .eq("user_id", user.id)
         .select("id");
+      // Pre-migration-041 fallback: the stamp is a nicety, never a reason
+      // to fail someone's share.
+      if (error && /shared_at/i.test(error.message ?? "") && "shared_at" in update) {
+        delete update.shared_at;
+        ({ data, error } = await supabase
+          .from("decks")
+          .update(update)
+          .eq("id", id)
+          .eq("user_id", user.id)
+          .select("id"));
+      }
       // Pre-migration-006 fallback: retry without the suggestions column.
       if (error && /suggestions/i.test(error.message ?? "") && "suggestions" in update) {
         delete update.suggestions;
