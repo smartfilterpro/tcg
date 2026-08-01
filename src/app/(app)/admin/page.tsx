@@ -48,7 +48,16 @@ interface Analytics {
     checked: number;
     updated: number;
     unpriced: number;
-    suspicious: Array<{ id: string; name: string; old: number; next: number }>;
+    suspicious: Array<{
+      id: string;
+      name: string;
+      old: number;
+      next: number;
+      set?: string | null;
+      number?: string | null;
+      image?: string | null;
+      rarity?: string | null;
+    }>;
     pt?: {
       matched: number;
       unmatched: number;
@@ -1763,7 +1772,16 @@ function PriceRefreshPanel({
     checked: number;
     updated: number;
     unpriced: number;
-    suspicious: Array<{ id: string; name: string; old: number; next: number }>;
+    suspicious: Array<{
+      id: string;
+      name: string;
+      old: number;
+      next: number;
+      set?: string | null;
+      number?: string | null;
+      image?: string | null;
+      rarity?: string | null;
+    }>;
     pt?: {
       matched: number;
       unmatched: number;
@@ -1892,24 +1910,61 @@ function PriceRefreshPanel({
             back.
           </span>
           {current!.suspicious.map((s) => (
-            <div key={s.id} className="mt-1.5 flex flex-wrap items-center gap-2">
-              <span>
-                {s.name}: ${(s.old ?? 0).toFixed(2)} → ${(s.next ?? 0).toFixed(2)}
-              </span>
-              <button
-                className="btn-secondary px-2.5 py-0.5 text-[11px]"
-                disabled={holdBusy === s.id}
-                onClick={() => decideHold(s.id, "apply")}
-              >
-                Apply ${(s.next ?? 0).toFixed(2)}
-              </button>
-              <button
-                className="btn-secondary px-2.5 py-0.5 text-[11px]"
-                disabled={holdBusy === s.id}
-                onClick={() => decideHold(s.id, "keep")}
-              >
-                Keep ${(s.old ?? 0).toFixed(2)}
-              </button>
+            <div key={s.id} className="mt-2 flex items-start gap-2.5 border-t border-yellow-200/40 pt-2 first:border-t-0">
+              {/* The picture is the decision: "is 23¢ right for this card?"
+                  is answerable at a glance and unanswerable from a name. */}
+              <div className="aspect-[63/88] w-14 shrink-0 overflow-hidden rounded bg-black/20">
+                {s.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={artSrc(s.id, s.image)!} alt={s.name} className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-[10px] opacity-60">
+                    no art
+                  </div>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">
+                  {s.name}
+                  {s.number ? ` #${s.number}` : ""}
+                </div>
+                <div className="opacity-80">
+                  {[s.set, s.rarity].filter(Boolean).join(" · ") || "set unknown"}
+                </div>
+                <div className="mt-0.5">
+                  ${(s.old ?? 0).toFixed(2)} → <b>${(s.next ?? 0).toFixed(2)}</b>{" "}
+                  <span className="opacity-70">
+                    ({s.next > s.old ? "×" : "÷"}
+                    {(s.next > s.old ? s.next / Math.max(s.old, 0.01) : s.old / Math.max(s.next, 0.01)).toFixed(0)})
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  <button
+                    className="btn-secondary px-2.5 py-0.5 text-[11px]"
+                    disabled={holdBusy === s.id}
+                    onClick={() => decideHold(s.id, "apply")}
+                  >
+                    Apply ${(s.next ?? 0).toFixed(2)}
+                  </button>
+                  <button
+                    className="btn-secondary px-2.5 py-0.5 text-[11px]"
+                    disabled={holdBusy === s.id}
+                    onClick={() => decideHold(s.id, "keep")}
+                  >
+                    Keep ${(s.old ?? 0).toFixed(2)}
+                  </button>
+                  {/* Straight to the card's own row for anything the two
+                      numbers can't settle — finish, duplicate records. */}
+                  <a
+                    className="btn-secondary px-2.5 py-0.5 text-[11px]"
+                    href={`/?card=${encodeURIComponent(s.id)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open card
+                  </a>
+                </div>
+              </div>
             </div>
           ))}
         </div>
