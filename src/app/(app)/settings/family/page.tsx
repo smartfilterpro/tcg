@@ -226,6 +226,8 @@ export default function FamilyPage() {
       {incoming}
       {error && <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
+      <BoostRequests myRole={g.myRole} />
+
       <div className="mb-4 overflow-hidden rounded-[18px] border border-brand-line bg-brand-panel">
         <div className="hidden grid-cols-[1.6fr_0.8fr_1.1fr_1fr_1fr_40px] gap-3 border-b border-brand-line bg-brand-panel-alt px-5 py-3 font-mono text-[10.5px] uppercase tracking-[.08em] text-brand-ink4 sm:grid">
           <span>Trainer</span>
@@ -449,6 +451,121 @@ export default function FamilyPage() {
         controls (spending approvals, outside-trade approvals, weekly digest) arrive with those
         features.
       </p>
+    </div>
+  );
+}
+
+/** A kid asked for credits; a parent answers.
+ *
+ *  The child never reaches Stripe — approving opens checkout under the
+ *  PARENT's customer, so the card and the receipt are theirs, and the
+ *  credits land in the pool the child already spends from. */
+function BoostRequests({ myRole }: { myRole: "parent" | "kid" }) {
+  const [rows, setRows] = useState<Array<{
+    id: string;
+    pack: string;
+    credits: number;
+    price: string;
+    note: string | null;
+    status: string;
+    mine: boolean;
+    who: string;
+    created_at: string;
+  }> | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/family/boost-requests");
+      const json = await res.json();
+      if (res.ok) setRows(json.requests ?? []);
+    } catch {
+      setRows([]);
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function decide(id: string, action: "approve" | "decline" | "cancel") {
+    setBusy(id);
+    setError(null);
+    try {
+      const res = await fetch("/api/family/boost-requests", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't do that");
+      // Approving hands back a checkout url — the parent pays there.
+      if (json.url) window.location.href = json.url as string;
+      else await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't do that");
+    }
+    setBusy(null);
+  }
+
+  const pending = (rows ?? []).filter((r) => r.status === "pending");
+  if (!rows || pending.length === 0) return null;
+
+  return (
+    <div className="mb-4 rounded-[18px] border border-brand-line bg-white p-5">
+      <h3 className="m-0 mb-1 font-display text-[17px] font-bold">
+        Credit requests ({pending.length})
+      </h3>
+      <p className="m-0 mb-3 text-[13px] leading-[1.55] text-brand-ink3">
+        {myRole === "parent"
+          ? "Approving opens checkout on your card. The credits go into the shared pool, so everyone's caps still apply."
+          : "Waiting for a parent to say yes. Nothing is charged to you."}
+      </p>
+      <ul className="m-0 flex list-none flex-col gap-2 p-0">
+        {pending.map((r) => (
+          <li
+            key={r.id}
+            className="flex flex-wrap items-center gap-2 rounded-[14px] border border-brand-line px-3.5 py-2.5"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-[13.5px] font-medium">
+                {r.mine ? "You" : r.who} asked for {r.credits.toLocaleString()} credits ·{" "}
+                {r.price}
+              </div>
+              {r.note && <div className="text-[12.5px] text-brand-ink4">&ldquo;{r.note}&rdquo;</div>}
+            </div>
+            {myRole === "parent" ? (
+              <>
+                <button
+                  className="btn-primary text-sm"
+                  disabled={busy === r.id}
+                  onClick={() => decide(r.id, "approve")}
+                >
+                  {busy === r.id ? "Opening…" : `Approve · ${r.price}`}
+                </button>
+                <button
+                  className="btn-secondary text-sm"
+                  disabled={busy === r.id}
+                  onClick={() => decide(r.id, "decline")}
+                >
+                  Decline
+                </button>
+              </>
+            ) : (
+              r.mine && (
+                <button
+                  className="btn-secondary text-sm"
+                  disabled={busy === r.id}
+                  onClick={() => decide(r.id, "cancel")}
+                >
+                  Withdraw
+                </button>
+              )
+            )}
+          </li>
+        ))}
+      </ul>
+      {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
     </div>
   );
 }

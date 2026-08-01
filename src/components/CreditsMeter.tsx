@@ -72,6 +72,8 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
 
   const chosen = packs.find((p) => p.id === pack)!;
 
+  const [asked, setAsked] = useState(false);
+
   async function buy() {
     setBusy(true);
     setError(null);
@@ -82,6 +84,22 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
         body: JSON.stringify({ pack }),
       });
       const json = await res.json();
+      // A kid profile can't reach Stripe. Rather than dead-end them on that
+      // refusal, turn it into the ask — the parent decides on the family
+      // page, pays with their own card, and the credits land in the pool
+      // this child already spends from.
+      if (res.status === 403) {
+        const ask = await fetch("/api/family/boost-requests", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pack }),
+        });
+        const aj = await ask.json();
+        if (!ask.ok) throw new Error(aj.error || json.error || "Couldn't ask");
+        setAsked(true);
+        setBusy(false);
+        return;
+      }
       if (!res.ok) throw new Error(json.error || "Couldn't start the purchase");
       window.location.href = json.url as string;
     } catch (e) {
@@ -143,13 +161,20 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
             );
           })}
         </div>
-        <button
-          className="mt-3.5 w-full rounded-full bg-brand-ink px-4 py-[15px] text-[15.5px] font-medium text-brand-canvas transition-colors hover:bg-brand-accent disabled:opacity-50"
-          disabled={busy}
-          onClick={buy}
-        >
-          {busy ? "Opening checkout…" : `Buy ${chosen.credits} — ${chosen.price}`}
-        </button>
+        {asked ? (
+          <div className="mt-3.5 rounded-[14px] bg-brand-accent-tint px-4 py-3.5 text-center text-[13.5px] leading-[1.55] text-brand-ink2">
+            Asked! A parent will see it on the family page and can say yes. Nothing is
+            charged to you.
+          </div>
+        ) : (
+          <button
+            className="mt-3.5 w-full rounded-full bg-brand-ink px-4 py-[15px] text-[15.5px] font-medium text-brand-canvas transition-colors hover:bg-brand-accent disabled:opacity-50"
+            disabled={busy}
+            onClick={buy}
+          >
+            {busy ? "Opening checkout…" : `Buy ${chosen.credits} — ${chosen.price}`}
+          </button>
+        )}
         {error && <p className="mt-2 text-sm text-brand-negative">{error}</p>}
         <p className="mb-0 mt-2.5 text-center text-[11.5px] leading-[1.5] text-brand-ink5">
           {BOOSTS_NOTE} One-off charge, no subscription change. Credits are added straight away
