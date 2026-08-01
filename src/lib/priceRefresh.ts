@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getCardById } from "@/lib/pokemontcg";
 import { getTcgdexPriceById } from "@/lib/tcgdex";
@@ -30,12 +31,14 @@ export interface PriceRefreshSummary {
   suspicious: Array<{
     id: string;
     name: string;
-    old: number;
-    next: number;
+    /** Printing details, topped up at read time when a stale run left
+     *  them blank — a name and two numbers can't settle a price. */
     set?: string | null;
     number?: string | null;
     image?: string | null;
     rarity?: string | null;
+    old: number;
+    next: number;
   }>;
   /** PokeTrace source stats (present only when POKETRACE_API_KEY is set). */
   pt?: {
@@ -272,6 +275,47 @@ export async function refreshStalePrices(
   return summary;
 }
 
+/** Fill in a held card's picture and printing details.
+ *
+ *  The held list is written by the run that flagged it, and runs from
+ *  before those fields existed left rows carrying nothing but a name and
+ *  two numbers — which is exactly the information you cannot decide a price
+ *  from. Rather than migrate the stored blobs, top them up at read time
+ *  from the cards table, which is the source of truth anyway and may have
+ *  gained artwork since the flag was raised. */
+async function enrichSuspicious(
+  admin: SupabaseClient,
+  rows: PriceRefreshSummary["suspicious"]
+): Promise<PriceRefreshSummary["suspicious"]> {
+  const needy = rows.filter((r) => r.id && (!r.image || !r.set));
+  if (needy.length === 0) return rows;
+  const { data } = await admin
+    .from("cards")
+    .select("id, name, number, set_name, rarity, image_small")
+    .in("id", needy.map((r) => r.id));
+  type Row = {
+    id: string;
+    name: string;
+    number: string | null;
+    set_name: string | null;
+    rarity: string | null;
+    image_small: string | null;
+  };
+  const byId = new Map(((data ?? []) as unknown as Row[]).map((c) => [c.id, c]));
+  return rows.map((r) => {
+    const c = byId.get(r.id);
+    if (!c) return r;
+    return {
+      ...r,
+      name: r.name || c.name,
+      set: r.set ?? c.set_name,
+      number: r.number ?? c.number,
+      rarity: r.rarity ?? c.rarity,
+      image: r.image ?? c.image_small,
+    };
+  });
+}
+
 /** Read the last run's summary (null if never ran / table missing). */
 export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
   try {
@@ -291,7 +335,10 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
       checked: value.checked ?? 0,
       updated: value.updated ?? 0,
       unpriced: value.unpriced ?? 0,
-      suspicious: Array.isArray(value.suspicious) ? value.suspicious : [],
+      suspicious: await enrichSuspicious(
+        admin,
+        Array.isArray(value.suspicious) ? value.suspicious : []
+      ),
       pt: value.pt ?? null,
       textWarmed: value.textWarmed ?? 0,
       ...(value.error ? { error: value.error } : {}),

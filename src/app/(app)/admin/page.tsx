@@ -245,6 +245,16 @@ export default function AdminPage() {
       }
     };
     apply();
+    // A ?cardq= link (from a held-price row) lands on the catalogue tab
+    // with that card already searched — the point of the link is to SEE
+    // the card, so it must arrive showing it.
+    const cardq = new URLSearchParams(window.location.search).get("cardq");
+    if (cardq) {
+      setTab("catalogue");
+      setReviewSearchDraft(cardq);
+      setReviewQuery(cardq);
+      loadReview(cardq);
+    }
     // Live, not just on mount: the dashboard's "Needs a human" buttons are
     // plain #tab links, and they should switch the tab when clicked.
     window.addEventListener("hashchange", apply);
@@ -1953,15 +1963,15 @@ function PriceRefreshPanel({
                   >
                     Keep ${(s.old ?? 0).toFixed(2)}
                   </button>
-                  {/* Straight to the card's own row for anything the two
-                      numbers can't settle — finish, duplicate records. */}
+                  {/* Straight to the catalogue search for anything the two
+                      numbers can't settle — wrong art, duplicate records.
+                      The collection page can't show a card nobody owns, so
+                      this goes to the admin's own card search instead. */}
                   <a
                     className="btn-secondary px-2.5 py-0.5 text-[11px]"
-                    href={`/?card=${encodeURIComponent(s.id)}`}
-                    target="_blank"
-                    rel="noreferrer"
+                    href={`/admin?cardq=${encodeURIComponent(s.name)}#catalogue`}
                   >
-                    Open card
+                    Find in catalogue
                   </a>
                 </div>
               </div>
