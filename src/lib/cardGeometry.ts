@@ -1021,7 +1021,7 @@ function scanBorder(
   border: [number, number, number],
   thr: number,
   dir: "left" | "right" | "top" | "bottom"
-): { widths: number[]; tried: number } {
+): { widths: number[]; tried: number; startMedian: number } {
   const horizontal = dir === "left" || dir === "right";
   const along = horizontal ? card.height : card.width;
   const across = horizontal ? card.width : card.height;
@@ -1111,7 +1111,80 @@ function scanBorder(
     const w = l.end - startMedian;
     if (w > 0) widths.push(w);
   }
-  return { widths, tried };
+  return { widths, tried, startMedian: lines.length > 0 ? startMedian : -1 };
+}
+
+/** The inner frame boundary, found as a line rather than a colour change.
+ *
+ *  The colour-walk above ends each scan line at the first place border
+ *  colour stops matching — which is the copyright text on bottoms, glare on
+ *  holos, and a pale name banner's whim on tops. But the FRAME is a printed
+ *  straight line: in a rectified card it sits at one depth on every scan
+ *  line. So instead of asking each line where it first wavered, aggregate
+ *  the colour gradient across all lines at each depth and take the first
+ *  strong aligned spike past the border's minimum width. Text and glare
+ *  spike on a few lines at scattered depths and average out; the frame
+ *  spikes everywhere at once. */
+function frameEdgeDepth(
+  card: RGBAImage,
+  dir: "left" | "right" | "top" | "bottom",
+  start: number,
+  minDepth: number,
+  maxDepth: number
+): { depth: number; support: number } | null {
+  const horizontal = dir === "left" || dir === "right";
+  const along = horizontal ? card.height : card.width;
+  const across = horizontal ? card.width : card.height;
+  const at = (d: number, a: number): [number, number, number] => {
+    const pos = dir === "left" || dir === "top" ? d : across - 1 - d;
+    return horizontal ? px(card, pos, a) : px(card, a, pos);
+  };
+
+  const lo = Math.max(start + minDepth, 3);
+  const hi = Math.min(maxDepth, across - 3);
+  if (hi - lo < 6) return null;
+
+  const as: number[] = [];
+  for (let a = Math.floor(along * 0.18); a < along * 0.82; a += 2) as.push(a);
+  if (as.length < 20) return null;
+
+  // Aggregate gradient magnitude per depth, over a ±2px baseline so a
+  // 1px anti-aliased frame stroke still registers.
+  const g: number[] = new Array(hi - lo).fill(0);
+  for (const a of as) {
+    for (let d = lo; d < hi; d++) {
+      g[d - lo] += colorDist(at(d - 2, a), at(d + 2, a));
+    }
+  }
+  // Light smoothing: the frame's spike survives, single-depth noise doesn't.
+  const sm = g.map((_, i) => (g[i - 1] ?? g[i]) * 0.25 + g[i] * 0.5 + (g[i + 1] ?? g[i]) * 0.25);
+  const gmax = Math.max(...sm);
+  const gmed = [...sm].sort((x, y) => x - y)[Math.floor(sm.length / 2)];
+  // No spike worth the name → no frame found here; let the caller fall back.
+  if (gmax < gmed * 2.2 || gmax <= 0) return null;
+
+  // The NEAREST strong aligned edge is the frame — deeper strong edges are
+  // artwork. Walk outward-in and take the first local peak near the max.
+  let depth = -1;
+  for (let i = 1; i < sm.length - 1; i++) {
+    if (sm[i] >= gmax * 0.72 && sm[i] >= sm[i - 1] && sm[i] >= sm[i + 1]) {
+      depth = lo + i;
+      break;
+    }
+  }
+  if (depth < 0) return null;
+
+  // Support: how many individual lines actually change colour at this depth.
+  // Aligned support is the whole argument — demand it line by line.
+  let support = 0;
+  for (const a of as) {
+    let local = 0;
+    for (let d = depth - 2; d <= depth + 2; d++) {
+      local = Math.max(local, colorDist(at(d - 2, a), at(d + 2, a)));
+    }
+    if (local >= 40) support++;
+  }
+  return { depth, support };
 }
 
 /** One axis, measured only if both of its edges agree with themselves.
@@ -1134,7 +1207,29 @@ function measureAxis(
   // is the right way round.
   const minBorder = span * 0.018;
   const sides = [dirA, dirB].map((dir) => {
-    const { widths } = scanBorder(card, border, thr, dir);
+    const { widths, startMedian } = scanBorder(card, border, thr, dir);
+
+    // First choice: the inner frame line itself. One straight printed line,
+    // found by aligned gradient across all scan lines — immune to the
+    // copyright text, holo glare, and pale banners that end a colour walk
+    // early or late. The colour walk below remains the fallback for cards
+    // whose frame is soft (watercolour full-bleeds, worn borders).
+    if (startMedian >= 0) {
+      const frame = frameEdgeDepth(
+        card,
+        dir,
+        startMedian,
+        Math.floor(minBorder),
+        Math.floor(span * 0.3)
+      );
+      if (frame && frame.support >= 20) {
+        const w = frame.depth - startMedian;
+        if (w >= minBorder && w <= span * 0.3) {
+          return { dir, m: w, mad: 0, n: frame.support };
+        }
+      }
+    }
+
     let m = median(widths);
     let mad = median(widths.map((w) => Math.abs(w - m)));
     let n = widths.length;
@@ -1202,6 +1297,15 @@ function measureAxis(
   const aPct = Math.round((a / (a + b)) * 100);
   const pct: [number, number] = [aPct, 100 - aPct];
   const worst = Math.max(pct[0], pct[1]);
+  // Past 85/15 the likelier story is a misread line (a text-box rule taken
+  // for the frame) than a card actually cut that badly — and a confident
+  // wrong ratio is worse than none, because it caps the grade.
+  if (worst > 85) {
+    return {
+      measure: null,
+      note: `The ${axisName} measurement came out wildly lopsided (${pct[0]}/${pct[1]}), which is more likely a misread frame line than a real border — judged by eye instead.`,
+    };
+  }
   return {
     measure: { a, b, pct, cap: back ? centeringCapBack(worst) : centeringCap(worst) },
     note: null,

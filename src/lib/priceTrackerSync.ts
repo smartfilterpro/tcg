@@ -30,6 +30,7 @@
 // per-minute limit instead of one per card.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { cleanCardName, numberKey } from "@/lib/pokemontcg";
 import { budgetState, priceTrackerEnabled, ptFetch } from "@/lib/priceTracker";
@@ -316,6 +317,65 @@ export function patchFor(ours: OurCard, theirs: TheirCard): Patch | null {
 }
 
 /* ------------------------------------------------------------------- run */
+
+/* ------------------------------------------------------------- background */
+
+// The sync runs itself now, same rail as the price refresher and the art
+// mirror: a self-scheduling loop on the long-lived server with an
+// app_state claim so two instances can't double-run. While a pass is
+// unfinished it walks a slice of sets every few minutes (in-process, so
+// no proxy timeout — bigger slices than the admin panel's); once a pass
+// completes it rests ~20 hours, then starts over, because upstream
+// refreshes prices daily and a finished pass is only fresh for a day.
+// The admin panel keeps working exactly as before — same persisted state,
+// so a manual run and the loop pick up each other's progress.
+
+const LOOP_CLAIM_KEY = "pt_sync_loop";
+const LOOP_TICK_MS = 10 * 60_000;
+const LOOP_HOT_GAP_MS = 7 * 60_000;
+const LOOP_REST_GAP_MS = 20 * 3600_000;
+
+export function startPriceSyncLoop() {
+  const tick = async () => {
+    try {
+      if (!priceTrackerEnabled()) return;
+      const admin = createAdminClient();
+      const current = await readSyncState(admin);
+      // Rest once a pass is done; run hot while sets remain. A brand-new
+      // install (no state) counts as work to do.
+      const gap = current?.done ? LOOP_REST_GAP_MS : LOOP_HOT_GAP_MS;
+      const cutoff = new Date(Date.now() - gap).toISOString();
+      await admin
+        .from("app_state")
+        .upsert({ key: LOOP_CLAIM_KEY }, { onConflict: "key", ignoreDuplicates: true })
+        .then(() => {});
+      const { data: claimed, error } = await admin
+        .from("app_state")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("key", LOOP_CLAIM_KEY)
+        .lt("updated_at", cutoff)
+        .select("key");
+      if (error || !claimed || claimed.length === 0) return;
+
+      const state = await runPriceSync(admin, {
+        maxSets: 10,
+        // A finished pass restarts to keep prices daily-fresh.
+        restart: current?.done === true,
+      });
+      if (state.cardsSeen > 0 || state.error) {
+        console.log(
+          `price sync loop: set ${state.setIndex}, ${state.pricesFilled} prices, ` +
+            `${state.cardsAdded} added${state.rateLimited ? " — rate limited, will resume" : ""}` +
+            (state.error ? ` — ERROR: ${state.error}` : "")
+        );
+      }
+    } catch (err) {
+      console.error("price sync loop error", err);
+    }
+  };
+  setTimeout(tick, 3 * 60_000);
+  setInterval(tick, LOOP_TICK_MS);
+}
 
 export interface SyncOptions {
   /** Stop after this many sets, so one invocation stays inside a request. */

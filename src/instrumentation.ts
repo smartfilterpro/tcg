@@ -7,5 +7,7 @@ export async function register() {
     startPriceRefreshLoop();
     const { startArtMirrorLoop } = await import("@/lib/artMirror");
     startArtMirrorLoop();
+    const { startPriceSyncLoop } = await import("@/lib/priceTrackerSync");
+    startPriceSyncLoop();
   }
 }
