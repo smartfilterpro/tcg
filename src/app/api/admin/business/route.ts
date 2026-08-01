@@ -21,7 +21,7 @@ export async function GET() {
     const d30 = new Date(now - 30 * 86400_000).toISOString();
     const m7 = new Date(now - 7 * 30 * 86400_000).toISOString();
 
-    const [profilesRes, usageRes, ledgerRes, boostsRes, scansRes, ticketsRes, stateRes, sharedRes] =
+    const [profilesRes, usageRes, ledgerRes, boostsRes, scansRes, ticketsRes, stateRes, sharedRes, refusedRes] =
       await Promise.all([
         fetchAllRows(() =>
           admin.from("profiles").select("id, email, display_name, plan, role, created_at").order("id")
@@ -69,6 +69,14 @@ export async function GET() {
           .select("id", { count: "exact", head: true })
           .eq("shared", true)
           .gte("shared_at", new Date(Date.now() - 7 * 86400_000).toISOString()),
+        // Names refused by the screen this week (migration 042). Repeated
+        // refusals from one person is the clearest statement of intent the
+        // system ever gets — one is a typo, eight is a project.
+        admin
+          .from("name_audit")
+          .select("user_id")
+          .eq("allowed", false)
+          .gte("created_at", new Date(Date.now() - 7 * 86400_000).toISOString()),
       ]);
     const stateByKey = new Map(
       ((stateRes.data ?? []) as Array<{ key: string; value: unknown }>).map((r) => [r.key, r.value])
@@ -322,6 +330,32 @@ export async function GET() {
           "Failed cards stay hotlinked and are retried on a later sweep.",
         href: "#catalogue",
         action: "Check mirror",
+      });
+    }
+
+    // Someone working the filter. The screen holds, but a person trying
+    // repeatedly is telling you what they intend to do the moment it slips.
+    const refusedRows = (refusedRes.error ? [] : (refusedRes.data ?? [])) as Array<{
+      user_id: string;
+    }>;
+    const refusedByUser = new Map<string, number>();
+    for (const r of refusedRows) {
+      refusedByUser.set(r.user_id, (refusedByUser.get(r.user_id) ?? 0) + 1);
+    }
+    const persistent = [...refusedByUser.values()].filter((n) => n >= 3).length;
+    if (refusedRows.length > 0) {
+      alerts.push({
+        severity: persistent > 0 ? "red" : "amber",
+        title:
+          persistent > 0
+            ? `${persistent} member${persistent === 1 ? "" : "s"} repeatedly tried refused names`
+            : `${refusedRows.length} name${refusedRows.length === 1 ? "" : "s"} refused this week`,
+        body:
+          persistent > 0
+            ? "Three or more refusals each — the screen held, but that is someone working at it. Consider a name reset or a suspension."
+            : "The name screen refused these. Worth a look at what was tried.",
+        href: "#content",
+        action: "Review names",
       });
     }
 

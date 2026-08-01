@@ -922,6 +922,10 @@ export default function AdminPage() {
             <h2 className="mb-2 font-display text-[17px] font-bold">🛡️ Shared decks</h2>
             <SharedDecksPanel />
           </div>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🔤 Name checks</h2>
+            <NameAuditPanel />
+          </div>
           <p className="text-xs leading-[1.6] text-brand-ink5">
             Trade board moderation lives on the Trades page — as admin you see &ldquo;Remove
             (admin)&rdquo; on every post and an ✕ on every reply. Per-member switches (block
@@ -2891,6 +2895,107 @@ function CsvLoadPanel() {
         </div>
       )}
       {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
+    </div>
+  );
+}
+
+/** What people tried to call themselves and their decks.
+ *
+ *  The AI screen is prevention and this is detection. Both halves matter:
+ *  refusals show who is working at the filter, and acceptances are what a
+ *  human skims — the screen fails open on purpose, so "allowed" is not the
+ *  same as "checked by someone". */
+function NameAuditPanel() {
+  const [rows, setRows] = useState<Array<{
+    id: string;
+    userId: string;
+    who: string;
+    kind: string;
+    attempted: string;
+    allowed: boolean;
+    reason: string | null;
+    at: string;
+    strikes: number;
+  }> | null>(null);
+  const [refusedOnly, setRefusedOnly] = useState(true);
+  const [migrated, setMigrated] = useState(true);
+
+  const load = useCallback(async (refused: boolean) => {
+    try {
+      const res = await fetch(`/api/admin/name-audit${refused ? "?refused=1" : ""}`);
+      const json = await res.json();
+      if (res.ok) {
+        setRows(json.rows ?? []);
+        setMigrated(json.migrated !== false);
+      }
+    } catch {
+      setRows([]);
+    }
+  }, []);
+  useEffect(() => {
+    load(refusedOnly);
+  }, [load, refusedOnly]);
+
+  if (!migrated) {
+    return (
+      <p className="m-0 text-xs text-brand-warning">
+        Name monitoring needs a database update — run{" "}
+        <code>supabase/migrations/042_name_audit.sql</code>.
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+        Every username and deck name people have tried. The screen refuses the obvious, but
+        it fails open by design — so what it ALLOWED is the half worth skimming. Repeated
+        refusals from one person are flagged: the screen held, but that is someone working
+        at it, and the answer is a name reset or a suspension on the Members tab.
+      </p>
+      <div className="mb-2 flex gap-2">
+        <button
+          className={refusedOnly ? "btn-primary text-sm" : "btn-secondary text-sm"}
+          onClick={() => setRefusedOnly(true)}
+        >
+          Refused
+        </button>
+        <button
+          className={!refusedOnly ? "btn-primary text-sm" : "btn-secondary text-sm"}
+          onClick={() => setRefusedOnly(false)}
+        >
+          Everything
+        </button>
+      </div>
+      {rows == null ? (
+        <p className="m-0 text-xs text-brand-ink4">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="m-0 text-xs text-brand-ink4">
+          {refusedOnly ? "Nothing has been refused. 🎉" : "No name changes recorded yet."}
+        </p>
+      ) : (
+        <ul className="m-0 flex max-h-72 list-none flex-col gap-1 overflow-y-auto p-0">
+          {rows.map((r) => (
+            <li key={r.id} className="rounded border border-brand-line-soft px-2 py-1.5 text-xs">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className={r.allowed ? "text-brand-positive" : "text-brand-negative"}>
+                  {r.allowed ? "allowed" : "refused"}
+                </span>
+                <span className="font-mono">&ldquo;{r.attempted}&rdquo;</span>
+                <span className="opacity-70">
+                  {r.kind} · {r.who} · {formatLastLogin(r.at)}
+                </span>
+                {r.strikes >= 3 && (
+                  <span className="chip bg-red-100 text-red-700">
+                    {r.strikes} refused this week
+                  </span>
+                )}
+              </div>
+              {r.reason && <div className="opacity-70">{r.reason}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

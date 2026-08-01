@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { isFreeTier } from "@/lib/credits";
-import { nameAllowed } from "@/lib/moderation";
+import { nameAllowed, recordNameAttempt } from "@/lib/moderation";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -112,6 +112,7 @@ export async function PATCH(req: Request, { params }: Params) {
         return NextResponse.json({ error: "Invalid deck name" }, { status: 400 });
       }
       const verdict = await nameAllowed("deck name", body.name);
+      recordNameAttempt(user.id, "deck name", body.name, verdict);
       if (!verdict.ok) {
         return NextResponse.json({ error: verdict.reason }, { status: 400 });
       }

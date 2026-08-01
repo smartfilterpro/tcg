@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { isFreeTier } from "@/lib/credits";
 import { FREE_DECK_LIMIT } from "@/lib/limits";
-import { nameAllowed } from "@/lib/moderation";
+import { nameAllowed, recordNameAttempt } from "@/lib/moderation";
 import type { DeckCardEntry, DeckSuggestion } from "@/lib/types";
 
 export async function GET() {
@@ -38,6 +38,7 @@ export async function POST(req: Request) {
     // Deck names show on the Friends page when shared — screened at save,
     // not at share, so an inappropriate name never sits waiting to be shared.
     const verdict = await nameAllowed("deck name", body.name);
+    recordNameAttempt(user.id, "deck name", body.name, verdict);
     if (!verdict.ok) {
       return NextResponse.json({ error: verdict.reason }, { status: 400 });
     }
