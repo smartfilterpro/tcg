@@ -61,13 +61,14 @@ export async function GET() {
           .from("app_state")
           .select("key, value")
           .in("key", ["price_refresh", "card_import", "art_mirror"]),
-        // Decks newly shared this week (proxied by creation date — sharing
-        // itself isn't timestamped), for the moderation skim alert.
+        // Decks newly shared this week, by when sharing was switched on
+        // (migration 041) — an old deck shared today counts, which is the
+        // case the previous created_at proxy missed entirely.
         admin
           .from("decks")
           .select("id", { count: "exact", head: true })
           .eq("shared", true)
-          .gte("created_at", new Date(Date.now() - 7 * 86400_000).toISOString()),
+          .gte("shared_at", new Date(Date.now() - 7 * 86400_000).toISOString()),
       ]);
     const stateByKey = new Map(
       ((stateRes.data ?? []) as Array<{ key: string; value: unknown }>).map((r) => [r.key, r.value])
@@ -325,7 +326,9 @@ export async function GET() {
     }
 
     // Moderation skim: sharing is where a bad deck name reaches everyone.
-    const sharedThisWeek = sharedRes.count ?? 0;
+    // A pre-041 database has no shared_at: the query errors rather than
+    // returning zero, and a silent zero would read as "nothing to skim".
+    const sharedThisWeek = sharedRes.error ? 0 : (sharedRes.count ?? 0);
     if (sharedThisWeek > 0) {
       alerts.push({
         severity: "amber",
