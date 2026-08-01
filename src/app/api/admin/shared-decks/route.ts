@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireAdmin, AuthError } from "@/lib/auth";
+import { requireModerator, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 // Moderation over shared decks — the deck names every member can see on the
@@ -11,7 +11,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 /** GET: every shared deck, newest first, with its owner. */
 export async function GET() {
   try {
-    await requireAdmin();
+    await requireModerator();
     const admin = createAdminClient();
     const { data: decks, error } = await admin
       .from("decks")
@@ -52,7 +52,7 @@ export async function GET() {
 /** POST { action: "rename"|"unshare", deckId, name? } */
 export async function POST(req: Request) {
   try {
-    await requireAdmin();
+    await requireModerator();
     const body = (await req.json()) as { action?: string; deckId?: string; name?: string };
     if (!body.deckId || typeof body.deckId !== "string") {
       return NextResponse.json({ error: "Missing deckId" }, { status: 400 });

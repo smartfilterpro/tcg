@@ -64,7 +64,9 @@ export async function GET() {
         posts: [],
         myId: user.id,
         boardEnabled: false,
-        isAdmin: profile?.role === "admin",
+        // Moderators remove content too — the RLS policy says so (043),
+      // and a button the server would honour should be visible.
+      isAdmin: profile?.role === "admin" || profile?.role === "moderator",
       });
     }
     const supabase = await createClient();
@@ -133,7 +135,9 @@ export async function GET() {
       boardEnabled: true,
       // The Terms promise the administrator may remove any User Content;
       // this is the flag that puts the button where that promise lives.
-      isAdmin: profile?.role === "admin",
+      // Moderators remove content too — the RLS policy says so (043),
+      // and a button the server would honour should be visible.
+      isAdmin: profile?.role === "admin" || profile?.role === "moderator",
     });
   } catch (err) {
     return errorResponse(err);

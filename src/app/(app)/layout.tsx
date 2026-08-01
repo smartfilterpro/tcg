@@ -22,6 +22,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!auth) return <>{children}</>;
 
   const isAdmin = auth.profile?.role === "admin";
+  // Moderators get the Admin link too — the page itself shows them only the
+  // content tools, and every money or deletion route refuses them anyway.
+  const isStaff = isAdmin || auth.profile?.role === "moderator";
   const plan = auth.profile?.plan ?? "free";
   // The lock marks what the free plan doesn't include. Neither page hard-
   // blocks: both run on trial credits — the lock is the plan pitch, not a
@@ -42,7 +45,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     { label: "Grade", href: "/grade", locked },
     { label: "Friends", href: "/friends" },
     ...(TRADING_ENABLED ? [{ label: "Trades", href: "/trades" }] : []),
-    ...(isAdmin ? [{ label: "Admin", href: "/admin" }] : []),
+    ...(isStaff ? [{ label: "Admin", href: "/admin" }] : []),
   ];
 
   return (

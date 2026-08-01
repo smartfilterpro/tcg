@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireAdmin, AuthError } from "@/lib/auth";
+import { requireAdmin, requireModerator, AuthError } from "@/lib/auth";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -8,7 +8,11 @@ type Params = { params: Promise<{ id: string }> };
  *  Body: { aiBudgetUsd?, suspended? } */
 export async function PATCH(req: Request, { params }: Params) {
   try {
-    const { user } = await requireAdmin();
+    // Moderators reach this route, but only for the moderation fields. The
+    // money and irreversible ones are checked field by field below rather
+    // than by widening the gate — a new field added later defaults to
+    // being admin-only, which is the safe direction to be wrong in.
+    const { user, isAdmin } = await requireModerator();
     const { id } = await params;
     const { aiBudgetUsd, suspended, resetDisplayName, canShareDecks, canPostTrades, role } =
       (await req.json()) as {
@@ -26,9 +30,20 @@ export async function PATCH(req: Request, { params }: Params) {
       };
 
     const patch: Record<string, unknown> = {};
+    // Roles and AI budgets are admin work: one hands out power, the other
+    // spends money.
+    if (!isAdmin && (role !== undefined || aiBudgetUsd !== undefined)) {
+      return NextResponse.json(
+        { error: "Only an admin can change roles or AI budgets." },
+        { status: 403 }
+      );
+    }
     if (role !== undefined) {
-      if (role !== "admin" && role !== "member") {
-        return NextResponse.json({ error: "Role must be 'admin' or 'member'." }, { status: 400 });
+      if (role !== "admin" && role !== "moderator" && role !== "member") {
+        return NextResponse.json(
+          { error: "Role must be 'admin', 'moderator' or 'member'." },
+          { status: 400 }
+        );
       }
       if (id === user.id) {
         return NextResponse.json({ error: "You can't change your own role." }, { status: 400 });

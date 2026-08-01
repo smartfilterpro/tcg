@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireAdmin, AuthError } from "@/lib/auth";
+import { requireModerator, AuthError } from "@/lib/auth";
 import { estimateCostUsd } from "@/lib/usage";
 import { fetchAllRows } from "@/lib/fetchAll";
 
@@ -16,7 +16,7 @@ export interface UserUsage {
 /** GET: all users + pending invites + per-user AI usage (admin only). */
 export async function GET() {
   try {
-    await requireAdmin();
+    const { isAdmin } = await requireModerator();
     const admin = createAdminClient();
     const [{ data: profiles }, { data: invites }, { data: usageRows }] = await Promise.all([
       admin.from("profiles").select("*").order("created_at"),
@@ -77,11 +77,16 @@ export async function GET() {
     }
 
     const profileEmails = new Set((profiles ?? []).map((p) => p.email));
+    // A moderator gets the list to work from, not the spend behind it. AI
+    // cost per member is a business figure and none of a content role's
+    // business — the UI hides those columns, and this makes the data
+    // absent rather than merely unrendered.
     return NextResponse.json({
       users: profiles ?? [],
-      invites: (invites ?? []).filter((i) => !profileEmails.has(i.email)),
-      usage,
-      lastSignIn,
+      invites: isAdmin ? (invites ?? []).filter((i) => !profileEmails.has(i.email)) : [],
+      usage: isAdmin ? usage : {},
+      lastSignIn: isAdmin ? lastSignIn : {},
+      isAdmin,
     });
   } catch (err) {
     return errorResponse(err);
