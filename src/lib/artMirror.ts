@@ -41,9 +41,15 @@ const MIRROR_PER_BATCH = 20;
  *  the moment they do.
  *
  *  So the sweep works the owned set and the long tail stays hotlinked until
- *  it is actually wanted. Flip to false once storage is roomy (Supabase Pro
- *  is 100GB) to mirror the full catalogue again. */
-const OWNED_ONLY = true;
+ *  it is actually wanted.
+ *
+ *  NOW FALSE: on Supabase Pro the whole catalogue's artwork is ~3GB against
+ *  a 100GB allowance, which restores the actual goal — every card the app
+ *  can show is served from our own storage, including cards nobody owns yet
+ *  but that search, the deck builder's buy-list and TrainerAI all display.
+ *  Set back to true if storage ever gets tight; reclaimUnowned() is the
+ *  matching refund. */
+const OWNED_ONLY = false;
 
 const MAX_BYTES = 8_000_000;
 const MIN_BYTES = 1_000;
