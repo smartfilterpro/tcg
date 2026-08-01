@@ -4,6 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { numberKey } from "@/lib/pokemontcg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { tradingOff, TRADING_OFF_ERROR } from "@/lib/tradeBoard";
 
 export interface OfferLine {
   label: string;
@@ -154,6 +155,11 @@ export async function DELETE() {
  *  Body: { toUserId, give: OfferLine[], get: OfferLine[], message? } */
 export async function POST(req: Request) {
   try {
+    // Trading is paused product-wide (lib/features). Writes stop here;
+    // reads and admin removal still work, so nothing is stranded.
+    if (tradingOff()) {
+      return NextResponse.json({ error: TRADING_OFF_ERROR }, { status: 403 });
+    }
     const { user } = await requireUser();
     const body = (await req.json()) as {
       toUserId?: string;

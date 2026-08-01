@@ -30,9 +30,9 @@ const DIFFS = [
   },
   {
     tag: "COMMUNITY",
-    title: "Trades with people you know",
-    body: "Friends see what you have spare and what you're hunting. Offers, counters and a chat log — value estimates included so nobody gets fleeced.",
-    vs: "a marketplace full of strangers and shipping fees.",
+    title: "Play with people you know",
+    body: "Share a deck with a friend, borrow theirs for a battle, and browse each other's binders — with live value estimates on every card.",
+    vs: "a group chat full of screenshots.",
   },
 ];
 
@@ -237,7 +237,7 @@ export default function Landing({
                 to set up.
               </div>
               <div className="max-w-[82%] self-end rounded-[14px_14px_4px_14px] bg-brand-sunken px-[15px] py-3 text-[14.5px] leading-[1.5]">
-                Which of my cards should I trade away?
+                Which of my cards are worth grading?
               </div>
               <div className="flex items-center gap-2 pt-1">
                 <span className="font-mono text-[11px] text-brand-ink5">1–3 credits per reply</span>

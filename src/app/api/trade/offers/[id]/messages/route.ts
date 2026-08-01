@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { tradingOff, TRADING_OFF_ERROR } from "@/lib/tradeBoard";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -9,6 +10,11 @@ type Params = { params: Promise<{ id: string }> };
  *  messaging on declined/withdrawn trades (nothing left to discuss). */
 export async function POST(req: Request, { params }: Params) {
   try {
+    // Trading is paused product-wide (lib/features). Writes stop here;
+    // reads and admin removal still work, so nothing is stranded.
+    if (tradingOff()) {
+      return NextResponse.json({ error: TRADING_OFF_ERROR }, { status: 403 });
+    }
     const { user } = await requireUser();
     const { id } = await params;
     const { body } = (await req.json()) as { body?: string };

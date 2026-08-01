@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
-import { boardEnabled, BOARD_OFF_ERROR } from "@/lib/tradeBoard";
+import { boardEnabled, BOARD_OFF_ERROR, tradingOff, TRADING_OFF_ERROR } from "@/lib/tradeBoard";
 
 /** Lightweight card reference attached to a post, for showing pictures. */
 export interface PostCardRef {
@@ -144,6 +144,11 @@ export async function GET() {
  *  Body: { lookingFor, offering, lookingForCards?, offeringCards? } */
 export async function POST(req: Request) {
   try {
+    // Trading is paused product-wide (lib/features). Writes stop here;
+    // reads and admin removal still work, so nothing is stranded.
+    if (tradingOff()) {
+      return NextResponse.json({ error: TRADING_OFF_ERROR }, { status: 403 });
+    }
     const { user, profile } = await requireUser();
     if (!boardEnabled(profile)) {
       return NextResponse.json({ error: BOARD_OFF_ERROR }, { status: 403 });

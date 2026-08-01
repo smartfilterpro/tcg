@@ -10,6 +10,7 @@ import {
   type DeckCardEntry,
 } from "@/lib/types";
 import { AI_NAME } from "@/lib/branding";
+import { TRADING_ENABLED } from "@/lib/features";
 import { artSrc } from "@/lib/art";
 import { avatarColor, initialsFor } from "@/lib/avatar";
 import { formatFriendCode, friendLink, normalizeFriendCode } from "@/lib/friendCode";
@@ -369,8 +370,8 @@ export default function FriendsPage() {
         <div>
           <h1 className="font-display text-[26px] font-bold tracking-[-.025em]">Friends</h1>
           <p className="mt-[3px] max-w-[70ch] text-sm leading-[1.6] text-brand-ink3">
-            Members who share their collection show up here. Browse their binder, borrow a shared
-            deck for a battle, and work trades out card for card with {AI_NAME}.
+            Members who share their collection show up here. Browse their binder and borrow a
+            shared deck for a battle{TRADING_ENABLED ? `, and work trades out card for card with ${AI_NAME}` : ""}.
           </p>
         </div>
       )}
@@ -518,7 +519,7 @@ export default function FriendsPage() {
                       className="shrink-0 whitespace-nowrap rounded-full bg-brand-ink px-3.5 py-[7px] text-[12.5px] font-medium text-brand-canvas hover:bg-brand-ink2"
                       onClick={() => openTrade(f)}
                     >
-                      Browse &amp; trade
+                      {TRADING_ENABLED ? "Browse & trade" : "Browse binder"}
                     </button>
                   </div>
                 ))
@@ -582,6 +583,7 @@ export default function FriendsPage() {
           </div>
 
           <aside className="flex flex-col gap-3">
+            {TRADING_ENABLED && (
             <div className="rounded-[18px] border border-brand-line bg-white p-5">
               <div className="mb-[14px] flex items-center justify-between gap-3">
                 <span className="font-mono text-[10.5px] uppercase tracking-[.1em] text-brand-ink5">
@@ -634,6 +636,7 @@ export default function FriendsPage() {
                 )}
               </p>
             </div>
+            )}
 
             <PalsSection onPals={setPalIds} />
           </aside>
@@ -643,7 +646,9 @@ export default function FriendsPage() {
       {friend && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold">Trade with {friend.name}</h2>
+            <h2 className="text-lg font-bold">
+              {TRADING_ENABLED ? `Trade with ${friend.name}` : `${friend.name}'s binder`}
+            </h2>
             <button className="btn-secondary px-3 py-1.5 text-sm" onClick={() => setFriend(null)}>
               ← Back
             </button>
@@ -692,6 +697,7 @@ export default function FriendsPage() {
                     {offerNotice}
                   </div>
                 )}
+                {TRADING_ENABLED && (
                 <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
                   <input
                     className="input min-w-0 flex-1 text-sm"
@@ -708,6 +714,7 @@ export default function FriendsPage() {
                     {sendingOffer ? "Sending…" : "📨 Send trade request"}
                   </button>
                 </div>
+                )}
               </div>
 
               {/* Pickers */}

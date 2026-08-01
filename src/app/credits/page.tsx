@@ -26,7 +26,7 @@ export default function CreditsPage() {
       </h1>
       <p className="m-0 mb-7 text-[15px] leading-[1.6] text-brand-ink3">
         {AI_NAME} runs on credits. Everything that isn&apos;t an AI request — your collection,
-        decks, trades, battles, prices — costs nothing and keeps working whatever your balance
+        decks, grading, battles, prices — costs nothing and keeps working whatever your balance
         says.
       </p>
 

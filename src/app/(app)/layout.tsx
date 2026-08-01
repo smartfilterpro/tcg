@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { getUserAndProfile } from "@/lib/auth";
 import { APP_NAME, FAN_DISCLAIMER } from "@/lib/branding";
+import { TRADING_ENABLED } from "@/lib/features";
 import { FanMark, Wordmark } from "@/components/Logo";
 import HeaderCredits from "@/components/HeaderCredits";
 import AppNav from "@/components/AppNav";
@@ -40,7 +41,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     { label: "Battle", href: "/battles" },
     { label: "Grade", href: "/grade", locked },
     { label: "Friends", href: "/friends" },
-    { label: "Trades", href: "/trades" },
+    ...(TRADING_ENABLED ? [{ label: "Trades", href: "/trades" }] : []),
     ...(isAdmin ? [{ label: "Admin", href: "/admin" }] : []),
   ];
 

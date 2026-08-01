@@ -206,7 +206,7 @@ export default function CreditsMeter() {
               <>Your free credits are used up — they were a one-time grant.</>
             )}{" "}
             Everything except {AI_NAME} keeps working — you can still add cards by search, edit
-            decks and trade.
+            decks and battles.
           </p>
           <div className="flex flex-wrap gap-2">
             <button className="rounded-full bg-brand-ink px-[18px] py-[11px] text-sm font-medium text-brand-canvas" onClick={() => setBoost(true)}>
