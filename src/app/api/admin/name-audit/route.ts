@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireAdmin, AuthError } from "@/lib/auth";
+import { requireModerator, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /** GET ?refused=1 — what people have tried to call themselves and their
@@ -8,7 +8,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *  screen fails open by design. */
 export async function GET(req: Request) {
   try {
-    await requireAdmin();
+    await requireModerator();
     const refusedOnly = new URL(req.url).searchParams.get("refused") === "1";
     const admin = createAdminClient();
 

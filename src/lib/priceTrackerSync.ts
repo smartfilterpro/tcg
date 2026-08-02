@@ -53,6 +53,10 @@ export interface SyncState {
   pricesFilled: number;
   imagesFilled: number;
   idsFilled: number;
+  /** Printing details (rarity, type, HP, stage, set size) filled from the
+   *  same responses. Counted separately so it is visible that the credit is
+   *  buying more than a price. */
+  detailsFilled: number;
   skippedAmbiguous: number;
   /** How many of OUR cards were loaded into the match index. Zero here with
    *  a rising cardsSeen is the signature of a broken index, which is
@@ -84,6 +88,7 @@ export function freshSyncState(): SyncState {
     pricesFilled: 0,
     imagesFilled: 0,
     idsFilled: 0,
+    detailsFilled: 0,
     skippedAmbiguous: 0,
     indexedCards: 0,
     rateLimited: false,
@@ -134,6 +139,27 @@ export interface OurCard {
   image_small: string | null;
   image_locked: boolean | null;
   tcgplayer_id: string | null;
+  /** The printing details their record also carries. Selected so patchFor
+   *  can tell "we already know this" from "we have a hole here" — without
+   *  them every card looks full and the rest of a paid response is dropped. */
+  rarity: string | null;
+  supertype: string | null;
+  subtypes: string[] | null;
+  types: string[] | null;
+  hp: string | null;
+  set_printed_total: number | null;
+}
+
+/** Their card-type enum → our supertype. Their docs give it as
+ *  "Pokémon"/"Pokemon"/"Trainer"/"Energy" depending on the page, so this
+ *  normalises rather than trusts. Null for anything unrecognised: a guessed
+ *  supertype miscategorises a card everywhere it is read. */
+export function supertypeOf(cardType: string | null | undefined): string | null {
+  const t = (cardType ?? "").toLowerCase();
+  if (t.startsWith("pok")) return "Pokémon";
+  if (t.startsWith("train")) return "Trainer";
+  if (t.startsWith("energ")) return "Energy";
+  return null;
 }
 
 export interface TheirCard {
@@ -173,16 +199,7 @@ export function rowFromTheirs(
   const tcgId = (theirs.tcgPlayerId ?? "").trim();
   if (!name || !number || !tcgId) return null;
 
-  // Their enum is "Pokémon"/"Pokemon"/"Trainer"/"Energy" depending on which
-  // page of their docs you read; normalise rather than trust.
-  const rawType = (theirs.cardType ?? "").toLowerCase();
-  const supertype = rawType.startsWith("pok")
-    ? "Pokémon"
-    : rawType.startsWith("train")
-      ? "Trainer"
-      : rawType.startsWith("energ")
-        ? "Energy"
-        : null;
+  const supertype = supertypeOf(theirs.cardType);
 
   const market = typeof theirs.prices?.market === "number" ? theirs.prices.market : null;
   const image = theirs.imageCdnUrl800 ?? theirs.imageCdnUrl400 ?? theirs.imageCdnUrl ?? null;
@@ -267,6 +284,12 @@ export interface Patch {
   image_small?: string;
   image_large?: string;
   tcgplayer_id?: string;
+  rarity?: string;
+  supertype?: string;
+  subtypes?: string[];
+  types?: string[];
+  hp?: string;
+  set_printed_total?: number;
 }
 
 /** What, if anything, one of their cards adds to one of ours. Returns null
@@ -311,6 +334,48 @@ export function patchFor(ours: OurCard, theirs: TheirCard): Patch | null {
     patch.image_small = image;
     patch.image_large = image;
     useful = true;
+  }
+
+  // THE REST OF THE RECORD, which we were paying for and dropping.
+  //
+  // One credit buys the whole card, and this function used to read four
+  // fields off it. Everything below already exists as a column, already
+  // arrives in the same response, and costs nothing more to keep. Gap-fill
+  // only — a value we already hold is never overwritten, because ours comes
+  // from pokemontcg.io, which is the authority on how a card is printed.
+  if (!ours.rarity && typeof theirs.rarity === "string" && theirs.rarity.trim()) {
+    patch.rarity = theirs.rarity.trim();
+    useful = true;
+  }
+  if (!ours.supertype) {
+    const st = supertypeOf(theirs.cardType);
+    if (st) {
+      patch.supertype = st;
+      useful = true;
+    }
+  }
+  if (!ours.hp && typeof theirs.hp === "number" && theirs.hp > 0) {
+    patch.hp = String(theirs.hp);
+    useful = true;
+  }
+  if ((ours.types?.length ?? 0) === 0 && typeof theirs.pokemonType === "string" && theirs.pokemonType.trim()) {
+    patch.types = [theirs.pokemonType.trim()];
+    useful = true;
+  }
+  if ((ours.subtypes?.length ?? 0) === 0 && typeof theirs.stage === "string" && theirs.stage.trim()) {
+    patch.subtypes = [theirs.stage.trim()];
+    useful = true;
+  }
+  // The one that is worth more than it looks: set_printed_total is how the
+  // assistant decides whether our copy of a set is COMPLETE or whether it
+  // must say so. Without it, "what am I missing from this set?" is answered
+  // against an unknown denominator.
+  if (ours.set_printed_total == null) {
+    const total = Number((theirs.totalSetNumber ?? "").replace(/\D/g, ""));
+    if (Number.isFinite(total) && total > 0) {
+      patch.set_printed_total = total;
+      useful = true;
+    }
   }
 
   return useful ? patch : null;
@@ -439,7 +504,9 @@ export async function runPriceSync(
     const { data: ours, error: ourError } = await fetchAllRows<OurCard>(() =>
       admin
         .from("cards")
-        .select("id, name, number, set_name, market_price, prices, image_small, image_locked, tcgplayer_id")
+        .select(
+          "id, name, number, set_name, market_price, prices, image_small, image_locked, tcgplayer_id, rarity, supertype, subtypes, types, hp, set_printed_total"
+        )
         .order("id")
     );
     if (ourError) {
@@ -523,6 +590,15 @@ export async function runPriceSync(
                   image_small: row.image_small as string | null,
                   image_locked: false,
                   tcgplayer_id: row.tcgplayer_id as string,
+                  // rowFromTheirs already wrote these, so the index has to
+                  // carry them too — otherwise meeting the card again this
+                  // run reads them as holes and patches what it just set.
+                  rarity: row.rarity as string | null,
+                  supertype: row.supertype as string | null,
+                  subtypes: row.subtypes as string[],
+                  types: row.types as string[],
+                  hp: row.hp as string | null,
+                  set_printed_total: row.set_printed_total as number | null,
                 });
                 continue;
               }
@@ -551,6 +627,16 @@ export async function runPriceSync(
         if (fields.market_price != null) state.pricesFilled += 1;
         if (fields.image_small) state.imagesFilled += 1;
         if (fields.tcgplayer_id) state.idsFilled += 1;
+        if (
+          fields.rarity ||
+          fields.supertype ||
+          fields.hp ||
+          fields.types ||
+          fields.subtypes ||
+          fields.set_printed_total != null
+        ) {
+          state.detailsFilled += 1;
+        }
       }
 
       state.setIndex += 1;

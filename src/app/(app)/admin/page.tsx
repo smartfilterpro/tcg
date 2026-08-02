@@ -152,6 +152,8 @@ function formatTokens(n: number): string {
 
 export default function AdminPage() {
   const [users, setUsers] = useState<Profile[]>([]);
+  /** False for a moderator: content tools yes, money and deletion no. */
+  const [amAdmin, setAmAdmin] = useState(true);
   const [usage, setUsage] = useState<Record<string, UserUsage>>({});
   const [lastSignIn, setLastSignIn] = useState<Record<string, string | null>>({});
   const [message, setMessage] = useState<string | null>(null);
@@ -177,6 +179,9 @@ export default function AdminPage() {
       setError(json.error || "Failed to load (are you an admin?)");
     } else {
       setUsers(json.users);
+      // The route answers this: a moderator gets the list without the
+      // spend, and the UI drops the tools they can't use anyway.
+      setAmAdmin(json.isAdmin !== false);
       setUsage(json.usage ?? {});
       setLastSignIn(json.lastSignIn ?? {});
     }
@@ -235,6 +240,13 @@ export default function AdminPage() {
   // shared links keep it.
   type AdminTab = "analytics" | "members" | "content" | "catalogue" | "bulk" | "support";
   const [tab, setTab] = useState<AdminTab>("analytics");
+  // A moderator has no analytics tab; drop them on the one they came for.
+  useEffect(() => {
+    if (!amAdmin && (tab === "analytics" || tab === "catalogue" || tab === "bulk" || tab === "support")) {
+      setTab("content");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amAdmin]);
   useEffect(() => {
     const apply = () => {
       const h = window.location.hash.replace("#", "");
@@ -520,14 +532,19 @@ export default function AdminPage() {
 
       <div className="no-scrollbar flex gap-1 overflow-x-auto rounded-full bg-brand-sunken p-1">
         {(
-          [
-            ["analytics", "📊 Analytics"],
-            ["members", `👥 Members (${users.length})`],
-            ["content", "🛡️ Content"],
-            ["catalogue", `🎴 Catalogue${reviewRows.length > 0 ? ` (${reviewRows.length})` : ""}`],
-            ["bulk", "📦 Bulk scan"],
-            ["support", `🎫 Support (${tickets.filter((t) => t.status !== "resolved").length})`],
-          ] as Array<[AdminTab, string]>
+          (amAdmin
+            ? ([
+                ["analytics", "📊 Analytics"],
+                ["members", `👥 Members (${users.length})`],
+                ["content", "🛡️ Content"],
+                ["catalogue", `🎴 Catalogue${reviewRows.length > 0 ? ` (${reviewRows.length})` : ""}`],
+                ["bulk", "📦 Bulk scan"],
+                ["support", `🎫 Support (${tickets.filter((t) => t.status !== "resolved").length})`],
+              ] as Array<[AdminTab, string]>)
+            : ([
+                ["content", "🛡️ Content"],
+                ["members", `👥 Members (${users.length})`],
+              ] as Array<[AdminTab, string]>))
         ).map(([key, label]) => (
           <button
             key={key}
@@ -605,7 +622,7 @@ export default function AdminPage() {
                 >
                   {u.role}
                 </span>
-                {u.role !== "admin" && (
+                {amAdmin && u.role !== "admin" && (
                   <button
                     className="btn text-xs text-brand-ink4 hover:bg-slate-100"
                     onClick={() => setAiBudget(u)}
@@ -613,43 +630,50 @@ export default function AdminPage() {
                     AI limit
                   </button>
                 )}
-                <button
-                  className="btn text-xs text-brand-ink4 hover:bg-slate-100"
-                  onClick={() => resetPassword(u.id, u.email)}
-                >
-                  Reset password
-                </button>
+                {amAdmin && (
+                  <button
+                    className="btn text-xs text-brand-ink4 hover:bg-slate-100"
+                    onClick={() => resetPassword(u.id, u.email)}
+                  >
+                    Reset password
+                  </button>
+                )}
                 {/* Promote/demote. The server refuses your own row, so an
                     admin can never demote themselves into a lockout. */}
-                {u.role === "admin" ? (
+                {!amAdmin ? null : u.role === "admin" || u.role === "moderator" ? (
                   <button
                     className="btn text-xs text-yellow-700 hover:bg-yellow-50"
                     onClick={() => {
                       if (
                         confirm(
-                          `Remove admin from ${u.display_name || u.email}? They become a regular member — metered credits, no admin tools.`
+                          `Remove ${u.role} access from ${u.display_name || u.email}? They become a regular member.`
                         )
                       ) {
                         moderateUser(u, { role: "member" }, `${u.display_name || u.email} is now a member.`);
                       }
                     }}
                   >
-                    Remove admin
+                    Remove {u.role} access
                   </button>
                 ) : (
                   <button
                     className="btn text-xs text-brand-ink4 hover:bg-slate-100"
                     onClick={() => {
-                      if (
-                        confirm(
-                          `Make ${u.display_name || u.email} an admin? They get everything you have: unmetered AI, the whole admin page, member management (including suspending or removing members), moderation, and billing panels.`
-                        )
-                      ) {
-                        moderateUser(u, { role: "admin" }, `${u.display_name || u.email} is now an admin.`);
+                      const answer = prompt(
+                        `Give ${u.display_name || u.email} staff access.\n\n` +
+                          `Type "moderator" for content tools only — remove posts, rename shared decks, reset names, block sharing or trading, suspend.\n` +
+                          `Type "admin" for everything you have: billing, credits, the business view, member deletion.`,
+                        "moderator"
+                      );
+                      const role = (answer ?? "").trim().toLowerCase();
+                      if (role === "moderator" || role === "admin") {
+                        moderateUser(u, { role }, `${u.display_name || u.email} is now a ${role}.`);
+                      } else if (answer != null) {
+                        setError('Type "moderator" or "admin".');
                       }
                     }}
                   >
-                    Make admin
+                    Make staff
                   </button>
                 )}
                 {u.role !== "admin" && (
@@ -717,12 +741,14 @@ export default function AdminPage() {
                     >
                       {u.suspended === true ? "Unsuspend" : "Suspend"}
                     </button>
-                    <button
-                      className="btn text-xs text-red-600 hover:bg-red-50"
-                      onClick={() => removeUser(u.id, u.email)}
-                    >
-                      Remove
-                    </button>
+                    {amAdmin && (
+                      <button
+                        className="btn text-xs text-red-600 hover:bg-red-50"
+                        onClick={() => removeUser(u.id, u.email)}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -1804,6 +1830,9 @@ function PriceRefreshPanel({
       error?: string;
     } | null;
     textWarmed?: number;
+    freeArt?: number;
+    trackerPriced?: number;
+    trackerArt?: number;
     error?: string;
   } | null;
 }) {
@@ -1888,6 +1917,12 @@ function PriceRefreshPanel({
             Last run {new Date(current.ranAt).toLocaleString()}: checked {current.checked ?? 0},
             updated {current.updated ?? 0}
             {(current.unpriced ?? 0) > 0 && `, ${current.unpriced} had no price data`}
+            {(current.freeArt ?? 0) > 0 &&
+              `, ${current.freeArt} given artwork free from TCGdex`}
+            {(current.trackerPriced ?? 0) > 0 &&
+              `, ${current.trackerPriced} priced by the paid tracker`}
+            {(current.trackerArt ?? 0) > 0 &&
+              `, ${current.trackerArt} given artwork by it`}
             {(current.textWarmed ?? 0) > 0 && `, ${current.textWarmed} cards' text cached`}. Runs
             by itself about once a day, stalest cards first.
           </span>
@@ -2232,6 +2267,7 @@ function PriceSyncPanel() {
       pricesFilled: number;
       imagesFilled: number;
       idsFilled: number;
+      detailsFilled?: number;
       skippedAmbiguous: number;
       indexedCards: number;
       rateLimited: boolean;
@@ -2337,7 +2373,8 @@ function PriceSyncPanel() {
             <b>{(st.pricesFilled ?? 0).toLocaleString()} prices updated</b>,{" "}
             {(st.imagesFilled ?? 0).toLocaleString()} missing image
             {(st.imagesFilled ?? 0) === 1 ? "" : "s"} filled,{" "}
-            {(st.idsFilled ?? 0).toLocaleString()} ids filled
+            {(st.idsFilled ?? 0).toLocaleString()} ids filled,{" "}
+            {(st.detailsFilled ?? 0).toLocaleString()} card details filled
             {(st.cardsAdded ?? 0) > 0 && (
               <>
                 {" "}

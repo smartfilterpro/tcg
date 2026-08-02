@@ -406,13 +406,16 @@ export async function findCard(query: {
     const price =
       typeof card?.prices?.market === "number" ? card.prices.market : extractMarketPrice(json);
 
-    const value: PriceTrackerCard | null = images.length
-      ? {
-          images,
-          marketPrice: price,
-          tcgPlayerId: typeof card?.tcgPlayerId === "string" ? card.tcgPlayerId : null,
-        }
-      : null;
+    // A record counts as found if it carries ANYTHING we asked for. This
+    // used to require an image, which meant a card that came back priced but
+    // pictureless was reported as "not found" — the price thrown away, the
+    // miss cached for an hour, and the credit spent for nothing. Art and
+    // price are separate questions and a response can answer one of them.
+    const tcgPlayerId = typeof card?.tcgPlayerId === "string" ? card.tcgPlayerId : null;
+    const value: PriceTrackerCard | null =
+      images.length || price != null || tcgPlayerId
+        ? { images, marketPrice: price, tcgPlayerId }
+        : null;
     cache.set(key, { at: Date.now(), value });
     return value;
   } catch {
@@ -420,4 +423,46 @@ export async function findCard(query: {
     // hour, and the caller falls through to the next step regardless.
     return null;
   }
+}
+
+/** Everything one lookup can tell us about a card: price AND artwork.
+ *
+ *  One credit buys the whole card record, so reading only the price off it
+ *  — which is what this did at first — throws away the picture we already
+ *  paid for. Both come back from the same call; a card that needs either
+ *  gets both.
+ *
+ *  Returns nulls on anything unexpected: an absent price or image is the
+ *  status quo, and a wrong one is worse than none. */
+export async function priceTrackerCard(query: {
+  name: string;
+  setName?: string | null;
+  number?: string | null;
+}): Promise<{ market: number | null; image: string | null; tcgPlayerId: string | null }> {
+  try {
+    const card = await findCard(query);
+    if (!card) return { market: null, image: null, tcgPlayerId: null };
+    // findCard has already ranked the images and read the price off the
+    // documented fields; re-walking its return value would only re-derive
+    // what it just decided, less well.
+    return {
+      market: card.marketPrice,
+      image: card.images[0] ?? null,
+      // Their catalogue id, kept because it is the join key for every bulk
+      // dataset they publish and we have no other way to obtain one. It
+      // arrives free with a lookup we already paid for.
+      tcgPlayerId: card.tcgPlayerId,
+    };
+  } catch {
+    return { market: null, image: null, tcgPlayerId: null };
+  }
+}
+
+/** Price only, for callers that don't care about art. Same one credit. */
+export async function priceTrackerMarketPrice(query: {
+  name: string;
+  setName?: string | null;
+  number?: string | null;
+}): Promise<number | null> {
+  return (await priceTrackerCard(query)).market;
 }

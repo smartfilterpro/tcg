@@ -169,7 +169,7 @@ export interface Profile {
   id: string;
   email: string;
   display_name: string | null;
-  role: "admin" | "member";
+  role: "admin" | "moderator" | "member";
   /** Opt-in: collection visible to other members (for browsing & trades). */
   share_collection?: boolean;
   /** Monthly AI spend cap in USD (admins are never capped). */

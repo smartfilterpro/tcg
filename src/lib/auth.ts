@@ -42,6 +42,22 @@ export async function requireAdmin() {
   return result;
 }
 
+/** Admin OR moderator — content work only.
+ *
+ *  Deliberately a separate gate rather than a widened requireAdmin: every
+ *  route that touches money, roles or deletion keeps calling requireAdmin,
+ *  so adding a moderator can never quietly grant one of those. Returns the
+ *  role so a shared route can still tell the two apart (the member list,
+ *  for instance, hides spend from moderators). */
+export async function requireModerator() {
+  const result = await requireUser();
+  const role = result.profile?.role;
+  if (role !== "admin" && role !== "moderator") {
+    throw new AuthError("Moderators only", 403);
+  }
+  return { ...result, isAdmin: role === "admin" };
+}
+
 export class AuthError extends Error {
   status: number;
   constructor(message: string, status = 401) {

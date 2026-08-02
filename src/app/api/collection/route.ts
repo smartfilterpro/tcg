@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
+import { findTcgdexImage } from "@/lib/tcgdex";
 import { summaryToRow, type CardSummary, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 
@@ -143,9 +146,97 @@ export async function POST(req: Request) {
       added += w.qty;
     }
 
+    // 4) Fill gaps on anything that landed without a price or a picture.
+    //
+    // A scanned card takes whatever its catalogue row already holds, and
+    // for a card the free sources never covered that is nothing — no price
+    // and often no picture — until some sweep happened to reach its set,
+    // which for a new set is weeks. The paid tracker answers both in ONE
+    // credit, so the honest fix is to just ask, now, for the handful of
+    // cards that need it. Detached: nobody waits on this to save cards.
+    void fillMissing(cardIds);
+
     return NextResponse.json({ ok: true, added });
   } catch (err) {
     return errorResponse(err);
+  }
+}
+
+/** Fill in what freshly-saved cards are missing — price AND picture.
+ *
+ *  One lookup answers both, so a card missing either is worth the credit
+ *  and a card missing both costs no more than a card missing one. Capped:
+ *  a bulk save of 200 gap-ridden cards should not become 200 API calls in
+ *  one request; the rest fall to the nightly refresher, which runs the
+ *  same source.
+ *
+ *  Member photos and admin-locked art are never overwritten — same rule
+ *  the catalogue import and the price sync follow, for the same reason:
+ *  those exist precisely because the stock image was missing or wrong. */
+async function fillMissing(cardIds: string[]): Promise<void> {
+  try {
+    const admin = createAdminClient();
+    const { data: rows } = await admin
+      .from("cards")
+      .select("id, name, number, set_name, market_price, image_small, image_locked, tcgplayer_id")
+      .in("id", cardIds.slice(0, 200));
+    const needy = ((rows ?? []) as Array<{
+      id: string;
+      name: string;
+      number: string | null;
+      set_name: string | null;
+      market_price: number | null;
+      image_small: string | null;
+      image_locked: boolean | null;
+      tcgplayer_id: string | null;
+    }>)
+      .filter((c) => c.market_price == null || !c.image_small)
+      .slice(0, 25);
+    for (const card of needy) {
+      const patch: Record<string, unknown> = {};
+      const wantsArt = !card.image_small && card.image_locked !== true;
+
+      // FREE FIRST. TCGdex carries the promos and early sets that are
+      // exactly the cards arriving here with no picture, and asking costs
+      // nothing — so it goes ahead of the paid lookup rather than after it.
+      if (wantsArt) {
+        const free = await findTcgdexImage({ name: card.name, number: card.number });
+        if (free) {
+          patch.image_small = free;
+          patch.image_large = free;
+        }
+      }
+
+      // Then pay, and only for what's still missing. If the picture came
+      // free and the price is already known, this call never happens.
+      const stillNeedsArt = wantsArt && !patch.image_small;
+      if ((card.market_price == null || stillNeedsArt) && priceTrackerEnabled()) {
+        const found = await priceTrackerCard({
+          name: card.name,
+          setName: card.set_name,
+          number: card.number,
+        });
+        if (card.market_price == null && found.market != null) {
+          patch.market_price = found.market;
+          patch.price_updated_at = new Date().toISOString();
+        }
+        if (stillNeedsArt && found.image) {
+          patch.image_small = found.image;
+          patch.image_large = found.image;
+        }
+        // Their catalogue id rides along on the same credit. It is the join
+        // key for their bulk datasets, and we have no other source for it.
+        if (found.tcgPlayerId && !card.tcgplayer_id) {
+          patch.tcgplayer_id = found.tcgPlayerId;
+        }
+      }
+
+      if (Object.keys(patch).length > 0) {
+        await admin.from("cards").update(patch).eq("id", card.id).then(() => {});
+      }
+    }
+  } catch {
+    // A gap is the status quo, not a reason to shout.
   }
 }
 
