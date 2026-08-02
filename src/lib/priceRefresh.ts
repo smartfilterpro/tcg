@@ -150,10 +150,25 @@ export async function refreshStalePrices(
     await Promise.all(
       queue.slice(i, i + BATCH).map(async (card) => {
         try {
-          // PokeTrace first (when configured): id cached on the card after
-          // the one-time search, so steady state is one request per card.
+          // PokeTrace is LAST-ISH, and only where it adds something.
+          //
+          // It used to run first, for every card. That was backwards on two
+          // counts: its free tier paces one request per two seconds, so it
+          // was the wall-clock cost of the entire run (80 requests = nearly
+          // three minutes of waiting), and it spent a scarce 250-a-day
+          // budget on cards pokemontcg.io prices for free and instantly.
+          //
+          // What it uniquely provides is GRADED prices — PSA/BGS numbers no
+          // other source here carries — and those only matter for a card
+          // worth grading. So it is asked when the graded data is missing
+          // and the card is worth something, or when nothing else priced
+          // the card at all. Everything else gets the free sources.
+          const knownValue = (card.market_price as number | null) ?? null;
+          const hasGraded =
+            "graded_prices" in card && card.graded_prices != null;
+          const gradedWorthAsking = !hasGraded && (knownValue == null || knownValue >= 5);
           let ptMarket: number | null = null;
-          if (pt && !pt.error && pt.requests < PT_BUDGET) {
+          if (pt && !pt.error && pt.requests < PT_BUDGET && gradedWorthAsking) {
             try {
               const hasIdColumn = "poketrace_id" in card;
               let pid = (card.poketrace_id as string | null | undefined) ?? null;
