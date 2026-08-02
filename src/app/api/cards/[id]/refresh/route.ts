@@ -39,7 +39,21 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
     }
 
     const result = await refreshCard(createAdminClient(), id);
-    return NextResponse.json(result, { status: result.ok ? 200 : 404 });
+    // 200 whenever the card exists, even when the refresh went badly.
+    //
+    // A non-2xx made the browser treat a detailed answer as a bare
+    // transport failure: the client throws on !res.ok and reads `error`,
+    // which this body doesn't carry, so a carefully worded explanation
+    // became the word "failed". The request DID succeed — what failed is
+    // described inside it. `error` is mirrored anyway so any generic
+    // handler still shows something true.
+    if (result.notFound) {
+      return NextResponse.json({ ...result, error: result.message }, { status: 404 });
+    }
+    return NextResponse.json(
+      result.ok ? result : { ...result, error: result.message },
+      { status: 200 }
+    );
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });

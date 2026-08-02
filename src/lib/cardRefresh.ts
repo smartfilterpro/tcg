@@ -45,6 +45,12 @@ export interface CardRefreshResult {
   imageFound: boolean;
   /** Set when nothing was attempted because the card was just refreshed. */
   cooledDown?: boolean;
+  /** True only when there is no such card. Everything else is an outcome
+   *  the caller should show, not an HTTP failure to swallow. */
+  notFound?: boolean;
+  /** The database's own words when a write is refused, so a failure can be
+   *  diagnosed from the screen instead of reproduced first. */
+  detail?: string;
   /** Plain-language outcome, shown as-is. */
   message: string;
   card?: Record<string, unknown>;
@@ -60,7 +66,14 @@ export async function refreshCard(
     .eq("id", cardId)
     .maybeSingle();
   if (error || !card) {
-    return { ok: false, priceFound: false, imageFound: false, message: "Card not found." };
+    return {
+      ok: false,
+      notFound: true,
+      priceFound: false,
+      imageFound: false,
+      message: "Card not found.",
+      ...(error ? { detail: error.message } : {}),
+    };
   }
 
   const hadPrice = card.market_price != null;
@@ -155,17 +168,21 @@ export async function refreshCard(
   if (writeError || (market != null && !priceFound)) {
     // Loud, because this is the case that used to lie. It lands in the
     // server log, which is now readable from the admin page.
+    const dbDetail = writeError
+      ? [writeError.message, (writeError as { code?: string }).code, (writeError as { details?: string }).details]
+          .filter(Boolean)
+          .join(" · ")
+      : "the write reported success but the row is unchanged";
     console.error(
-      `card refresh: ${id} ("${card.name}") — found ${market ?? "no"} price but the row ` +
-        `did not take it.${writeError ? ` db: ${writeError.message}` : " (no error reported)"}`
+      `card refresh: ${id} ("${card.name}" #${card.number}) — found ${market ?? "no"} price ` +
+        `but the row did not take it. ${dbDetail}. patch keys: ${Object.keys(patch).join(", ")}`
     );
     return {
       ok: false,
       priceFound: false,
       imageFound: false,
-      message: writeError
-        ? `Found a price but couldn't save it: ${writeError.message}`
-        : "Found a price but it didn't save. This has been logged.",
+      message: `Found a price of $${market} but it didn't save — ${dbDetail}`,
+      detail: dbDetail,
       card: saved ?? card,
     };
   }

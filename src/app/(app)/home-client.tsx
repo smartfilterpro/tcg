@@ -70,8 +70,14 @@ export default function CollectionPage({
         method: "POST",
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Refresh failed");
-      setRefreshNote(json.message ?? "Refreshed.");
+      // `message` first. The server's explanation of what happened is
+      // always more useful than the generic word this used to fall back
+      // to, and it is present on failures as well as successes.
+      if (!res.ok) throw new Error(json.message || json.error || "Refresh failed");
+      setRefreshNote(json.message ?? json.error ?? "Refreshed.");
+      // Merge the row even when the outcome was bad — it is the card's
+      // real current state either way, and showing stale data next to an
+      // error message is how the last confusion started.
       if (json.card) {
         const card = json.card as CollectionItem["card"];
         setItems((prev) =>
