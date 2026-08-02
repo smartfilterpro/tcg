@@ -64,7 +64,18 @@ function authHeaders(): Record<string, string> {
 // something needs to change it — and makes the brake untestable besides.
 function dailyBudget(): number {
   const raw = Number(process.env.POKEMONPRICETRACKER_DAILY_CAP);
-  return Number.isFinite(raw) && raw > 0 ? raw : 15_000;
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  // 20,000 — the Personal plan's actual allowance.
+  //
+  // This defaulted to 15,000, a deliberately cautious guess made before the
+  // API's own accounting headers were being read. The guess then became the
+  // binding limit: the sync stops when it gets within its reserve of the
+  // cap, so a 15,000 guess against a 20,000 plan left 5,000 credits a day
+  // unspent AND stalled the catalogue sweep at the same time — the worst of
+  // both. The real ceiling is enforced upstream and reported on every
+  // response (see effectiveRemaining), so this is now only the runaway
+  // brake it was always described as.
+  return 20_000;
 }
 let spentToday = 0;
 let budgetDay = "";
@@ -87,6 +98,21 @@ export function budgetState(): {
     lastRemaining = null;
   }
   return { used: spentToday, cap: dailyBudget(), day: budgetDay, remainingUpstream: lastRemaining };
+}
+
+/** How many credits are actually left today.
+ *
+ *  Upstream's number when we have one, our own arithmetic when we don't.
+ *  This is the distinction that matters for anything deciding whether to
+ *  keep working: our `cap` is a local guess about somebody else's plan, and
+ *  a job that stops on a wrong guess stops for no reason. The API reports
+ *  its true remaining balance on every response, and it cannot be wrong
+ *  about its own accounting.
+ *
+ *  Callers should prefer this over `cap - used` for exactly that reason. */
+export function effectiveRemaining(): number {
+  const state = budgetState();
+  return state.remainingUpstream ?? Math.max(0, state.cap - state.used);
 }
 
 function takeBudget(): boolean {

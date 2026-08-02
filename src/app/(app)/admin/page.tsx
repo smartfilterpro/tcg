@@ -2289,6 +2289,7 @@ function PriceSyncPanel() {
       unmatchedSamples?: Array<{ set: string; name: string; num: string; key?: string }>;
       matched?: number;
       addsPaused?: string | null;
+      budgetPaused?: string | null;
       done: boolean;
       error: string | null;
     } | null;
@@ -2444,6 +2445,11 @@ function PriceSyncPanel() {
                 </div>
               ))}
             </details>
+          )}
+          {st.budgetPaused && (
+            <p className="m-0 mb-1 text-xs text-brand-ink4">
+              <b>Paused on the daily credit allowance.</b> {st.budgetPaused}
+            </p>
           )}
           {st.rateLimited && (
             <p className="m-0 mb-1 text-xs text-brand-warning">
