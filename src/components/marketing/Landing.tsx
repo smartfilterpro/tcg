@@ -3,6 +3,7 @@
 // OAuth buttons, no demo video, real-only footer links) are itemised in the
 // phase report rather than smuggled in.
 
+import Image from "next/image";
 import Link from "next/link";
 import { MarketingNav, MarketingFooter } from "@/components/marketing/Chrome";
 import { PricingSection } from "@/components/marketing/Pricing";
@@ -41,16 +42,22 @@ const STEPS = [
     n: "01",
     title: "Shoot the pile",
     body: "Cards flat, decent light, collector numbers visible. One photo covers a whole row.",
+    shot: "/shots/scan-reading.jpg",
+    shotAlt: "A photo of three cards laid on a table while the app reads them.",
   },
   {
     n: "02",
     title: "Skim and confirm",
     body: "Confident reads are already right. Only the flagged ones want a look.",
+    shot: "/shots/scan-identifying.jpg",
+    shotAlt: "Four of four cards identified, each name ticked off with its collector number.",
   },
   {
     n: "03",
     title: "Build and play",
     body: "Ask for a deck, get a list you can physically assemble tonight, then have it coached.",
+    shot: "/shots/deck-detail.jpg",
+    shotAlt: "A finished sixty-card deck list, laid out by Pokemon and Trainer with counts on every card.",
   },
 ];
 
@@ -61,19 +68,38 @@ const FAMILY_POINTS = [
   "Coaching answers in plain English, no TCG jargon required.",
 ];
 
-/** The mock's screenshot slots, kept as hatched placeholders until real
- *  captures exist — shipping someone else's screenshot or none at all are
- *  both worse. */
-function Placeholder({ label, dark = false, className }: { label: string; dark?: boolean; className?: string }) {
+/** A real screenshot of the app.
+ *
+ *  These were hatched placeholders reading "Screenshot coming soon", on the
+ *  reasoning that shipping someone else's screenshot or none at all are both
+ *  worse than admitting the gap. That reasoning holds; the gap is simply
+ *  closed now, with captures of the real thing.
+ *
+ *  Phone captures are tall and these slots are wide, so they are anchored to
+ *  the TOP rather than centred: the top of each screen is where the heading
+ *  and the first result live, and centring would crop away the part that
+ *  says what the screen is. */
+function Shot({
+  src,
+  alt,
+  className,
+  priority = false,
+}: {
+  src: string;
+  alt: string;
+  className?: string;
+  priority?: boolean;
+}) {
   return (
-    <div
-      className={`flex flex-col items-center justify-center gap-2 p-6 text-center ${
-        dark
-          ? "border border-dark-line2 [background:repeating-linear-gradient(135deg,#22242A_0_8px,#1C1E23_8px_16px)]"
-          : "[background:repeating-linear-gradient(135deg,#F2F0EC_0_8px,#E9E6E0_8px_16px)]"
-      } ${className ?? ""}`}
-    >
-      <span className={`font-mono text-[11.5px] ${dark ? "text-dark-ink4" : "text-brand-ink4"}`}>{label}</span>
+    <div className={`relative overflow-hidden bg-brand-sunken ${className ?? ""}`}>
+      <Image
+        src={src}
+        alt={alt}
+        fill
+        sizes="(max-width: 720px) 100vw, 560px"
+        className="object-cover object-top"
+        priority={priority}
+      />
     </div>
   );
 }
@@ -142,9 +168,11 @@ export default function Landing({
                   <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
                   <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
                 </div>
-                <Placeholder
-                  label="Screenshot coming soon — the /scan review grid"
+                <Shot
+                  src="/shots/scan-review.jpg"
+                  alt="The scan review screen: five cards read in fifteen seconds, each with a confidence badge, set, collector number and price."
                   className="h-[300px] rounded-t-xl min-[720px]:h-[420px]"
+                  priority
                 />
               </div>
             </div>
@@ -187,7 +215,11 @@ export default function Landing({
           <div className="grid grid-cols-1 gap-5 min-[720px]:grid-cols-3">
             {STEPS.map((s) => (
               <div key={s.n} className="flex flex-col gap-4">
-                <Placeholder dark label="Screenshot coming soon" className="h-[230px] rounded-2xl" />
+                <Shot
+                  src={s.shot}
+                  alt={s.shotAlt}
+                  className="h-[230px] rounded-2xl"
+                />
                 <div className="flex gap-3">
                   <span className="font-display text-[14px] font-bold text-brand-highlight">{s.n}</span>
                   <div>
