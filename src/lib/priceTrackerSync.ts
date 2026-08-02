@@ -81,6 +81,10 @@ export interface SyncState {
   /** Set when their minute window cut a run short. Not an error — press
    *  again in a minute. */
   rateLimited: boolean;
+  /** Set when the day's credit allowance ran out. Also not an error: the
+   *  pass continues tomorrow, and saying so is the difference between a
+   *  paused job and one that looks stuck on the same set forever. */
+  budgetPaused?: string | null;
   /** Cards we didn't hold at all, created from their record. */
   cardsAdded: number;
   /** A few of their cards that matched nothing of ours, verbatim. "Nothing
@@ -110,6 +114,7 @@ export function freshSyncState(): SyncState {
     skippedAmbiguous: 0,
     indexedCards: 0,
     rateLimited: false,
+    budgetPaused: null,
     cardsAdded: 0,
     unmatchedSamples: [],
     startedAt: now,
@@ -505,10 +510,21 @@ export function startPriceSyncLoop() {
         // A finished pass restarts to keep prices daily-fresh.
         restart: current?.done === true,
       });
-      if (state.cardsSeen > 0 || state.error) {
+      // DELTAS, not the running totals. The old line printed the state's
+      // cumulative counters, so a tick that did nothing at all reprinted
+      // the same "set 2, 0 prices, 16 added" every few minutes and read as
+      // a job stuck in a loop — when the truth was that it walked no sets
+      // because the day's credits were gone.
+      const setsWalked = state.setIndex - (current?.setIndex ?? 0);
+      const seen = state.cardsSeen - (current?.cardsSeen ?? 0);
+      const added = state.cardsAdded - (current?.cardsAdded ?? 0);
+      const priced = state.pricesFilled - (current?.pricesFilled ?? 0);
+      if (seen > 0 || state.error || state.budgetPaused) {
         console.log(
-          `price sync loop: set ${state.setIndex}, ${state.pricesFilled} prices, ` +
-            `${state.cardsAdded} added${state.rateLimited ? " — rate limited, will resume" : ""}` +
+          `price sync loop: ${setsWalked} set(s) → set ${state.setIndex} of ${state.sets.length}, ` +
+            `${seen} seen, ${priced} priced, ${added} added` +
+            (state.rateLimited ? " — rate limited, will resume" : "") +
+            (state.budgetPaused ? ` — PAUSED: ${state.budgetPaused}` : "") +
             (state.error ? ` — ERROR: ${state.error}` : "")
         );
       }
@@ -603,7 +619,14 @@ export async function runPriceSync(
     let setsThisRun = 0;
     while (state.setIndex < state.sets.length && setsThisRun < maxSets) {
       const budget = budgetState();
-      if (budget.cap - budget.used <= reserve) break;
+      if (budget.cap - budget.used <= reserve) {
+        // Not an error and not "done" — the day's credits are spoken for.
+        // Recorded because the alternative is a run that walks zero sets and
+        // reports its old totals, which reads exactly like a stuck job.
+        state.budgetPaused = `${budget.used.toLocaleString()} of ${budget.cap.toLocaleString()} credits used; holding the last ${reserve.toLocaleString()} for on-demand lookups. Resumes when the daily allowance rolls over.`;
+        break;
+      }
+      state.budgetPaused = null;
 
       const set = state.sets[state.setIndex];
 

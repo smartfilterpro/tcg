@@ -47,6 +47,42 @@ function endpointUrl(req: Request): string {
   return `${proto}://${host}${url.pathname}`;
 }
 
+/* ------------------------------------------------- notice rollup */
+
+/** How often the count is written out. Long enough to keep the log quiet,
+ *  short enough that a burst is still visible near when it happened. */
+const ROLLUP_MS = 10 * 60_000;
+
+let noticesSinceRollup = 0;
+let noticesTotal = 0;
+let rollupSince = Date.now();
+let rollupTimer: NodeJS.Timeout | null = null;
+
+function flushNotices(): void {
+  if (noticesSinceRollup === 0) return;
+  const minutes = Math.max(1, Math.round((Date.now() - rollupSince) / 60_000));
+  console.log(
+    `EBAY: ${noticesSinceRollup} account deletion notice${noticesSinceRollup === 1 ? "" : "s"} ` +
+      `acknowledged in the last ${minutes}m (${noticesTotal} since restart) — no data held.`
+  );
+  noticesSinceRollup = 0;
+  rollupSince = Date.now();
+}
+
+function noteDeletionNotice(_username: string | null): void {
+  noticesSinceRollup += 1;
+  noticesTotal += 1;
+  // One timer, armed by the first notice of a window. unref so a pending
+  // rollup never holds the process open on shutdown.
+  if (!rollupTimer) {
+    rollupTimer = setTimeout(() => {
+      rollupTimer = null;
+      flushNotices();
+    }, ROLLUP_MS);
+    rollupTimer.unref?.();
+  }
+}
+
 export async function GET(req: Request) {
   const token = verificationToken();
   if (!token) {
@@ -90,8 +126,16 @@ export async function POST(req: Request) {
     // and retrying will not make it parse.
   }
 
-  // Recorded so there's a trace if we're ever asked to show compliance.
-  console.log(`EBAY: account deletion notice${username ? ` for ${username}` : ""} — no data held.`);
+  // Recorded so there's a trace if we're ever asked to show compliance —
+  // but as a periodic count, not a line each.
+  //
+  // eBay broadcasts every account closure on the marketplace to every
+  // subscribed app, which is hundreds a day and has nothing to do with us:
+  // we hold no eBay user data, so each one is answered identically. A line
+  // apiece buried every other log the server writes, which is the opposite
+  // of a useful trace. The rollup keeps the evidence (how many, over what
+  // window, all acknowledged) and leaves the log readable.
+  noteDeletionNotice(username);
 
   // eBay wants a fast 2xx. Anything else counts against endpoint health and
   // repeated failures get the endpoint marked down.
