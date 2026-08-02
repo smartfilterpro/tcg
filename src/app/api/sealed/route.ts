@@ -55,6 +55,11 @@ export async function POST(req: Request) {
       year?: number;
       quantity?: number;
       condition?: string;
+      /** From a suggestion out of the paid catalogue. An IDENTIFIER only —
+       *  never a price. sealed_products is shared, so a value posted by one
+       *  member would become everyone's market price; the server fetches
+       *  the number itself using this. */
+      tcgPlayerId?: string;
     };
 
     const name = (body.name ?? "").trim().replace(/\s+/g, " ");
@@ -95,6 +100,10 @@ export async function POST(req: Request) {
           name,
           kind,
           set_name: (body.setName ?? "").trim() || null,
+          tcgplayer_id:
+            typeof body.tcgPlayerId === "string" && body.tcgPlayerId.trim()
+              ? body.tcgPlayerId.trim()
+              : null,
           release_year:
             Number.isInteger(body.year) && body.year! > 1995 && body.year! < 2100
               ? body.year

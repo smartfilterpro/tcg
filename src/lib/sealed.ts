@@ -11,6 +11,7 @@
 // promo card pulled from the product, a code card.
 
 import { ebayEnabled, ebayFetch, marketplace, SCOPE_BASE } from "@/lib/ebay";
+import { trackerSealedById, trackerSealedByName } from "@/lib/sealedTracker";
 
 export const SEALED_KINDS = [
   "booster_box",
@@ -241,31 +242,64 @@ export async function priceProduct(
   kind: string | null
 ): Promise<number | null> {
   try {
-    const price = await sealedPrice({ name, kind });
-    if (!price) return null;
     const { createAdminClient } = await import("@/lib/supabase/admin");
     const admin = createAdminClient();
+    const { data: current } = await admin
+      .from("sealed_products")
+      .select("image_url, tcgplayer_id")
+      .eq("id", productId)
+      .maybeSingle();
 
-    const patch: Record<string, unknown> = {
-      market_price: price.median,
-      price_updated_at: new Date().toISOString(),
-      price_source: `${price.source} (${price.count} listings)`,
-    };
+    const patch: Record<string, unknown> = { price_updated_at: new Date().toISOString() };
+    let value: number | null = null;
+    let image: string | null = null;
+
+    // THE PAID CATALOGUE FIRST, for sealed only.
+    //
+    // The opposite of the order used for cards, and for a reason rather
+    // than by accident: free sources go first when they hold the SAME data,
+    // and here they hold worse data. This is a TCGplayer market price and
+    // an official product shot; eBay is asking prices and seller photos.
+    //
+    // Exact when we know their id — no name matching, so a reprice cannot
+    // drift onto a different box.
+    const existingId = (current?.tcgplayer_id as string | null) ?? null;
+    const fromTracker = existingId
+      ? await trackerSealedById(existingId)
+      : await trackerSealedByName(name);
+
+    if (fromTracker?.price != null) {
+      value = fromTracker.price;
+      image = fromTracker.image;
+      patch.price_source = "TCGplayer via Pokémon Price Tracker";
+      patch.source = "pricetracker";
+      if (!existingId && fromTracker.tcgPlayerId) patch.tcgplayer_id = fromTracker.tcgPlayerId;
+      if (fromTracker.setId) patch.set_id = fromTracker.setId;
+      if (fromTracker.setName) patch.set_name = fromTracker.setName;
+    } else {
+      // Nothing there — fall back to what is actually being asked for on
+      // eBay. Worse data, but a real number beats no number.
+      const listings = await sealedPrice({ name, kind });
+      if (listings) {
+        value = listings.median;
+        image = listings.image ?? null;
+        patch.price_source = `${listings.source} (${listings.count} listings)`;
+        patch.source = "ebay";
+      }
+    }
+
+    if (value == null) return null;
+    patch.market_price = value;
 
     // Only fill a picture we don't have. Repricing runs every time somebody
     // presses Check price, and swapping the image on each run would mean a
     // product's photo changing under its owner for no reason.
-    const { data: current } = await admin
-      .from("sealed_products")
-      .select("image_url")
-      .eq("id", productId)
-      .maybeSingle();
-    if (!current?.image_url && price.image) {
-      patch.image_url = (await mirrorSealedImage(productId, price.image)) ?? price.image;
+    if (!current?.image_url && image) {
+      patch.image_url = (await mirrorSealedImage(productId, image)) ?? image;
     }
 
     await admin.from("sealed_products").update(patch).eq("id", productId);
-    return price.median;
+    return value;
   } catch {
     return null;
   }
@@ -318,12 +352,20 @@ export interface SealedSuggestion {
   kindLabel: string;
   setName: string | null;
   year: number | null;
-  /** "catalogue" — a product someone already holds, so adding it joins them
-   *  rather than creating a near-duplicate. "suggested" — built from a real
-   *  set name. */
-  source: "catalogue" | "suggested";
+  /** Where the suggestion came from, and they mean different things:
+   *  "catalogue" — a product someone here already holds, so adding it joins
+   *  that row rather than creating a near-duplicate. "tracker" — a real
+   *  product from the paid database that nobody here holds yet.
+   *  "suggested" — a name BUILT from a real set, which may not name a
+   *  product that exists. */
+  source: "catalogue" | "tracker" | "suggested";
   marketPrice?: number | null;
   /** Only ever set for products already in the catalogue — a generated
    *  suggestion has no picture until somebody adds it and it gets priced. */
   image?: string | null;
+  /** The paid catalogue's product id, when the suggestion came from there.
+   *  Passed back on add so the price can be fetched EXACTLY rather than
+   *  searched for by name — and so the price stored for everyone is one the
+   *  server fetched, never one a browser supplied. */
+  tcgPlayerId?: string | null;
 }
