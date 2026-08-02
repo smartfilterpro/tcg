@@ -52,6 +52,40 @@ export default function CollectionPage({
   const [notesSaved, setNotesSaved] = useState(false);
   const [valueDraft, setValueDraft] = useState("");
   const [valueSaved, setValueSaved] = useState(false);
+  const [cardRefreshing, setCardRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
+
+  /** Re-fetch one card's price and picture on demand.
+   *
+   *  The background jobs reach every card eventually, but "wait until
+   *  tonight" is a poor answer to a card that just came out of a scan with
+   *  no value on it. Updates the row in place so the collection total and
+   *  the card both move without a reload. */
+  async function refreshCardData(item: CollectionItem) {
+    if (cardRefreshing) return;
+    setCardRefreshing(true);
+    setRefreshNote(null);
+    try {
+      const res = await fetch(`/api/cards/${encodeURIComponent(item.card.id)}/refresh`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Refresh failed");
+      setRefreshNote(json.message ?? "Refreshed.");
+      if (json.card) {
+        const card = json.card as CollectionItem["card"];
+        setItems((prev) =>
+          prev?.map((i) => (i.card.id === card.id ? { ...i, card: { ...i.card, ...card } } : i)) ?? null
+        );
+        setSelected((sel) =>
+          sel && sel.card.id === card.id ? { ...sel, card: { ...sel.card, ...card } } : sel
+        );
+      }
+    } catch (e) {
+      setRefreshNote(e instanceof Error ? e.message : "Refresh failed");
+    }
+    setCardRefreshing(false);
+  }
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Cards whose image URL failed to load (broken fallback-database links) —
   // treated exactly like having no image, so the photo button appears.
@@ -390,6 +424,8 @@ export default function CollectionPage({
     setNotesSaved(false);
     setValueDraft(item.price_override != null ? String(item.price_override) : "");
     setValueSaved(false);
+    // A message about the last card must not follow you to the next one.
+    setRefreshNote(null);
   }
 
   async function saveValue(item: CollectionItem) {
@@ -789,12 +825,41 @@ export default function CollectionPage({
                       ))}
                     </select>
                   </div>
-                  {itemPrice(selected) != null && (
-                    <div className="font-semibold text-green-700">
-                      {selected.price_override != null ? "Your value" : "Market"} (
-                      {variantLabel(selected.variant ?? "normal")}): $
-                      {itemPrice(selected)!.toFixed(2)} each
+                  {itemPrice(selected) != null ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-green-700">
+                        {selected.price_override != null ? "Your value" : "Market"} (
+                        {variantLabel(selected.variant ?? "normal")}): $
+                        {itemPrice(selected)!.toFixed(2)} each
+                      </span>
+                      {selected.price_override == null && (
+                        <button
+                          className="text-[11px] text-slate-400 underline hover:text-slate-600"
+                          disabled={cardRefreshing}
+                          onClick={() => refreshCardData(selected)}
+                        >
+                          {cardRefreshing ? "Checking…" : "Refresh"}
+                        </button>
+                      )}
                     </div>
+                  ) : (
+                    /* A card with no price used to render nothing here at
+                       all — no number, no explanation and no way to fix it,
+                       which reads as the app being broken rather than as a
+                       gap in somebody's database. */
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-slate-500">No market price yet</span>
+                      <button
+                        className="btn-secondary px-2 py-1 text-xs"
+                        disabled={cardRefreshing}
+                        onClick={() => refreshCardData(selected)}
+                      >
+                        {cardRefreshing ? "Checking…" : "Check for a price"}
+                      </button>
+                    </div>
+                  )}
+                  {refreshNote && (
+                    <p className="m-0 text-[11px] leading-snug text-slate-500">{refreshNote}</p>
                   )}
                   <div className="flex items-center gap-2 pt-1">
                     <span className="shrink-0 text-xs text-slate-500">Your value $</span>
