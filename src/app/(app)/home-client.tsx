@@ -6,6 +6,7 @@ import CardPickerModal from "@/components/CardPickerModal";
 import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
 import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc } from "@/lib/art";
+import SealedTab from "@/components/SealedTab";
 import { matchesSearch } from "@/lib/text";
 
 import {
@@ -53,6 +54,10 @@ export default function CollectionPage({
   const [valueDraft, setValueDraft] = useState("");
   const [valueSaved, setValueSaved] = useState(false);
   const [cardRefreshing, setCardRefreshing] = useState(false);
+  // Cards and sealed product are different things with different rules, so
+  // they get different tabs rather than one blended list. Sealed lives in
+  // its own tables and never reaches anything card-shaped.
+  const [tab, setTab] = useState<"cards" | "sealed">("cards");
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
 
   /** Re-fetch one card's price and picture on demand.
@@ -470,11 +475,43 @@ export default function CollectionPage({
     }
   }
 
+  const tabs = (
+    <div className="mb-4 flex gap-1 border-b border-slate-200">
+      {(["cards", "sealed"] as const).map((t) => (
+        <button
+          key={t}
+          onClick={() => setTab(t)}
+          className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold capitalize ${
+            tab === t
+              ? "border-brand-accent text-brand-accent"
+              : "border-transparent text-slate-400 hover:text-slate-600"
+          }`}
+        >
+          {t === "cards" ? "Cards" : "Sealed product"}
+        </button>
+      ))}
+    </div>
+  );
+
   if (error) return <p className="text-red-600">{error}</p>;
   if (!items) return <p className="text-slate-500">Loading your collection…</p>;
 
+  // The sealed tab has to be reachable from the empty state too — somebody
+  // whose first purchase was a booster box has an empty CARD collection and
+  // would otherwise never see the tab that holds their box.
+  if (tab === "sealed") {
+    return (
+      <div>
+        {tabs}
+        <SealedTab />
+      </div>
+    );
+  }
+
   if (items.length === 0) {
     return (
+      <div>
+        {tabs}
       <div className="card-panel mx-auto mt-12 max-w-md p-8 text-center">
         <div className="text-4xl">📷</div>
         <h1 className="mt-2 text-xl font-bold">Your collection is empty</h1>
@@ -517,11 +554,13 @@ export default function CollectionPage({
           />
         )}
       </div>
+      </div>
     );
   }
 
   return (
     <div>
+      {tabs}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-[26px] font-bold tracking-[-.025em]">My Collection</h1>
