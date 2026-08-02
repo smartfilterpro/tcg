@@ -11,12 +11,17 @@
 // It runs in admin-driven batches, not one big job: each batch is one HTTP
 // request that stays comfortably inside the proxy timeout, and the cursor
 // (last examined card id) lives with the client, so a stopped run resumes
-// wherever it left off. Cards it can't fetch stay pointed at the source —
-// nothing is ever blanked — and remain eligible for the next run.
+// wherever it left off. Cards it can't fetch stay pointed at the source and
+// remain eligible for the next run — except for art the source says is
+// permanently GONE, which after a few tries is re-sourced from another free
+// database or, failing that, cleared: a URL that 404s renders as a broken
+// image and makes the card look like it already has a picture, which is how
+// these cards stayed broken and invisible to every filler we have.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { findTcgdexImage } from "@/lib/tcgdex";
 
 const BUCKET = "card-art";
 
@@ -73,16 +78,43 @@ export interface MirrorRow {
   id: string;
   image_small: string | null;
   image_large: string | null;
+  /** Present when the caller already has them; used to re-source artwork
+   *  whose URL is permanently dead. Fetched on demand when absent, which is
+   *  rare — only a hard failure needs them. */
+  name?: string | null;
+  number?: string | null;
+  /** Admin-curated art is never blanked, whatever the source says. */
+  image_locked?: boolean | null;
+  /** Failures so far, when the caller selected it. Lets a successful mirror
+   *  skip the reset write for the overwhelming majority of cards that never
+   *  failed in the first place. */
+  art_attempts?: number | null;
 }
 
 export interface MirrorBatchResult {
   scanned: number;
   mirrored: number;
+  /** Cards passed over because they've failed repeatedly and are in the
+   *  retry cool-off. Reported so a stalled-looking sweep can be told from
+   *  one that is deliberately not re-trying dead art. */
+  skipped?: number;
   failed: Array<{ id: string; reason: string }>;
   /** Cursor for the next batch: the last card id this batch examined. */
   lastId: string | null;
   /** True when the scan reached the end of the cards table. */
   done: boolean;
+}
+
+/** Is this failure permanent, or is the source just having a bad day?
+ *
+ *  The distinction decides everything downstream: a bad day deserves a
+ *  retry, a 404 deserves a different source. pokemontcg.io returns hard
+ *  404s for whole sets whose images it never published, and retrying those
+ *  on every sweep forever is how a fixed number of dead cards turns into an
+ *  unbounded amount of work. Timeouts, resets and 5xx are NOT permanent —
+ *  treating those as fatal would discard good cards on a bad afternoon. */
+function isPermanentFailure(reason: string): boolean {
+  return /HTTP (?:400|401|403|404|410|451)\b/.test(reason) || /not an image/.test(reason);
 }
 
 async function fetchImage(url: string): Promise<{ buffer: Buffer; contentType: string }> {
@@ -105,6 +137,45 @@ function extOf(contentType: string): string {
   if (contentType.includes("png")) return "png";
   if (contentType.includes("webp")) return "webp";
   return "jpg";
+}
+
+/** Find a live URL for a card whose stored one is gone.
+ *
+ *  A 404 does not mean the picture doesn't exist — it means the source we
+ *  happened to record doesn't have it. TCGdex publishes art for plenty of
+ *  what pokemontcg.io never did, the McDonald's promos among them.
+ *
+ *  FREE SOURCES ONLY, deliberately. This runs inside a loop that ticks
+ *  every few minutes over tens of thousands of cards; a paid lookup here
+ *  would be an unbudgeted third consumer of the daily credits and could
+ *  spend thousands of them on a bad sweep. The paid source still reaches
+ *  these cards — see the give-up path below, which clears the dead URL so
+ *  the nightly refresher sees an ordinary missing image and fills it under
+ *  its own budget.
+ *
+ *  Null when the free sources don't have it, which is a real answer: some
+ *  cards have no published scan, and knowing that is what ends the loop. */
+async function resourceArt(
+  admin: SupabaseClient,
+  row: MirrorRow,
+  deadUrls: string[]
+): Promise<string | null> {
+  let name = row.name ?? null;
+  let number = row.number ?? null;
+  if (!name) {
+    const { data } = await admin
+      .from("cards")
+      .select("name, number")
+      .eq("id", row.id)
+      .maybeSingle();
+    name = (data?.name as string | null) ?? null;
+    number = (data?.number as string | null) ?? null;
+  }
+  if (!name) return null;
+
+  const free = await findTcgdexImage({ name, number });
+  // A source that hands back the same dead URL has told us nothing.
+  return free && !deadUrls.includes(free) ? free : null;
 }
 
 /** Copy one card's images. Updates only the sides that succeeded — a card
@@ -150,13 +221,136 @@ export async function mirrorCard(
     patch.source_image_large = row.image_small!;
   }
 
+  // Nothing downloaded, and the source said the file is GONE rather than
+  // busy. Retrying that on the next sweep — which is what used to happen,
+  // forever — cannot succeed. Go find the picture somewhere else instead;
+  // the card is rendering broken to members until someone does.
+  if (Object.keys(patch).length === 0 && firstFailure && isPermanentFailure(firstFailure)) {
+    const dead = [row.image_small, row.image_large].filter((u): u is string => !!u);
+    const replacement = await resourceArt(admin, row, dead);
+    if (replacement) {
+      try {
+        const { buffer, contentType } = await fetchImage(replacement);
+        const path = `${safeId}/small.${extOf(contentType)}`;
+        const { error } = await admin.storage
+          .from(BUCKET)
+          .upload(path, buffer, { contentType, upsert: true });
+        if (!error) {
+          const url = admin.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+          patch.image_small = url;
+          patch.image_large = url;
+          // The replacement is the provenance now — the old URL is a 404
+          // and recording it would only send a future re-mirror back to it.
+          patch.source_image_small = replacement;
+          patch.source_image_large = replacement;
+        }
+      } catch {
+        // The new source didn't pan out either. Fall through and record the
+        // failure, which is what stops this card being retried on repeat.
+      }
+    }
+  }
+
   if (Object.keys(patch).length === 0) {
+    const attempts = await recordFailure(admin, row.id, row.art_attempts ?? null);
+    // Out of attempts on a URL the source says is GONE, and no free
+    // replacement exists. Clear it.
+    //
+    // A dead URL is strictly worse than no URL. It renders as a broken
+    // image to members, it makes every "does this card need art?" check
+    // answer no, and it is the reason the paid filler never looked at these
+    // cards — they don't *look* like they're missing a picture. Emptying it
+    // shows the proper placeholder and hands the card to the nightly
+    // refresher, which can spend a credit on it under a real budget.
+    //
+    // Never for admin-locked art: somebody chose that picture on purpose,
+    // and a 404 today is not our licence to erase their choice.
+    if (
+      attempts >= MAX_ART_ATTEMPTS &&
+      firstFailure &&
+      isPermanentFailure(firstFailure) &&
+      row.image_locked !== true
+    ) {
+      await admin
+        .from("cards")
+        .update({ image_small: null, image_large: null })
+        .eq("id", row.id)
+        .then(() => {});
+    }
     return { ok: false, reason: firstFailure ?? "nothing to mirror" };
   }
   const { error } = await admin.from("cards").update(patch).eq("id", row.id);
   if (error) return { ok: false, reason: `db: ${error.message}` };
+  // Only for cards that actually have a history — which is almost none of
+  // them, so this stays a no-op write instead of one per mirrored card.
+  if ((row.art_attempts ?? 0) > 0) await clearFailure(admin, row.id);
   // A partial success still moved the row forward; report the failed side.
   return firstFailure ? { ok: true, reason: firstFailure } : { ok: true };
+}
+
+/** Count a failure so the sweep can stop spending attempts on this card.
+ *
+ *  Best-effort in the strongest sense: if migration 044 hasn't run, these
+ *  columns don't exist and the update fails — and the mirror must carry on
+ *  behaving exactly as it did before, retrying everything. Bookkeeping is
+ *  never a reason for the actual job to stop working. */
+async function recordFailure(
+  admin: SupabaseClient,
+  id: string,
+  known: number | null
+): Promise<number> {
+  try {
+    let current = known;
+    if (current == null) {
+      const { data } = await admin.from("cards").select("art_attempts").eq("id", id).maybeSingle();
+      current = (data?.art_attempts as number | null) ?? 0;
+    }
+    const attempts = current + 1;
+    const { error } = await admin
+      .from("cards")
+      .update({ art_attempts: attempts, art_failed_at: new Date().toISOString() })
+      .eq("id", id);
+    // Without the columns there is no counter, so nothing may act on one —
+    // returning 0 keeps the give-up path from firing on an unrecorded
+    // failure, which would blank art after a single bad fetch.
+    if (error) return 0;
+    return attempts;
+  } catch {
+    return 0;
+  }
+}
+
+/** A card that mirrored is a card with no history worth keeping. */
+async function clearFailure(admin: SupabaseClient, id: string): Promise<void> {
+  try {
+    await admin
+      .from("cards")
+      .update({ art_attempts: 0, art_failed_at: null })
+      .eq("id", id)
+      .then(() => {});
+  } catch {
+    // As above.
+  }
+}
+
+/** Give up on a card after this many consecutive failures… */
+const MAX_ART_ATTEMPTS = 3;
+/** …and try it again this long afterwards. A cool-off rather than a
+ *  tombstone: sources do add missing scans, and a card nobody can picture
+ *  today may be pictured next month. Thirty days is short enough to catch
+ *  that and long enough that dead sets stop costing anything. */
+const ART_RETRY_AFTER_DAYS = 30;
+
+/** The columns the scan wants, including the two that only exist after
+ *  migration 044. Selected as one string so the fallback below can swap it
+ *  wholesale rather than rebuilding the query. */
+const SCAN_COLUMNS =
+  "id, image_small, image_large, name, number, image_locked, art_attempts, art_failed_at";
+const SCAN_COLUMNS_LEGACY = "id, image_small, image_large, name, number, image_locked";
+
+/** True when an error is Postgres saying a column doesn't exist. */
+function isMissingColumn(message: string): boolean {
+  return /art_attempts|art_failed_at/.test(message);
 }
 
 export async function mirrorBatch(
@@ -164,6 +358,9 @@ export async function mirrorBatch(
   after: string | null
 ): Promise<MirrorBatchResult> {
   const ours = supabaseUrl();
+  const coolOff = new Date(
+    Date.now() - ART_RETRY_AFTER_DAYS * 24 * 3600_000
+  ).toISOString();
   let rows: MirrorRow[];
   if (OWNED_ONLY) {
     // The work list is what people own. Read it whole (a few thousand rows
@@ -181,28 +378,49 @@ export async function mirrorBatch(
     }
     const chunks: MirrorRow[] = [];
     for (let i = 0; i < ids.length; i += 200) {
-      const { data } = await admin
-        .from("cards")
-        .select("id, image_small, image_large")
-        .in("id", ids.slice(i, i + 200))
-        .order("id");
-      chunks.push(...((data ?? []) as MirrorRow[]));
+      const slice = ids.slice(i, i + 200);
+      const load = async (columns: string) => {
+        const { data, error } = await admin
+          .from("cards")
+          .select(columns)
+          .in("id", slice)
+          .order("id");
+        return { data: data as unknown as MirrorRow[] | null, error };
+      };
+      let { data, error } = await load(SCAN_COLUMNS);
+      if (error && isMissingColumn(error.message)) ({ data, error } = await load(SCAN_COLUMNS_LEGACY));
+      chunks.push(...(data ?? []));
     }
     rows = chunks.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   } else {
-    let q = admin
-      .from("cards")
-      .select("id, image_small, image_large")
-      .order("id")
-      .limit(SCAN_WINDOW);
-    if (after) q = q.gt("id", after);
-    const { data, error } = await q;
+    const build = async (columns: string) => {
+      let q = admin.from("cards").select(columns).order("id").limit(SCAN_WINDOW);
+      if (after) q = q.gt("id", after);
+      const { data, error } = await q;
+      return { data: data as unknown as MirrorRow[] | null, error };
+    };
+    let { data, error } = await build(SCAN_COLUMNS);
+    if (error && isMissingColumn(error.message)) {
+      // Migration 044 hasn't run. Fall back to the old behaviour rather
+      // than stopping: retrying dead cards forever is the bug we're fixing,
+      // but it beats not mirroring anything at all.
+      ({ data, error } = await build(SCAN_COLUMNS_LEGACY));
+    }
     if (error) throw new Error(error.message);
-    rows = (data ?? []) as MirrorRow[];
+    rows = (data ?? []) as unknown as MirrorRow[];
   }
+
+  // Cards in cool-off are dropped from the work list rather than filtered
+  // in SQL, so the cursor still advances past them — filtering in the query
+  // would make every scan re-walk the same dead rows to find live ones.
+  const skippable = (row: MirrorRow & { art_failed_at?: string | null }) =>
+    (row.art_attempts ?? 0) >= MAX_ART_ATTEMPTS &&
+    typeof row.art_failed_at === "string" &&
+    row.art_failed_at > coolOff;
 
   let mirrored = 0;
   let attempts = 0;
+  let skipped = 0;
   const failed: Array<{ id: string; reason: string }> = [];
   let lastId: string | null = after;
   let examinedAll = true;
@@ -210,6 +428,11 @@ export async function mirrorBatch(
   for (const row of rows) {
     const needs =
       isThirdParty(row.image_small, ours) || isThirdParty(row.image_large, ours);
+    if (needs && skippable(row)) {
+      skipped++;
+      lastId = row.id;
+      continue;
+    }
     if (needs) {
       // The cap counts ATTEMPTS, not successes — on a day the source is
       // down, counting successes would grind through the whole scan
@@ -233,6 +456,7 @@ export async function mirrorBatch(
   return {
     scanned: rows.length,
     mirrored,
+    skipped,
     failed,
     lastId,
     done: examinedAll && rows.length < SCAN_WINDOW,

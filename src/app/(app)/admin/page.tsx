@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { resilientFetch } from "@/lib/clientLoop";
 import type { Profile } from "@/lib/types";
 import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc } from "@/lib/art";
@@ -1375,11 +1376,20 @@ function CardImportPanel() {
     try {
       let first = restart;
       for (;;) {
-        const res = await fetch("/api/admin/import-cards", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ restart: first }),
-        });
+        const res = await resilientFetch(
+          "/api/admin/import-cards",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ restart: first }),
+          },
+          {
+            onRetry: (n) => setError(`Connection dropped — reconnecting (${n})…`),
+            stopped: () => stop.current,
+          }
+        );
+        // Got through: clear any "reconnecting" note from a previous lap.
+        setError(null);
         first = false;
         const json = (await res.json().catch(() => ({}))) as {
           state?: ImportState;
@@ -1436,7 +1446,7 @@ function CardImportPanel() {
       <div className="flex flex-wrap items-center gap-2">
         <button className="btn-secondary text-xs" disabled={busy} onClick={() => run(false)}>
           {busy
-            ? "Importing… leave this page open"
+            ? "Importing… safe to lock the screen"
             : state && !done
               ? "Continue import"
               : done
@@ -2272,7 +2282,9 @@ function PriceSyncPanel() {
       indexedCards: number;
       rateLimited: boolean;
       cardsAdded?: number;
-      unmatchedSamples?: Array<{ set: string; name: string; num: string }>;
+      unmatchedSamples?: Array<{ set: string; name: string; num: string; key?: string }>;
+      matched?: number;
+      addsPaused?: string | null;
       done: boolean;
       error: string | null;
     } | null;
@@ -2308,11 +2320,19 @@ function PriceSyncPanel() {
       let first = true;
       for (;;) {
         if (stopRef.current) break;
-        const res = await fetch("/api/admin/price-sync", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ maxSets: 3, restart: restart && first }),
-        });
+        const res = await resilientFetch(
+          "/api/admin/price-sync",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ maxSets: 3, restart: restart && first }),
+          },
+          {
+            onRetry: (n) => setError(`Connection dropped — reconnecting (${n})…`),
+            stopped: () => stopRef.current,
+          }
+        );
+        setError(null);
         first = false;
         // The proxy's failure page is text, not JSON — read it as text and
         // show it as itself rather than as a JSON parse error.
@@ -2386,16 +2406,28 @@ function PriceSyncPanel() {
           {/* Zero matches with cards streaming past is the signature of a
               broken index, and looks identical to "their data is missing"
               unless the index size is on screen. */}
-          {(st.cardsSeen ?? 0) > 50 && (st.idsFilled ?? 0) === 0 && (
-            <p className="m-0 mb-1 text-xs text-brand-negative">
-              {!st.indexedCards
-                ? "None of our cards were indexed — the catalogue is empty, migration 033 hasn't run, or this run predates the check."
-                : `${st.indexedCards.toLocaleString()} of our cards are indexed but nothing matched yet. ` +
-                  `If the catalogue import isn't finished, that's the likely cause — their sets ` +
-                  `arrive newest-first, and a partial import holds mostly older cards.`}
+          {/* The alarm used to require ZERO matches, which is the one case
+              that never happens when a matcher is merely mostly broken — a
+              97%-miss run showed a few ids filled and looked healthy. It is
+              the RATE that says whether matching works. */}
+          {(st.cardsSeen ?? 0) > 50 &&
+            (st.matched ?? 0) / Math.max(1, st.cardsSeen ?? 1) < 0.5 && (
+              <p className="m-0 mb-1 text-xs text-brand-negative">
+                {!st.indexedCards
+                  ? "None of our cards were indexed — the catalogue is empty, migration 033 hasn't run, or this run predates the check."
+                  : `Only ${(st.matched ?? 0).toLocaleString()} of ${(st.cardsSeen ?? 0).toLocaleString()} ` +
+                    `of their cards matched ours, against ${st.indexedCards.toLocaleString()} indexed. ` +
+                    `A healthy sync matches nearly everything — both catalogues are the same game — ` +
+                    `so this is a name or number format mismatch, not a missing catalogue. ` +
+                    `The examples below show how their side writes them.`}
+              </p>
+            )}
+          {st.addsPaused && (
+            <p className="m-0 mb-1 rounded border border-brand-warning/40 bg-brand-warning/10 p-2 text-xs text-brand-warning">
+              <b>Adding new cards is paused.</b> {st.addsPaused}
             </p>
           )}
-          {(st.unmatchedSamples?.length ?? 0) > 0 && (st.idsFilled ?? 0) === 0 && (
+          {(st.unmatchedSamples?.length ?? 0) > 0 && (
             <details className="mb-1 text-[11px] text-brand-ink4">
               <summary className="cursor-pointer">
                 Sample of unmatched cards (to tell &ldquo;we don&apos;t hold it&rdquo; from a
@@ -2404,6 +2436,7 @@ function PriceSyncPanel() {
               {st.unmatchedSamples!.map((u, i) => (
                 <div key={i} className="font-mono">
                   {u.set}: {u.name} #{u.num}
+                  {u.key && <span className="opacity-60"> → looked up as {u.key}</span>}
                 </div>
               ))}
             </details>
@@ -3146,7 +3179,7 @@ function MirrorArtPanel() {
     } | null;
   } | null>(null);
   const [running, setRunning] = useState(false);
-  const [run, setRun] = useState({ mirrored: 0, failures: [] as string[] });
+  const [run, setRun] = useState({ mirrored: 0, skipped: 0, failures: [] as string[] });
   const [error, setError] = useState<string | null>(null);
   const stopRef = useRef(false);
 
@@ -3189,7 +3222,7 @@ function MirrorArtPanel() {
         if (!res.ok) throw new Error(json.error || "Reclaim failed");
         reverted += json.reverted;
         files += json.filesRemoved;
-        setRun({ mirrored: reverted, failures: [`${files} files removed so far`] });
+        setRun({ mirrored: reverted, skipped: 0, failures: [`${files} files removed so far`] });
         cursor = json.cursor;
         if (json.done) break;
       }
@@ -3204,20 +3237,29 @@ function MirrorArtPanel() {
     setRunning(true);
     setError(null);
     stopRef.current = false;
-    setRun({ mirrored: 0, failures: [] });
+    setRun({ mirrored: 0, skipped: 0, failures: [] });
     let after: string | null = null;
     try {
       for (;;) {
         if (stopRef.current) break;
-        const res = await fetch("/api/admin/mirror-art", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ after }),
-        });
+        const res = await resilientFetch(
+          "/api/admin/mirror-art",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ after }),
+          },
+          {
+            onRetry: (n) => setError(`Connection dropped — reconnecting (${n})…`),
+            stopped: () => stopRef.current,
+          }
+        );
+        setError(null);
         // Text first: a proxy timeout answers with prose, not JSON.
         const text = await res.text();
         let json: {
           mirrored: number;
+          skipped?: number;
           failed: Array<{ id: string; reason: string }>;
           lastId: string | null;
           done: boolean;
@@ -3231,6 +3273,7 @@ function MirrorArtPanel() {
         if (!res.ok) throw new Error(json.error || "Mirror failed");
         setRun((r) => ({
           mirrored: r.mirrored + json.mirrored,
+          skipped: r.skipped + (json.skipped ?? 0),
           failures: [...r.failures, ...json.failed.map((f) => `${f.id}: ${f.reason}`)].slice(-8),
         }));
         after = json.lastId;
@@ -3305,6 +3348,8 @@ function MirrorArtPanel() {
         <p className="m-0 mt-2 text-xs text-brand-ink3">
           {running ? "Running… " : "Stopped. "}
           {run.mirrored.toLocaleString()} card{run.mirrored === 1 ? "" : "s"} mirrored this run.
+          {run.skipped > 0 &&
+            ` ${run.skipped.toLocaleString()} passed over — art that failed repeatedly, retried again in 30 days.`}
         </p>
       )}
       {run.failures.length > 0 && (

@@ -42,6 +42,14 @@ export const SYNC_STATE_KEY = "price_tracker_sync";
  *  five in quick succession tripped it. */
 const SET_INTERVAL_MS = 6_000;
 
+/** The safety valve on adding cards: how many of their cards must be seen
+ *  before the match rate means anything, and how low that rate has to fall
+ *  before adding is treated as a bug rather than a gap. Half is generous —
+ *  a healthy sync matches nearly everything, since both catalogues are the
+ *  same game. */
+const ADD_GUARD_MIN_SEEN = 300;
+const ADD_GUARD_MIN_RATE = 0.5;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface SyncState {
@@ -50,6 +58,14 @@ export interface SyncState {
   sets: Array<{ id: string; name: string }>;
   setIndex: number;
   cardsSeen: number;
+  /** How many of their cards found one of ours. The denominator that makes
+   *  "3,771 new cards added" readable as either a healthy import or a
+   *  broken matcher — without it the two look identical. */
+  matched: number;
+  /** Set when the match rate collapsed and adding was stopped. Carries the
+   *  reason so the panel can say what happened rather than just going
+   *  quiet. */
+  addsPaused?: string | null;
   pricesFilled: number;
   imagesFilled: number;
   idsFilled: number;
@@ -71,7 +87,7 @@ export interface SyncState {
    *  matched" has two very different causes — we don't hold the card, or we
    *  hold it under a different name/number format — and only seeing real
    *  examples separates them. */
-  unmatchedSamples: Array<{ set: string; name: string; num: string }>;
+  unmatchedSamples: Array<{ set: string; name: string; num: string; key?: string }>;
   startedAt: string;
   updatedAt: string;
   finishedAt: string | null;
@@ -85,6 +101,8 @@ export function freshSyncState(): SyncState {
     sets: [],
     setIndex: 0,
     cardsSeen: 0,
+    matched: 0,
+    addsPaused: null,
     pricesFilled: 0,
     imagesFilled: 0,
     idsFilled: 0,
@@ -239,6 +257,51 @@ export function rowFromTheirs(
  *  near miss, and collisions are counted and skipped. */
 export function indexKey(name: string, number: string | null | undefined): string {
   return `${cleanCardName(name ?? "").toLowerCase()}|${numberKey(number ?? "") ?? ""}`;
+}
+
+/** The keys one of THEIR cards might be filed under, best guess first.
+ *
+ *  Their records come from TCGplayer, whose product names and collector
+ *  numbers are written for a shop, not a catalogue. Two differences break a
+ *  naive key outright:
+ *
+ *    "58/102"  — a collector number written with its set size. numberKey
+ *                strips non-digits, so this becomes "58102" and matches
+ *                nothing; ours is plain "58".
+ *    "Pikachu - 58/102" — the number repeated inside the product name, and
+ *                sometimes a bare "Pikachu - 58".
+ *
+ *  Each is undone and the resulting keys tried in turn. Every variant is a
+ *  no-op on data that was already clean, so this cannot make matching worse
+ *  — and a card matched on a later variant is the same card, not a fuzzy
+ *  guess: name and number must still both agree exactly. */
+export function theirKeys(
+  name: string | null | undefined,
+  number: string | null | undefined
+): string[] {
+  const rawName = (name ?? "").trim();
+  const rawNumber = (number ?? "").trim();
+
+  const names = new Set<string>([rawName]);
+  // " - 58/102" or " - 58" at the end of a product name.
+  const trimmed = rawName.replace(/\s*[-–—]\s*#?\d+\s*(?:\/\s*\w+)?\s*$/, "").trim();
+  if (trimmed) names.add(trimmed);
+
+  const numbers = new Set<string>([rawNumber]);
+  // "58/102" → "58". Only the part before the slash is the card's own number.
+  if (rawNumber.includes("/")) {
+    const head = rawNumber.split("/")[0].trim();
+    if (head) numbers.add(head);
+  }
+
+  const keys: string[] = [];
+  for (const n of names) {
+    for (const num of numbers) {
+      const key = indexKey(n, num);
+      if (!keys.includes(key)) keys.push(key);
+    }
+  }
+  return keys;
 }
 
 /** Our catalogue, keyed for matching. Keys hit by more than one card are
@@ -557,12 +620,18 @@ export async function runPriceSync(
       const patches: Patch[] = [];
       for (const theirs of cards) {
         state.cardsSeen += 1;
-        const key = indexKey(theirs.name ?? "", theirs.cardNumber);
-        if (ambiguous.has(key)) {
+        const keys = theirKeys(theirs.name, theirs.cardNumber);
+        const key = keys[0];
+        if (keys.some((k) => ambiguous.has(k))) {
           state.skippedAmbiguous += 1;
           continue;
         }
-        const mine = byKey.get(key);
+        let mine: OurCard | undefined;
+        for (const k of keys) {
+          mine = byKey.get(k);
+          if (mine) break;
+        }
+        if (mine) state.matched += 1;
         if (!mine) {
           // A card we don't hold at all: add it rather than skip it. The
           // catalogue is only as complete as its sources, and this source is
@@ -570,7 +639,29 @@ export async function runPriceSync(
           // — a key two of OUR cards already share can't safely gain a third
           // — and by rowFromTheirs returning null for records too thin to
           // ever match again.
-          if (!ambiguous.has(key)) {
+          //
+          // …and guarded by the match rate, which is the guard that was
+          // missing. Adding is for the handful of cards a source has and we
+          // don't. When almost NOTHING matches, the honest reading is that
+          // the matcher is broken, not that we are missing 97% of the
+          // Pokémon catalogue — and the difference matters because one
+          // outcome is a filled gap and the other is tens of thousands of
+          // duplicate rows that then cost storage, bandwidth and a cleanup.
+          // Pausing is free and reversible; the run keeps updating the
+          // cards it DID match.
+          if (state.addsPaused == null && state.cardsSeen >= ADD_GUARD_MIN_SEEN) {
+            const rate = state.matched / state.cardsSeen;
+            if (rate < ADD_GUARD_MIN_RATE) {
+              state.addsPaused =
+                `Only ${Math.round(rate * 100)}% of their cards matched ours over the ` +
+                `first ${state.cardsSeen.toLocaleString()} seen. That reads as a matching ` +
+                `problem rather than a genuinely missing catalogue, so adding new cards ` +
+                `stopped. Prices and images for matched cards are still being updated. ` +
+                `Check the unmatched examples below to see how their names and numbers ` +
+                `are written.`;
+            }
+          }
+          if (!ambiguous.has(key) && state.addsPaused == null) {
             const row = rowFromTheirs(theirs, set);
             if (row) {
               const { error: insErr } = await admin
@@ -604,11 +695,15 @@ export async function runPriceSync(
               }
             }
           }
-          if (state.unmatchedSamples.length < 10) {
+          // Verbatim, plus the key we looked them up under — the name and
+          // number alone say what they sent, and the key says what we made
+          // of it, which is where a mismatch actually lives.
+          if (state.unmatchedSamples.length < 25) {
             state.unmatchedSamples.push({
               set: set.name,
               name: theirs.name ?? "?",
               num: theirs.cardNumber ?? "?",
+              key,
             });
           }
           continue;
