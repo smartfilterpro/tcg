@@ -53,7 +53,7 @@ export async function GET(req: Request) {
     {
       let query = supabase
         .from("sealed_products")
-        .select("name, kind, set_name, release_year, market_price")
+        .select("name, kind, set_name, release_year, market_price, image_url")
         .limit(12);
       if (q) query = query.ilike("name", `%${q}%`);
       const { data, error } = await query;
@@ -69,6 +69,7 @@ export async function GET(req: Request) {
             year: (p.release_year as number | null) ?? null,
             source: "catalogue",
             marketPrice: (p.market_price as number | null) ?? null,
+            image: (p.image_url as string | null) ?? null,
           });
         }
       }

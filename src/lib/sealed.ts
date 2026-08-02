@@ -128,6 +128,13 @@ export interface SealedPrice {
   count: number;
   currency: string;
   source: string;
+  /** A picture of the product, from the same search. Costs nothing extra —
+   *  eBay returns an image with every item summary, and we were discarding
+   *  it. Taken from the listing NEAREST THE MEDIAN rather than the first or
+   *  the cheapest: the cheapest listing is the one most likely to be a
+   *  misdescribed single pack or a photo of an empty box, and its picture
+   *  would be wrong in exactly the same way its price is. */
+  image?: string | null;
 }
 
 const TTL_MS = 6 * 60 * 60 * 1000;
@@ -172,7 +179,10 @@ export async function sealedPrice(query: {
     return null;
   }
 
-  const totals: number[] = [];
+  // Kept together so the image can be taken from the SAME listing that
+  // sets the median, rather than from whichever credible one happened to
+  // come back first.
+  const credibleItems: Array<{ total: number; image: string | null }> = [];
   let currency = "USD";
   for (const item of items) {
     const title = typeof item.title === "string" ? item.title : "";
@@ -185,21 +195,32 @@ export async function sealedPrice(query: {
       ...shipping.map((s) => Number(s.shippingCost?.value)).filter((n) => Number.isFinite(n)),
       Infinity
     );
-    totals.push(value + (Number.isFinite(ship) ? ship : 0));
+    const img = (item.image as { imageUrl?: string } | undefined)?.imageUrl;
+    const thumb = (item.thumbnailImages as Array<{ imageUrl?: string }> | undefined)?.[0]?.imageUrl;
+    credibleItems.push({
+      total: value + (Number.isFinite(ship) ? ship : 0),
+      image: typeof img === "string" ? img : typeof thumb === "string" ? thumb : null,
+    });
     currency = price?.currency ?? currency;
   }
+  const totals = credibleItems.map((c) => c.total);
 
   if (totals.length === 0) {
     cache.set(key, { at: Date.now(), value: null });
     return null;
   }
+  const ranked = [...credibleItems].sort((a, b) => a.total - b.total);
   totals.sort((a, b) => a - b);
+  // The middle listing: the one whose price we are quoting, so the picture
+  // and the number describe the same thing.
+  const middle = ranked[Math.floor(ranked.length / 2)];
   const result: SealedPrice = {
     median: Math.round(median(totals) * 100) / 100,
     low: Math.round(totals[0] * 100) / 100,
     count: totals.length,
     currency,
     source: "eBay listings",
+    image: middle?.image ?? ranked.find((r) => r.image)?.image ?? null,
   };
   cache.set(key, { at: Date.now(), value: result });
   return result;
@@ -224,15 +245,67 @@ export async function priceProduct(
     if (!price) return null;
     const { createAdminClient } = await import("@/lib/supabase/admin");
     const admin = createAdminClient();
-    await admin
+
+    const patch: Record<string, unknown> = {
+      market_price: price.median,
+      price_updated_at: new Date().toISOString(),
+      price_source: `${price.source} (${price.count} listings)`,
+    };
+
+    // Only fill a picture we don't have. Repricing runs every time somebody
+    // presses Check price, and swapping the image on each run would mean a
+    // product's photo changing under its owner for no reason.
+    const { data: current } = await admin
       .from("sealed_products")
-      .update({
-        market_price: price.median,
-        price_updated_at: new Date().toISOString(),
-        price_source: `${price.source} (${price.count} listings)`,
-      })
-      .eq("id", productId);
+      .select("image_url")
+      .eq("id", productId)
+      .maybeSingle();
+    if (!current?.image_url && price.image) {
+      patch.image_url = (await mirrorSealedImage(productId, price.image)) ?? price.image;
+    }
+
+    await admin.from("sealed_products").update(patch).eq("id", productId);
     return price.median;
+  } catch {
+    return null;
+  }
+}
+
+/** Copy a listing photo into our own storage.
+ *
+ *  eBay image URLs point at a listing, and listings END — in weeks, often.
+ *  Hotlinking one means every sealed product quietly loses its picture on a
+ *  schedule nobody controls, which is precisely the decay that left whole
+ *  sets of cards showing broken images. So the bytes are taken once and
+ *  kept.
+ *
+ *  Reuses the card-art bucket under a sealed/ prefix rather than minting a
+ *  second one: it is already public, already backed by the same storage,
+ *  and one bucket to reason about beats two.
+ *
+ *  Null on any failure, and the caller falls back to the source URL — a
+ *  picture that may expire later still beats no picture now. */
+async function mirrorSealedImage(productId: string, url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, {
+      headers: { Accept: "image/*", "User-Agent": "TrainerDeck sealed art" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.startsWith("image/")) return null;
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length < 1_000 || buffer.length > 8_000_000) return null;
+
+    const ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+    const path = `sealed/${productId}.${ext}`;
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const admin = createAdminClient();
+    const { error } = await admin.storage
+      .from("card-art")
+      .upload(path, buffer, { contentType, upsert: true });
+    if (error) return null;
+    return admin.storage.from("card-art").getPublicUrl(path).data.publicUrl;
   } catch {
     return null;
   }
@@ -250,4 +323,7 @@ export interface SealedSuggestion {
    *  set name. */
   source: "catalogue" | "suggested";
   marketPrice?: number | null;
+  /** Only ever set for products already in the catalogue — a generated
+   *  suggestion has no picture until somebody adds it and it gets priced. */
+  image?: string | null;
 }

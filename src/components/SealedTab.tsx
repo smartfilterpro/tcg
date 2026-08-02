@@ -226,6 +226,19 @@ export default function SealedTab() {
                   disabled={adding}
                   onClick={() => add(sug)}
                 >
+                  {sug.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={sug.image}
+                      alt=""
+                      className="h-10 w-10 shrink-0 rounded object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded bg-slate-100 text-sm">
+                      📦
+                    </span>
+                  )}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm">{sug.name}</span>
                     <span className="block text-[11px] text-slate-400">
@@ -296,6 +309,19 @@ export default function SealedTab() {
                 key={item.id}
                 className="card-panel flex flex-wrap items-center gap-3 p-3 text-sm"
               >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                {item.product?.image_url ? (
+                  <img
+                    src={item.product.image_url}
+                    alt=""
+                    className="h-16 w-16 shrink-0 rounded object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded bg-slate-100 text-lg">
+                    📦
+                  </div>
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-semibold">{item.product?.name}</div>
                   <div className="text-xs text-slate-500">
