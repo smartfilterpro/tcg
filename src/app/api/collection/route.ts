@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { priceTrackerEnabled, priceTrackerMarketPrice } from "@/lib/priceTracker";
 import { summaryToRow, type CardSummary, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 
@@ -143,9 +145,60 @@ export async function POST(req: Request) {
       added += w.qty;
     }
 
+    // 4) Price anything that landed without one, in the background.
+    //
+    // A scanned card takes whatever price its catalogue row already holds,
+    // and for a card the free sources never priced that is nothing — it
+    // then showed $0 until the nightly refresher's rotation reached it,
+    // which on a big collection is days. The paid tracker answers in one
+    // credit, so the honest fix is to just ask, now, for the handful of
+    // cards that need it. Detached: nobody waits on a price to finish
+    // saving their cards.
+    void priceMissing(cardIds);
+
     return NextResponse.json({ ok: true, added });
   } catch (err) {
     return errorResponse(err);
+  }
+}
+
+/** Fill in prices for freshly-saved cards that have none. Best-effort and
+ *  capped: a bulk save of 200 unpriced cards should not become 200 API
+ *  calls in one request. The rest are caught by the nightly refresher,
+ *  which now consults the same source. */
+async function priceMissing(cardIds: string[]): Promise<void> {
+  if (!priceTrackerEnabled()) return;
+  try {
+    const admin = createAdminClient();
+    const { data: rows } = await admin
+      .from("cards")
+      .select("id, name, number, set_name, market_price")
+      .in("id", cardIds.slice(0, 200));
+    const needy = ((rows ?? []) as Array<{
+      id: string;
+      name: string;
+      number: string | null;
+      set_name: string | null;
+      market_price: number | null;
+    }>)
+      .filter((c) => c.market_price == null)
+      .slice(0, 25);
+    for (const card of needy) {
+      const price = await priceTrackerMarketPrice({
+        name: card.name,
+        setName: card.set_name,
+        number: card.number,
+      });
+      if (price != null) {
+        await admin
+          .from("cards")
+          .update({ market_price: price, price_updated_at: new Date().toISOString() })
+          .eq("id", card.id)
+          .then(() => {});
+      }
+    }
+  } catch {
+    // A missing price is the status quo, not a reason to shout.
   }
 }
 

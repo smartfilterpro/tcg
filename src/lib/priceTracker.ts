@@ -421,3 +421,28 @@ export async function findCard(query: {
     return null;
   }
 }
+
+/** One card's market price from the paid tracker.
+ *
+ *  The tracker was wired in for the set-by-set sync and for finding
+ *  artwork, but never as a PRICE source for one card on demand — so a
+ *  freshly scanned card whose catalogue row had no price stayed blank
+ *  until the set sweep happened to reach its set, which can be weeks. It
+ *  is the best price source we have and it costs one credit, which is
+ *  nothing against 20,000 a day.
+ *
+ *  Returns null on anything unexpected: an absent price is the status quo,
+ *  and a wrong one is worse than none. */
+export async function priceTrackerMarketPrice(query: {
+  name: string;
+  setName?: string | null;
+  number?: string | null;
+}): Promise<number | null> {
+  try {
+    const card = await findCard(query);
+    if (!card) return null;
+    return extractMarketPrice(card);
+  } catch {
+    return null;
+  }
+}

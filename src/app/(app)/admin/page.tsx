@@ -1830,6 +1830,7 @@ function PriceRefreshPanel({
       error?: string;
     } | null;
     textWarmed?: number;
+    trackerPriced?: number;
     error?: string;
   } | null;
 }) {
@@ -1914,6 +1915,8 @@ function PriceRefreshPanel({
             Last run {new Date(current.ranAt).toLocaleString()}: checked {current.checked ?? 0},
             updated {current.updated ?? 0}
             {(current.unpriced ?? 0) > 0 && `, ${current.unpriced} had no price data`}
+            {(current.trackerPriced ?? 0) > 0 &&
+              `, ${current.trackerPriced} priced by the paid tracker`}
             {(current.textWarmed ?? 0) > 0 && `, ${current.textWarmed} cards' text cached`}. Runs
             by itself about once a day, stalest cards first.
           </span>

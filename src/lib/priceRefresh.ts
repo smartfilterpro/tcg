@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getCardById } from "@/lib/pokemontcg";
 import { getTcgdexPriceById } from "@/lib/tcgdex";
 import { poketraceEnabled, searchPoketraceCard, getPoketracePrices } from "@/lib/poketrace";
+import { priceTrackerEnabled, priceTrackerMarketPrice } from "@/lib/priceTracker";
 import { getBattleDataById } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { fetchAllRows } from "@/lib/fetchAll";
@@ -50,6 +51,8 @@ export interface PriceRefreshSummary {
   } | null;
   /** Cards whose printed text/combat data was cached this run. */
   textWarmed?: number;
+  /** Priced by the paid tracker after the free sources had nothing. */
+  trackerPriced?: number;
   /** Set when the run failed partway — shown in the admin panel. */
   error?: string;
 }
@@ -180,6 +183,24 @@ export async function refreshStalePrices(
           }
           // PokeTrace's daily-updated market number wins when it exists.
           if (ptMarket != null) nextMarket = ptMarket;
+
+          // Last resort, and the reason a scanned card stops sitting at no
+          // price: the paid tracker. It was wired in for the set-by-set
+          // sweep and for artwork but never consulted per card, so a card
+          // the free sources don't price stayed blank until the sweep
+          // happened to reach its set — which for a new set is weeks. One
+          // credit each, against 20,000 a day.
+          if (nextMarket == null && priceTrackerEnabled()) {
+            const tracked = await priceTrackerMarketPrice({
+              name: card.name as string,
+              setName: (card.set_name as string | null) ?? null,
+              number: (card.number as string | null) ?? null,
+            });
+            if (tracked != null) {
+              nextMarket = tracked;
+              summary.trackerPriced = (summary.trackerPriced ?? 0) + 1;
+            }
+          }
           summary.checked += 1;
 
           const old = (card.market_price as number | null) ?? null;
@@ -341,6 +362,7 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
       ),
       pt: value.pt ?? null,
       textWarmed: value.textWarmed ?? 0,
+      trackerPriced: value.trackerPriced ?? 0,
       ...(value.error ? { error: value.error } : {}),
     };
   } catch {
