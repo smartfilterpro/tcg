@@ -1331,6 +1331,10 @@ export default function AdminPage() {
             <h2 className="mb-2 font-display text-[17px] font-bold">🧬 Merge duplicate cards</h2>
             <DedupeCardsPanel />
           </div>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🪵 Server log</h2>
+            <ServerLogPanel />
+          </div>
         </>
       )}
 
@@ -3549,3 +3553,124 @@ function DedupeCardsPanel() {
   );
 }
 
+
+/** The recent server log, readable and downloadable from a phone.
+ *
+ *  The background jobs narrate themselves to the console, but on Railway
+ *  that output needs a desktop and the right deployment selected before the
+ *  interesting lines scroll away. This is the same output, kept by the
+ *  process, in a form that can be read here or handed to somebody as a file.
+ *
+ *  Per process: a deploy or restart empties it, which the header states
+ *  rather than leaving a gap to be misread as silence. */
+function ServerLogPanel() {
+  const [entries, setEntries] = useState<Array<{ t: string; level: string; msg: string }>>([]);
+  const [startedAt, setStartedAt] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [onlyProblems, setOnlyProblems] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/logs", { cache: "no-store" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't read the log");
+      setEntries(json.entries ?? []);
+      setStartedAt(json.startedAt ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't read the log");
+    }
+    setBusy(false);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const shown = onlyProblems
+    ? entries.filter((e) => e.level === "error" || e.level === "warn")
+    : entries;
+  // Newest first: the reason anyone opens a log is what just happened.
+  const ordered = [...shown].reverse();
+
+  async function copyAll() {
+    const text = ordered
+      .slice()
+      .reverse()
+      .map((e) => `${e.t} [${e.level}] ${e.msg}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("Couldn't copy — use Download instead.");
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="m-0 text-xs text-brand-ink4">
+        What this server has been doing: the background jobs, their results, and anything
+        that failed. Kept by the running process, so a deploy or restart starts it fresh —
+        Railway&apos;s own logs remain the complete record.
+      </p>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn-secondary text-xs" disabled={busy} onClick={load}>
+          {busy ? "Reading…" : "Refresh"}
+        </button>
+        <a className="btn-secondary text-xs" href="/api/admin/logs?format=text" download>
+          Download
+        </a>
+        <button className="btn-secondary text-xs" onClick={copyAll} disabled={ordered.length === 0}>
+          {copied ? "Copied" : "Copy"}
+        </button>
+        <label className="flex items-center gap-1.5 text-xs text-brand-ink4">
+          <input
+            type="checkbox"
+            checked={onlyProblems}
+            onChange={(e) => setOnlyProblems(e.target.checked)}
+          />
+          Problems only
+        </label>
+      </div>
+
+      {startedAt && (
+        <p className="m-0 text-[11px] text-brand-ink5">
+          Process up since {new Date(startedAt).toLocaleString()} · {entries.length} lines
+          {onlyProblems && ` · showing ${ordered.length}`}
+        </p>
+      )}
+      {error && <p className="m-0 text-xs text-brand-negative">{error}</p>}
+
+      {ordered.length === 0 ? (
+        <p className="m-0 text-xs text-brand-ink5">
+          Nothing logged yet. The background jobs report when they run — the first is a few
+          minutes after a restart.
+        </p>
+      ) : (
+        <div className="max-h-80 overflow-y-auto rounded border border-brand-line bg-brand-sunken p-2">
+          {ordered.map((e, i) => (
+            <div
+              key={i}
+              className={`whitespace-pre-wrap break-words font-mono text-[11px] leading-snug ${
+                e.level === "error"
+                  ? "text-brand-negative"
+                  : e.level === "warn"
+                    ? "text-brand-warning"
+                    : "text-brand-ink4"
+              }`}
+            >
+              <span className="opacity-50">{new Date(e.t).toLocaleTimeString()} </span>
+              {e.msg}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -633,6 +633,8 @@ export async function runPriceSync(
       const cards = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
 
       const patches: Patch[] = [];
+      const before = { matched: state.matched, added: state.cardsAdded };
+      const unmatchedHere: string[] = [];
       for (const theirs of cards) {
         state.cardsSeen += 1;
         const keys = theirKeys(theirs.name, theirs.cardNumber);
@@ -721,6 +723,9 @@ export async function runPriceSync(
               key,
             });
           }
+          if (unmatchedHere.length < 3) {
+            unmatchedHere.push(`"${theirs.name ?? "?"}" #${theirs.cardNumber ?? "?"} → ${key}`);
+          }
           continue;
         }
         const patch = patchFor(mine, theirs);
@@ -748,6 +753,17 @@ export async function runPriceSync(
           state.detailsFilled += 1;
         }
       }
+
+      // One line per set, with real examples of what didn't match. Counters
+      // say a sync is unhealthy; only the examples say why, and by the time
+      // anyone asks, the panel is showing totals from a later set.
+      const matchedHere = state.matched - before.matched;
+      const addedHere = state.cardsAdded - before.added;
+      console.log(
+        `price sync: "${set.name}" — ${cards.length} theirs, ${matchedHere} matched, ` +
+          `${addedHere} added, ${patches.length} to patch` +
+          (unmatchedHere.length > 0 ? ` · unmatched e.g. ${unmatchedHere.join(" | ")}` : "")
+      );
 
       state.setIndex += 1;
       setsThisRun += 1;
