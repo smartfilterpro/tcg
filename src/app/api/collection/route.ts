@@ -4,6 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { findTcgdexImage } from "@/lib/tcgdex";
+import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
 import { summaryToRow, type CardSummary, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 
@@ -224,10 +225,11 @@ async function fillMissing(cardIds: string[]): Promise<void> {
           patch.image_small = found.image;
           patch.image_large = found.image;
         }
-        // Their catalogue id rides along on the same credit. It is the join
-        // key for their bulk datasets, and we have no other source for it.
+        // Their catalogue id rides along on the same credit. Written
+        // separately: it is uniquely indexed, so a duplicate card in the
+        // catalogue would otherwise reject the price too.
         if (found.tcgPlayerId && !card.tcgplayer_id) {
-          patch.tcgplayer_id = found.tcgPlayerId;
+          await attachTcgPlayerId(admin, card.id, found.tcgPlayerId);
         }
       }
 

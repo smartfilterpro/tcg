@@ -20,6 +20,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getCardById } from "@/lib/pokemontcg";
 import { getTcgdexPriceById, findTcgdexImage } from "@/lib/tcgdex";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
+import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
 
 /** How long a card must wait between refreshes.
  *
@@ -94,6 +95,7 @@ export async function refreshCard(
 
   const id = card.id as string;
   const patch: Record<string, unknown> = { price_updated_at: new Date().toISOString() };
+  let tcgPlayerId: string | null = null;
 
   // 1. The card's own database.
   let market: number | null = null;
@@ -134,12 +136,21 @@ export async function refreshCard(
       patch.image_small = found.image;
       patch.image_large = found.image;
     }
-    if (found.tcgPlayerId && !card.tcgplayer_id) patch.tcgplayer_id = found.tcgPlayerId;
+    tcgPlayerId = found.tcgPlayerId;
   }
 
   if (market != null) patch.market_price = market;
 
   const { error: writeError } = await admin.from("cards").update(patch).eq("id", id);
+
+  // The bonus field, on its own and after the write that matters. It has a
+  // unique index, so bundling it here meant one duplicate card in the
+  // catalogue threw away a perfectly good price.
+  let duplicateOfAnother = false;
+  if (tcgPlayerId && !card.tcgplayer_id) {
+    const attached = await attachTcgPlayerId(admin, id, tcgPlayerId);
+    duplicateOfAnother = attached.conflict;
+  }
 
   // Read the row back rather than trusting what the update returned.
   //
@@ -190,6 +201,9 @@ export async function refreshCard(
   // Say what happened, specifically. "Refreshed" tells a member nothing
   // when the thing they wanted is still blank.
   let message: string;
+  const dupNote = duplicateOfAnother
+    ? " This card is a duplicate of another row in the catalogue — merge them in Admin, Catalogue, Merge duplicate cards."
+    : "";
   if (priceFound && imageFound) message = "Found a price and a picture.";
   else if (priceFound) message = hadPrice ? "Price updated." : "Found a price.";
   else if (imageFound) message = "Found a picture, but no source has a price for this card.";
@@ -207,5 +221,5 @@ export async function refreshCard(
       `price ${saved?.market_price ?? "none"}, art ${imageFound ? "found" : "unchanged"}`
   );
 
-  return { ok: true, priceFound, imageFound, message, card: saved ?? card };
+  return { ok: true, priceFound, imageFound, message: message + dupNote, card: saved ?? card };
 }

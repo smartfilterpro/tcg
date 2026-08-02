@@ -25,7 +25,33 @@ export const maxDuration = 300;
 // artwork, and the merge only touches the keys it is handed: a wrong-looking
 // pair gets unticked instead of blocking the other seventy.
 
-const numKey = (n: string | null) => (n ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+// Normalisation, matching the price sync's. Both sides matter here:
+//
+//   "95/84"            a TCGplayer collector number with the set size on it.
+//                      Stripping non-digits alone made this 9584, which
+//                      matched no pokemontcg.io row, so the twins this tool
+//                      exists to fold were invisible to it.
+//   "Silvally - 95/84" the number repeated inside a shop product name.
+//
+// Both are no-ops on values that were already plain.
+const numKey = (n: string | null) =>
+  (n ?? "").split("/")[0].replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+const nameKey = (n: string | null) =>
+  (n ?? "")
+    .replace(/\s*[-–—]\s*#?\d+\s*(?:\/\s*\w+)?\s*$/, "")
+    .trim()
+    .toLowerCase();
+/** Set names come from two vendors and disagree cosmetically — "SV: Paldea
+ *  Evolved" against "Paldea Evolved", "Pokémon" against "Pokemon". Reduced
+ *  to letters and digits so those stop splitting a genuine pair, while
+ *  still keeping genuinely different sets apart. */
+const setKey = (s: string | null) =>
+  (s ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/^(?:sv|swsh|sm|xy|bw|hgss|dp|ex)\s*[:-]\s*/, "")
+    .replace(/[^a-z0-9]/g, "");
 
 function provenance(id: string): number {
   if (id.startsWith("custom-")) return 3;
@@ -49,7 +75,7 @@ interface CardRow {
 
 /** Stable identity for a group, so the UI can hand specific ones back. */
 const keyOf = (c: CardRow) =>
-  `${c.name.toLowerCase()}|${numKey(c.number)}|${(c.set_name ?? "").toLowerCase()}`;
+  `${nameKey(c.name)}|${numKey(c.number)}|${setKey(c.set_name)}`;
 
 /** Best-provenanced first: the survivor is [0], the twins are the rest. */
 function ordered(group: CardRow[]): CardRow[] {

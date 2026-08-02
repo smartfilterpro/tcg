@@ -14,6 +14,10 @@
 // PER PROCESS. A restart empties it and a second instance has its own; both
 // are visible in the header the route returns, so a gap is never mistaken
 // for silence.
+//
+// The store lives on globalThis rather than in module scope — see below;
+// Next.js gives instrumentation and the routes separate copies of a module,
+// and a per-copy buffer is one that fills where nobody is reading.
 
 export type LogLevel = "log" | "warn" | "error";
 
@@ -28,9 +32,36 @@ export interface LogEntry {
  *  megabyte. */
 const MAX_ENTRIES = 1000;
 
-const buffer: LogEntry[] = [];
-const startedAt = new Date().toISOString();
-let installed = false;
+/* ON globalThis, NOT in module scope.
+ *
+ * Next.js compiles instrumentation.ts into its own bundle, separate from the
+ * route handlers. Module-level state therefore exists TWICE in one process:
+ * the copy the background jobs write to at boot, and the copy an API route
+ * sees when it imports the same file. The buffer filled up correctly and the
+ * admin page read a different, permanently empty one — "entries: 0" on a
+ * server that had been logging for minutes.
+ *
+ * console itself is a process-wide global, so the patch applied in either
+ * bundle catches everything; only the storage was split. Keeping the store
+ * on globalThis, keyed by a registered symbol, makes every copy of this
+ * module address the same array. */
+const STORE = Symbol.for("trainerdeck.logBuffer.v1");
+
+interface Store {
+  entries: LogEntry[];
+  startedAt: string;
+  installed: boolean;
+}
+
+function store(): Store {
+  const g = globalThis as unknown as Record<symbol, Store | undefined>;
+  let s = g[STORE];
+  if (!s) {
+    s = { entries: [], startedAt: new Date().toISOString(), installed: false };
+    g[STORE] = s;
+  }
+  return s;
+}
 
 /** Render one console argument.
  *
@@ -54,8 +85,9 @@ function render(arg: unknown): string {
 function push(level: LogLevel, args: unknown[]): void {
   try {
     const msg = args.map(render).join(" ").slice(0, 4000);
-    buffer.push({ t: new Date().toISOString(), level, msg });
-    if (buffer.length > MAX_ENTRIES) buffer.splice(0, buffer.length - MAX_ENTRIES);
+    const { entries } = store();
+    entries.push({ t: new Date().toISOString(), level, msg });
+    if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES);
   } catch {
     // Capturing must never affect the running program.
   }
@@ -65,8 +97,9 @@ function push(level: LogLevel, args: unknown[]): void {
  *  process is a no-op rather than a double-wrap, which would log everything
  *  twice and grow worse with each hot reload in development. */
 export function installLogCapture(): void {
-  if (installed) return;
-  installed = true;
+  const s = store();
+  if (s.installed) return;
+  s.installed = true;
 
   for (const level of ["log", "warn", "error"] as const) {
     const original = console[level].bind(console);
@@ -88,21 +121,27 @@ export function installLogCapture(): void {
     // applies because this listener does not replace it for logging alone.
   });
 
-  push("log", [`log capture started (process up at ${startedAt})`]);
+  push("log", [`log capture started (process up at ${s.startedAt})`]);
 }
 
 export function recentLogs(): { startedAt: string; entries: LogEntry[] } {
-  return { startedAt, entries: [...buffer] };
+  // Defensive install: if instrumentation didn't run — or ran in a bundle
+  // that never reached this code path — the first read still turns capture
+  // on rather than reporting an empty log forever.
+  installLogCapture();
+  const s = store();
+  return { startedAt: s.startedAt, entries: [...s.entries] };
 }
 
 /** The same thing as a plain text file, for handing to somebody else. */
 export function logsAsText(): string {
+  const { startedAt, entries } = recentLogs();
   const header = [
     `TrainerDeck server log`,
     `process started: ${startedAt}`,
     `captured at:     ${new Date().toISOString()}`,
-    `entries:         ${buffer.length}${buffer.length >= MAX_ENTRIES ? " (oldest dropped)" : ""}`,
+    `entries:         ${entries.length}${entries.length >= MAX_ENTRIES ? " (oldest dropped)" : ""}`,
     "",
   ].join("\n");
-  return header + buffer.map((e) => `${e.t} [${e.level}] ${e.msg}`).join("\n") + "\n";
+  return header + entries.map((e) => `${e.t} [${e.level}] ${e.msg}`).join("\n") + "\n";
 }
