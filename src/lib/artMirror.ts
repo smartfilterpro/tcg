@@ -638,6 +638,8 @@ export function startArtMirrorLoop() {
       let cursor = state.cursor ?? null;
       let mirrored = 0;
       let failedCount = 0;
+      let skippedCount = 0;
+      const failureSamples: string[] = [];
       let done = false;
       let lastError: string | null = null;
       try {
@@ -645,6 +647,13 @@ export function startArtMirrorLoop() {
           const result = await mirrorBatch(admin, cursor);
           mirrored += result.mirrored;
           failedCount += result.failed.length;
+          skippedCount += result.skipped ?? 0;
+          // The reasons, not just the count — "12 failed" is the same line
+          // whether the source is down or the URLs are dead, and those want
+          // opposite responses.
+          for (const f of result.failed) {
+            if (failureSamples.length < 5) failureSamples.push(`${f.id}: ${f.reason}`);
+          }
           cursor = result.lastId;
           if (result.done) {
             done = true;
@@ -675,8 +684,10 @@ export function startArtMirrorLoop() {
       if (mirrored > 0 || failedCount > 0 || lastError) {
         console.log(
           `art mirror: ${mirrored} mirrored, ${failedCount} failed` +
+            (skippedCount > 0 ? `, ${skippedCount} skipped (dead art, in cool-off)` : "") +
             (done ? " — pass complete" : "") +
-            (lastError ? ` — ERROR: ${lastError}` : "")
+            (lastError ? ` — ERROR: ${lastError}` : "") +
+            (failureSamples.length > 0 ? ` · e.g. ${failureSamples.join(" | ")}` : "")
         );
       }
     } catch (err) {

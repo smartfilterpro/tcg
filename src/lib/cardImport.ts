@@ -129,14 +129,26 @@ async function mergeTcgpDuplicates(
     .in("name", names);
   if (!twins || twins.length === 0) return;
 
-  const numKey = (n: string) => (n ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+  // Same normalisation the price sync matches on, and for the same reason:
+  // a twin's number and name came from TCGplayer, where "58/102" and
+  // "Pikachu - 58/102" are how a card is written. Stripping non-digits alone
+  // turned "58/102" into 58102, so the twins this function exists to clean
+  // up could never be found — the merge quietly did nothing. Both are no-ops
+  // on a number and name that were already plain.
+  const numKey = (n: string) =>
+    (n ?? "").split("/")[0].replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+  const nameKey = (n: string) =>
+    (n ?? "")
+      .replace(/\s*[-–—]\s*#?\d+\s*(?:\/\s*\w+)?\s*$/, "")
+      .trim()
+      .toLowerCase();
   const realByKey = new Map(
-    pageRows.map((r) => [`${r.name.toLowerCase()}|${numKey(r.number)}`, r.id])
+    pageRows.map((r) => [`${nameKey(r.name)}|${numKey(r.number)}`, r.id])
   );
 
   for (const twin of twins) {
     const realId = realByKey.get(
-      `${(twin.name as string).toLowerCase()}|${numKey(twin.number as string)}`
+      `${nameKey(twin.name as string)}|${numKey(twin.number as string)}`
     );
     if (!realId || realId === twin.id) continue;
 
@@ -317,4 +329,63 @@ export async function runCardImport(
 
   await writeImportState(admin, state);
   return state;
+}
+
+/* ------------------------------------------------------------- background */
+
+// The import runs itself, same rail as the price refresher, the art mirror
+// and the price sync — and for a reason those three already proved: a job
+// that only advances while an admin holds a phone awake is a job that stops
+// at 21% on a free API's timeout and waits for somebody to notice.
+//
+// The panel is unchanged and still drives the job when pressed. Both write
+// the same app_state row, so a manual run and the loop pick up each other's
+// progress; the claim below stops them running the same page twice.
+
+const IMPORT_LOOP_CLAIM_KEY = "card_import_loop";
+const IMPORT_TICK_MS = 10 * 60_000;
+/** While pages remain. Short, because an unfinished catalogue is the thing
+ *  every other feature is waiting on. */
+const IMPORT_HOT_GAP_MS = 9 * 60_000;
+/** Once it's complete. The catalogue gains cards when sets release, so a
+ *  weekly re-walk is enough to keep it current. */
+const IMPORT_REST_GAP_MS = 7 * 24 * 3600_000;
+
+export function startCardImportLoop() {
+  const tick = async () => {
+    try {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const admin = createAdminClient();
+      const current = await readImportState(admin);
+      const gap = current?.done ? IMPORT_REST_GAP_MS : IMPORT_HOT_GAP_MS;
+      const cutoff = new Date(Date.now() - gap).toISOString();
+      await admin
+        .from("app_state")
+        .upsert({ key: IMPORT_LOOP_CLAIM_KEY }, { onConflict: "key", ignoreDuplicates: true })
+        .then(() => {});
+      const { data: claimed, error } = await admin
+        .from("app_state")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("key", IMPORT_LOOP_CLAIM_KEY)
+        .lt("updated_at", cutoff)
+        .select("key");
+      if (error || !claimed || claimed.length === 0) return;
+
+      // A finished catalogue re-walks from the top to pick up new sets;
+      // an unfinished one continues. Never restart a run in progress —
+      // that is the click that threw away 15,000 cards before.
+      const state = await runCardImport(admin, 12, { restart: current?.done === true });
+      if (state.written > 0 || state.error) {
+        console.log(
+          `card import loop: page ${state.page}, ${state.written} written` +
+            (state.done ? " — catalogue complete" : "") +
+            (state.error ? ` — ERROR: ${state.error}` : "")
+        );
+      }
+    } catch (err) {
+      console.error("card import loop error", err);
+    }
+  };
+  setTimeout(tick, 4 * 60_000);
+  setInterval(tick, IMPORT_TICK_MS);
 }

@@ -212,8 +212,14 @@ export function rowFromTheirs(
   theirs: TheirCard,
   set: { id: string; name: string }
 ): Record<string, unknown> | null {
-  const name = cleanCardName(theirs.name ?? "");
-  const number = (theirs.cardNumber ?? "").trim();
+  // Normalised on the way IN, not just when matching. A row stored as
+  // "Pikachu - 58/102" with number "58/102" is unfindable by every consumer
+  // afterwards — the catalogue import's twin merge looks it up by plain
+  // name, search reads the name, and the number renders on the card. Fixing
+  // the shape here means a twin created today is one the merge can fold
+  // tomorrow.
+  const name = cleanCardName(plainName(theirs.name) || (theirs.name ?? ""));
+  const number = plainNumber(theirs.cardNumber);
   const tcgId = (theirs.tcgPlayerId ?? "").trim();
   if (!name || !number || !tcgId) return null;
 
@@ -259,6 +265,19 @@ export function indexKey(name: string, number: string | null | undefined): strin
   return `${cleanCardName(name ?? "").toLowerCase()}|${numberKey(number ?? "") ?? ""}`;
 }
 
+/** A TCGplayer product name with the collector number trimmed off the end:
+ *  "Pikachu - 58/102" → "Pikachu", "Pikachu - 58" → "Pikachu". Anything
+ *  without that suffix comes back unchanged. */
+export function plainName(name: string | null | undefined): string {
+  return (name ?? "").replace(/\s*[-–—]\s*#?\d+\s*(?:\/\s*\w+)?\s*$/, "").trim();
+}
+
+/** A collector number without its set size: "58/102" → "58". The part after
+ *  the slash is how big the set is, which lives in its own column. */
+export function plainNumber(number: string | null | undefined): string {
+  return (number ?? "").split("/")[0].trim();
+}
+
 /** The keys one of THEIR cards might be filed under, best guess first.
  *
  *  Their records come from TCGplayer, whose product names and collector
@@ -283,16 +302,12 @@ export function theirKeys(
   const rawNumber = (number ?? "").trim();
 
   const names = new Set<string>([rawName]);
-  // " - 58/102" or " - 58" at the end of a product name.
-  const trimmed = rawName.replace(/\s*[-–—]\s*#?\d+\s*(?:\/\s*\w+)?\s*$/, "").trim();
+  const trimmed = plainName(rawName);
   if (trimmed) names.add(trimmed);
 
   const numbers = new Set<string>([rawNumber]);
-  // "58/102" → "58". Only the part before the slash is the card's own number.
-  if (rawNumber.includes("/")) {
-    const head = rawNumber.split("/")[0].trim();
-    if (head) numbers.add(head);
-  }
+  const head = plainNumber(rawNumber);
+  if (head) numbers.add(head);
 
   const keys: string[] = [];
   for (const n of names) {
@@ -618,6 +633,8 @@ export async function runPriceSync(
       const cards = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
 
       const patches: Patch[] = [];
+      const before = { matched: state.matched, added: state.cardsAdded };
+      const unmatchedHere: string[] = [];
       for (const theirs of cards) {
         state.cardsSeen += 1;
         const keys = theirKeys(theirs.name, theirs.cardNumber);
@@ -706,6 +723,9 @@ export async function runPriceSync(
               key,
             });
           }
+          if (unmatchedHere.length < 3) {
+            unmatchedHere.push(`"${theirs.name ?? "?"}" #${theirs.cardNumber ?? "?"} → ${key}`);
+          }
           continue;
         }
         const patch = patchFor(mine, theirs);
@@ -733,6 +753,17 @@ export async function runPriceSync(
           state.detailsFilled += 1;
         }
       }
+
+      // One line per set, with real examples of what didn't match. Counters
+      // say a sync is unhealthy; only the examples say why, and by the time
+      // anyone asks, the panel is showing totals from a later set.
+      const matchedHere = state.matched - before.matched;
+      const addedHere = state.cardsAdded - before.added;
+      console.log(
+        `price sync: "${set.name}" — ${cards.length} theirs, ${matchedHere} matched, ` +
+          `${addedHere} added, ${patches.length} to patch` +
+          (unmatchedHere.length > 0 ? ` · unmatched e.g. ${unmatchedHere.join(" | ")}` : "")
+      );
 
       state.setIndex += 1;
       setsThisRun += 1;
