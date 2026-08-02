@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getCardById } from "@/lib/pokemontcg";
-import { getTcgdexPriceById } from "@/lib/tcgdex";
+import { getTcgdexPriceById, findTcgdexImage } from "@/lib/tcgdex";
 import { poketraceEnabled, searchPoketraceCard, getPoketracePrices } from "@/lib/poketrace";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { getBattleDataById } from "@/lib/pokemontcg";
@@ -51,6 +51,8 @@ export interface PriceRefreshSummary {
   } | null;
   /** Cards whose printed text/combat data was cached this run. */
   textWarmed?: number;
+  /** Given artwork by TCGdex, free, before any credit was spent. */
+  freeArt?: number;
   /** Priced by the paid tracker after the free sources had nothing. */
   trackerPriced?: number;
   /** Given artwork by the paid tracker, on the same lookups. */
@@ -229,7 +231,32 @@ export async function refreshStalePrices(
           // happened to reach its set — which for a new set is weeks. One
           // credit each, against 20,000 a day.
           const needsArt = !(card.image_small as string | null) && card.image_locked !== true;
-          if ((nextMarket == null || needsArt) && priceTrackerEnabled()) {
+
+          // Artwork, free source first. TCGdex carries the promos and older
+          // printings that are exactly the cards sitting here with no
+          // picture, and asking costs nothing — so it is tried BEFORE the
+          // paid credit, not after it. Custom entries are skipped: there is
+          // no real card behind the name to find.
+          let freeArt = false;
+          if (needsArt && !(card.id as string).startsWith("custom-")) {
+            const free = await findTcgdexImage({
+              name: card.name as string,
+              number: (card.number as string | null) ?? null,
+            });
+            if (free) {
+              const { error: freeErr } = await admin
+                .from("cards")
+                .update({ image_small: free, image_large: free })
+                .eq("id", card.id);
+              if (!freeErr) {
+                freeArt = true;
+                summary.freeArt = (summary.freeArt ?? 0) + 1;
+              }
+            }
+          }
+          const stillNeedsArt = needsArt && !freeArt;
+
+          if ((nextMarket == null || stillNeedsArt) && priceTrackerEnabled()) {
             const found = await priceTrackerCard({
               name: card.name as string,
               setName: (card.set_name as string | null) ?? null,
@@ -243,7 +270,7 @@ export async function refreshStalePrices(
             // picture is as broken-looking as one with no price, and the
             // art mirror copies whatever lands here into our own storage
             // on its next sweep.
-            if (needsArt && found.image) {
+            if (stillNeedsArt && found.image) {
               const { error: artErr } = await admin
                 .from("cards")
                 .update({ image_small: found.image, image_large: found.image })
@@ -412,6 +439,7 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
       ),
       pt: value.pt ?? null,
       textWarmed: value.textWarmed ?? 0,
+      freeArt: value.freeArt ?? 0,
       trackerPriced: value.trackerPriced ?? 0,
       trackerArt: value.trackerArt ?? 0,
       ...(value.error ? { error: value.error } : {}),

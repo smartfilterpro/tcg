@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
+import { findTcgdexImage } from "@/lib/tcgdex";
 import { summaryToRow, type CardSummary, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 
@@ -173,7 +174,6 @@ export async function POST(req: Request) {
  *  the catalogue import and the price sync follow, for the same reason:
  *  those exist precisely because the stock image was missing or wrong. */
 async function fillMissing(cardIds: string[]): Promise<void> {
-  if (!priceTrackerEnabled()) return;
   try {
     const admin = createAdminClient();
     const { data: rows } = await admin
@@ -192,20 +192,39 @@ async function fillMissing(cardIds: string[]): Promise<void> {
       .filter((c) => c.market_price == null || !c.image_small)
       .slice(0, 25);
     for (const card of needy) {
-      const found = await priceTrackerCard({
-        name: card.name,
-        setName: card.set_name,
-        number: card.number,
-      });
       const patch: Record<string, unknown> = {};
-      if (card.market_price == null && found.market != null) {
-        patch.market_price = found.market;
-        patch.price_updated_at = new Date().toISOString();
+      const wantsArt = !card.image_small && card.image_locked !== true;
+
+      // FREE FIRST. TCGdex carries the promos and early sets that are
+      // exactly the cards arriving here with no picture, and asking costs
+      // nothing — so it goes ahead of the paid lookup rather than after it.
+      if (wantsArt) {
+        const free = await findTcgdexImage({ name: card.name, number: card.number });
+        if (free) {
+          patch.image_small = free;
+          patch.image_large = free;
+        }
       }
-      if (!card.image_small && card.image_locked !== true && found.image) {
-        patch.image_small = found.image;
-        patch.image_large = found.image;
+
+      // Then pay, and only for what's still missing. If the picture came
+      // free and the price is already known, this call never happens.
+      const stillNeedsArt = wantsArt && !patch.image_small;
+      if ((card.market_price == null || stillNeedsArt) && priceTrackerEnabled()) {
+        const found = await priceTrackerCard({
+          name: card.name,
+          setName: card.set_name,
+          number: card.number,
+        });
+        if (card.market_price == null && found.market != null) {
+          patch.market_price = found.market;
+          patch.price_updated_at = new Date().toISOString();
+        }
+        if (stillNeedsArt && found.image) {
+          patch.image_small = found.image;
+          patch.image_large = found.image;
+        }
       }
+
       if (Object.keys(patch).length > 0) {
         await admin.from("cards").update(patch).eq("id", card.id).then(() => {});
       }

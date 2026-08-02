@@ -210,3 +210,34 @@ export async function searchTcgdex(opts: {
     .filter((c): c is TcgdexCard => !!c && !!c.name)
     .map(toSummary);
 }
+
+/** Artwork for a card we know by name and number rather than by TCGdex id.
+ *
+ *  The by-id lookup only helps cards that CAME from TCGdex. Most imageless
+ *  cards came from somewhere else — a promo pokemontcg.io never scanned, a
+ *  set that arrived early — and for those the only way in is a search.
+ *  Free, so it belongs ahead of the paid tracker in any gap-filling chain.
+ */
+export async function findTcgdexImage(query: {
+  name: string;
+  number?: string | null;
+}): Promise<string | null> {
+  try {
+    const hits = await searchTcgdex({
+      name: query.name,
+      number: query.number ?? undefined,
+      pageSize: 5,
+    });
+    // Prefer a hit whose number matches; a name-only match on a card with
+    // dozens of printings is a coin flip, and the wrong art is worse than
+    // none because nobody looks at it again.
+    const key = (n: string | null | undefined) =>
+      (n ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+    const wanted = key(query.number);
+    const exact = wanted ? hits.find((c) => key(c.number) === wanted) : null;
+    const pick = exact ?? (wanted ? null : hits[0]);
+    return pick?.imageLarge ?? pick?.imageSmall ?? null;
+  } catch {
+    return null;
+  }
+}
