@@ -9,5 +9,7 @@ export async function register() {
     startArtMirrorLoop();
     const { startPriceSyncLoop } = await import("@/lib/priceTrackerSync");
     startPriceSyncLoop();
+    const { startCardImportLoop } = await import("@/lib/cardImport");
+    startCardImportLoop();
   }
 }
