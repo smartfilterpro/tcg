@@ -3146,7 +3146,7 @@ function MirrorArtPanel() {
     } | null;
   } | null>(null);
   const [running, setRunning] = useState(false);
-  const [run, setRun] = useState({ mirrored: 0, failures: [] as string[] });
+  const [run, setRun] = useState({ mirrored: 0, skipped: 0, failures: [] as string[] });
   const [error, setError] = useState<string | null>(null);
   const stopRef = useRef(false);
 
@@ -3189,7 +3189,7 @@ function MirrorArtPanel() {
         if (!res.ok) throw new Error(json.error || "Reclaim failed");
         reverted += json.reverted;
         files += json.filesRemoved;
-        setRun({ mirrored: reverted, failures: [`${files} files removed so far`] });
+        setRun({ mirrored: reverted, skipped: 0, failures: [`${files} files removed so far`] });
         cursor = json.cursor;
         if (json.done) break;
       }
@@ -3204,7 +3204,7 @@ function MirrorArtPanel() {
     setRunning(true);
     setError(null);
     stopRef.current = false;
-    setRun({ mirrored: 0, failures: [] });
+    setRun({ mirrored: 0, skipped: 0, failures: [] });
     let after: string | null = null;
     try {
       for (;;) {
@@ -3218,6 +3218,7 @@ function MirrorArtPanel() {
         const text = await res.text();
         let json: {
           mirrored: number;
+          skipped?: number;
           failed: Array<{ id: string; reason: string }>;
           lastId: string | null;
           done: boolean;
@@ -3231,6 +3232,7 @@ function MirrorArtPanel() {
         if (!res.ok) throw new Error(json.error || "Mirror failed");
         setRun((r) => ({
           mirrored: r.mirrored + json.mirrored,
+          skipped: r.skipped + (json.skipped ?? 0),
           failures: [...r.failures, ...json.failed.map((f) => `${f.id}: ${f.reason}`)].slice(-8),
         }));
         after = json.lastId;
@@ -3305,6 +3307,8 @@ function MirrorArtPanel() {
         <p className="m-0 mt-2 text-xs text-brand-ink3">
           {running ? "Running… " : "Stopped. "}
           {run.mirrored.toLocaleString()} card{run.mirrored === 1 ? "" : "s"} mirrored this run.
+          {run.skipped > 0 &&
+            ` ${run.skipped.toLocaleString()} passed over — art that failed repeatedly, retried again in 30 days.`}
         </p>
       )}
       {run.failures.length > 0 && (
