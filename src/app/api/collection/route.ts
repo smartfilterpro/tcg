@@ -178,7 +178,7 @@ async function fillMissing(cardIds: string[]): Promise<void> {
     const admin = createAdminClient();
     const { data: rows } = await admin
       .from("cards")
-      .select("id, name, number, set_name, market_price, image_small, image_locked")
+      .select("id, name, number, set_name, market_price, image_small, image_locked, tcgplayer_id")
       .in("id", cardIds.slice(0, 200));
     const needy = ((rows ?? []) as Array<{
       id: string;
@@ -188,6 +188,7 @@ async function fillMissing(cardIds: string[]): Promise<void> {
       market_price: number | null;
       image_small: string | null;
       image_locked: boolean | null;
+      tcgplayer_id: string | null;
     }>)
       .filter((c) => c.market_price == null || !c.image_small)
       .slice(0, 25);
@@ -222,6 +223,11 @@ async function fillMissing(cardIds: string[]): Promise<void> {
         if (stillNeedsArt && found.image) {
           patch.image_small = found.image;
           patch.image_large = found.image;
+        }
+        // Their catalogue id rides along on the same credit. It is the join
+        // key for their bulk datasets, and we have no other source for it.
+        if (found.tcgPlayerId && !card.tcgplayer_id) {
+          patch.tcgplayer_id = found.tcgPlayerId;
         }
       }
 

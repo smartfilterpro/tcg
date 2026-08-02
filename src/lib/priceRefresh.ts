@@ -277,6 +277,17 @@ export async function refreshStalePrices(
                 .eq("id", card.id);
               if (!artErr) summary.trackerArt = (summary.trackerArt ?? 0) + 1;
             }
+            // And their catalogue id, which came back in the same response.
+            // It is the join key for their bulk datasets and there is no
+            // other way to get one — dropping it means paying again later
+            // for something already in our hands.
+            if (found.tcgPlayerId && "tcgplayer_id" in card && !card.tcgplayer_id) {
+              await admin
+                .from("cards")
+                .update({ tcgplayer_id: found.tcgPlayerId })
+                .eq("id", card.id)
+                .then(() => {});
+            }
           }
           summary.checked += 1;
 

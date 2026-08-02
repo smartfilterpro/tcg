@@ -406,13 +406,16 @@ export async function findCard(query: {
     const price =
       typeof card?.prices?.market === "number" ? card.prices.market : extractMarketPrice(json);
 
-    const value: PriceTrackerCard | null = images.length
-      ? {
-          images,
-          marketPrice: price,
-          tcgPlayerId: typeof card?.tcgPlayerId === "string" ? card.tcgPlayerId : null,
-        }
-      : null;
+    // A record counts as found if it carries ANYTHING we asked for. This
+    // used to require an image, which meant a card that came back priced but
+    // pictureless was reported as "not found" — the price thrown away, the
+    // miss cached for an hour, and the credit spent for nothing. Art and
+    // price are separate questions and a response can answer one of them.
+    const tcgPlayerId = typeof card?.tcgPlayerId === "string" ? card.tcgPlayerId : null;
+    const value: PriceTrackerCard | null =
+      images.length || price != null || tcgPlayerId
+        ? { images, marketPrice: price, tcgPlayerId }
+        : null;
     cache.set(key, { at: Date.now(), value });
     return value;
   } catch {
@@ -435,14 +438,23 @@ export async function priceTrackerCard(query: {
   name: string;
   setName?: string | null;
   number?: string | null;
-}): Promise<{ market: number | null; image: string | null }> {
+}): Promise<{ market: number | null; image: string | null; tcgPlayerId: string | null }> {
   try {
     const card = await findCard(query);
-    if (!card) return { market: null, image: null };
-    const images = extractImageUrls(card);
-    return { market: extractMarketPrice(card), image: images[0] ?? null };
+    if (!card) return { market: null, image: null, tcgPlayerId: null };
+    // findCard has already ranked the images and read the price off the
+    // documented fields; re-walking its return value would only re-derive
+    // what it just decided, less well.
+    return {
+      market: card.marketPrice,
+      image: card.images[0] ?? null,
+      // Their catalogue id, kept because it is the join key for every bulk
+      // dataset they publish and we have no other way to obtain one. It
+      // arrives free with a lookup we already paid for.
+      tcgPlayerId: card.tcgPlayerId,
+    };
   } catch {
-    return { market: null, image: null };
+    return { market: null, image: null, tcgPlayerId: null };
   }
 }
 

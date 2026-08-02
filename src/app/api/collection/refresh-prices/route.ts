@@ -19,7 +19,7 @@ export async function POST() {
     const { data: items, error } = await supabase
       .from("collection_items")
       .select(
-        "card_id, card:cards(id, name, number, set_name, price_updated_at, image_small, image_locked)"
+        "card_id, card:cards(id, name, number, set_name, price_updated_at, image_small, image_locked, tcgplayer_id)"
       )
       .eq("user_id", user.id);
     if (error) throw error;
@@ -43,6 +43,7 @@ export async function POST() {
             price_updated_at: string | null;
             image_small: string | null;
             image_locked: boolean | null;
+            tcgplayer_id: string | null;
           }
       )
       .filter((c) => c && (!c.price_updated_at || new Date(c.price_updated_at).getTime() < cutoff))
@@ -104,6 +105,7 @@ export async function POST() {
           patch.image_small = found.image;
           patch.image_large = found.image;
         }
+        if (found.tcgPlayerId && !card.tcgplayer_id) patch.tcgplayer_id = found.tcgPlayerId;
         if (Object.keys(patch).length > 0) {
           await supabase.from("cards").update(patch).eq("id", card.id);
           if (patch.market_price != null) updated++;

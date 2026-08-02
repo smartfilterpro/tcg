@@ -2267,6 +2267,7 @@ function PriceSyncPanel() {
       pricesFilled: number;
       imagesFilled: number;
       idsFilled: number;
+      detailsFilled?: number;
       skippedAmbiguous: number;
       indexedCards: number;
       rateLimited: boolean;
@@ -2372,7 +2373,8 @@ function PriceSyncPanel() {
             <b>{(st.pricesFilled ?? 0).toLocaleString()} prices updated</b>,{" "}
             {(st.imagesFilled ?? 0).toLocaleString()} missing image
             {(st.imagesFilled ?? 0) === 1 ? "" : "s"} filled,{" "}
-            {(st.idsFilled ?? 0).toLocaleString()} ids filled
+            {(st.idsFilled ?? 0).toLocaleString()} ids filled,{" "}
+            {(st.detailsFilled ?? 0).toLocaleString()} card details filled
             {(st.cardsAdded ?? 0) > 0 && (
               <>
                 {" "}
