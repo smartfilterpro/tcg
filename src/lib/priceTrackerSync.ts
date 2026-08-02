@@ -33,7 +33,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { cleanCardName, numberKey } from "@/lib/pokemontcg";
-import { budgetState, priceTrackerEnabled, ptFetch } from "@/lib/priceTracker";
+import { budgetState, effectiveRemaining, priceTrackerEnabled, ptFetch } from "@/lib/priceTracker";
 
 export const SYNC_STATE_KEY = "price_tracker_sync";
 
@@ -619,11 +619,14 @@ export async function runPriceSync(
     let setsThisRun = 0;
     while (state.setIndex < state.sets.length && setsThisRun < maxSets) {
       const budget = budgetState();
-      if (budget.cap - budget.used <= reserve) {
+      // Upstream's own count, not our guess at their plan size — see
+      // effectiveRemaining. A sweep that halts because a local constant was
+      // set conservatively is a sweep that halts for no reason at all.
+      if (effectiveRemaining() <= reserve) {
         // Not an error and not "done" — the day's credits are spoken for.
         // Recorded because the alternative is a run that walks zero sets and
         // reports its old totals, which reads exactly like a stuck job.
-        state.budgetPaused = `${budget.used.toLocaleString()} of ${budget.cap.toLocaleString()} credits used; holding the last ${reserve.toLocaleString()} for on-demand lookups. Resumes when the daily allowance rolls over.`;
+        state.budgetPaused = `${effectiveRemaining().toLocaleString()} credits left today (${budget.used.toLocaleString()} used); holding the last ${reserve.toLocaleString()} back for on-demand lookups. Resumes when the daily allowance rolls over.`;
         break;
       }
       state.budgetPaused = null;
