@@ -58,7 +58,17 @@ export interface PriceRefreshSummary {
 }
 
 const STATE_KEY = "price_refresh";
+
+/** How long between runs once every owned card has a price. Prices move
+ *  slowly; a daily pass is plenty for maintenance. */
 const MIN_HOURS_BETWEEN_RUNS = 20;
+
+/** …and how long while cards are still sitting with NO price at all. That
+ *  is a backlog, not maintenance — a card someone scanned today showing no
+ *  value is the app looking broken, and waiting a day per 400 cards to fix
+ *  it is the wrong trade. Clears itself: once nothing is unpriced the loop
+ *  falls back to the daily gap above. */
+const BACKLOG_HOURS_BETWEEN_RUNS = 1;
 
 /** @param limit how many stale cards to re-price this run.
  *  @param opts.ptBudget PokeTrace requests allowed. Its free plan caps the
@@ -67,7 +77,14 @@ const MIN_HOURS_BETWEEN_RUNS = 20;
  *  @param opts.textBudget how many cards get their printed text warmed —
  *    the cache the deck builder, deck review and battles all read. */
 export async function refreshStalePrices(
-  limit = 120,
+  // Raised from 120, which was sized for constraints that have since gone:
+  // PokeTrace's free 250-a-day cap (still respected, but it is now one
+  // source of four and capped separately), and an admin REQUEST timeout
+  // that stopped applying when this moved onto the background loop. The
+  // real limits now are politeness to the free APIs and wall-clock, and
+  // 400 cards at four at a time with a breath between batches is a few
+  // minutes of a process that has all night.
+  limit = 400,
   opts?: { ptBudget?: number; textBudget?: number }
 ): Promise<PriceRefreshSummary> {
   const admin = createAdminClient();
@@ -124,6 +141,10 @@ export async function refreshStalePrices(
 
   const BATCH = 4;
   for (let i = 0; i < queue.length; i += BATCH) {
+    // A breath between batches. pokemontcg.io and TCGdex are free services
+    // doing us a favour; a hundred back-to-back batches is not how to say
+    // thank you, and the delay costs a background job nothing.
+    if (i > 0) await new Promise((r) => setTimeout(r, 250));
     await Promise.all(
       queue.slice(i, i + BATCH).map(async (card) => {
         try {
@@ -370,14 +391,44 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
   }
 }
 
+/** Owned cards with no price at all. The number that decides whether this
+ *  is a backlog to clear or a routine to keep. Cheap: a HEAD count. */
+async function unpricedOwnedCount(admin: SupabaseClient): Promise<number> {
+  try {
+    const { data: owned } = await fetchAllRows<{ card_id: string }>(() =>
+      admin.from("collection_items").select("card_id").order("card_id")
+    );
+    const ids = [...new Set((owned ?? []).map((r) => r.card_id))];
+    if (ids.length === 0) return 0;
+    let missing = 0;
+    for (let i = 0; i < ids.length; i += 200) {
+      const { count } = await admin
+        .from("cards")
+        .select("id", { count: "exact", head: true })
+        .in("id", ids.slice(i, i + 200))
+        .is("market_price", null);
+      missing += count ?? 0;
+    }
+    return missing;
+  } catch {
+    return 0;
+  }
+}
+
 /** Self-scheduling loop for the long-running Railway server: checks hourly,
- *  actually refreshes at most once per MIN_HOURS_BETWEEN_RUNS. A stamped
- *  claim in app_state keeps multiple instances from double-running. */
+ *  and refreshes hourly WHILE cards are unpriced, then once a day once they
+ *  aren't. A stamped claim in app_state keeps multiple instances from
+ *  double-running. */
 export function startPriceRefreshLoop() {
   const tick = async () => {
     try {
       const admin = createAdminClient();
-      const cutoff = new Date(Date.now() - MIN_HOURS_BETWEEN_RUNS * 3600_000).toISOString();
+      // Backlog or maintenance? A card with no price is the app looking
+      // broken to whoever just scanned it, so that case runs hourly until
+      // it's cleared; steady state stays daily.
+      const backlog = await unpricedOwnedCount(admin);
+      const gapHours = backlog > 0 ? BACKLOG_HOURS_BETWEEN_RUNS : MIN_HOURS_BETWEEN_RUNS;
+      const cutoff = new Date(Date.now() - gapHours * 3600_000).toISOString();
       // Ensure the row exists, then claim it only if it's stale — zero rows
       // updated means another instance (or a recent run) beat us to it.
       await admin
@@ -395,6 +446,7 @@ export function startPriceRefreshLoop() {
       console.log(
         `price refresh: checked ${summary.checked}, updated ${summary.updated}, ` +
           `${summary.suspicious.length} suspicious, ${summary.unpriced} without data` +
+          (backlog > 0 ? ` (backlog was ${backlog} unpriced, running hourly)` : "") +
           (summary.error ? ` — FAILED: ${summary.error}` : "")
       );
       if (summary.error) {
@@ -403,9 +455,7 @@ export function startPriceRefreshLoop() {
         await admin
           .from("app_state")
           .update({
-            updated_at: new Date(
-              Date.now() - (MIN_HOURS_BETWEEN_RUNS - 0.5) * 3600_000
-            ).toISOString(),
+            updated_at: new Date(Date.now() - (gapHours - 0.5) * 3600_000).toISOString(),
           })
           .eq("key", STATE_KEY)
           .then(() => {});
