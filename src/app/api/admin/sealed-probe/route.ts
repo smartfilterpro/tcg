@@ -27,14 +27,37 @@ const PROBES = [
   "Prismatic Evolutions Elite Trainer Box",
 ];
 
-/** The endpoints worth trying, in the order they are most likely to exist.
- *  `/cards` first because it is the one we KNOW answers — the question there
- *  is whether its index includes non-card products. */
+/** Every shape this question might take.
+ *
+ *  Deliberately more than seems necessary. Three guesses were tried first
+ *  and all three could be wrong in the same way — an API that carries
+ *  sealed product might expose it as its own resource, as a filter on the
+ *  card index, or under a word nobody would guess. Each attempt that 404s
+ *  costs nothing, so breadth here is close to free and a false "no" is
+ *  expensive: it would decide a feature.
+ *
+ *  `/cards` leads because it is the one endpoint we KNOW answers; the
+ *  question there is whether its index includes non-card products at all. */
 const CANDIDATES: Array<{ path: string; params: (q: string) => Record<string, string> }> = [
   { path: "/cards", params: (q) => ({ search: q, limit: "1" }) },
+  { path: "/cards", params: (q) => ({ search: q, type: "sealed", limit: "1" }) },
+  { path: "/cards", params: (q) => ({ search: q, category: "sealed", limit: "1" }) },
   { path: "/products", params: (q) => ({ search: q, limit: "1" }) },
+  { path: "/products", params: (q) => ({ q, limit: "1" }) },
   { path: "/sealed", params: (q) => ({ search: q, limit: "1" }) },
+  { path: "/sealed-products", params: (q) => ({ search: q, limit: "1" }) },
+  { path: "/boxes", params: (q) => ({ search: q, limit: "1" }) },
 ];
+
+/** A label for an attempt, since several share a path and differ only in
+ *  their parameters. */
+function attemptLabel(path: string, params: Record<string, string>): string {
+  const extra = Object.keys(params)
+    .filter((k) => k !== "limit" && k !== "search" && k !== "q")
+    .map((k) => `${k}=${params[k]}`)
+    .join("&");
+  return extra ? `${path}?${extra}` : path;
+}
 
 /** A short, readable description of a response: is there data, and what does
  *  the first record call itself? Enough to tell "found a booster box" from
@@ -65,25 +88,40 @@ export async function GET() {
       });
     }
 
+    // TWO PHASES, so breadth doesn't multiply into cost. Every shape is
+    // tried once against the first product; only the shapes that actually
+    // answered are asked about the second. A path that 404s does not need
+    // confirming twice.
     const attempts: Array<Record<string, unknown>> = [];
-    for (const query of PROBES) {
-      for (const candidate of CANDIDATES) {
-        try {
-          const body = await ptFetch(candidate.path, candidate.params(query));
-          attempts.push({ query, path: candidate.path, ok: true, ...describe(body) });
-        } catch (err) {
-          const status = err instanceof PriceTrackerError ? err.status : null;
-          attempts.push({
-            query,
-            path: candidate.path,
-            ok: false,
-            status,
-            // 404 means the endpoint doesn't exist, which is a clean answer.
-            // Anything else may be transient and is worth reading verbatim.
-            error: err instanceof Error ? err.message.slice(0, 200) : "failed",
-          });
-        }
+    const answered: typeof CANDIDATES = [];
+
+    const run = async (candidate: (typeof CANDIDATES)[number], query: string) => {
+      const params = candidate.params(query);
+      const label = attemptLabel(candidate.path, params);
+      try {
+        const body = await ptFetch(candidate.path, params);
+        attempts.push({ query, path: label, ok: true, ...describe(body) });
+        return true;
+      } catch (err) {
+        const status = err instanceof PriceTrackerError ? err.status : null;
+        attempts.push({
+          query,
+          path: label,
+          ok: false,
+          status,
+          // 404 means the endpoint doesn't exist, which is a clean answer.
+          // Anything else may be transient and is worth reading verbatim.
+          error: err instanceof Error ? err.message.slice(0, 200) : "failed",
+        });
+        return false;
       }
+    };
+
+    for (const candidate of CANDIDATES) {
+      if (await run(candidate, PROBES[0])) answered.push(candidate);
+    }
+    for (const candidate of answered) {
+      await run(candidate, PROBES[1]);
     }
 
     // The verdict is deliberately conservative: a match only counts when the
@@ -101,7 +139,9 @@ export async function GET() {
       budget: budgetState(),
       verdict: hits.length
         ? `Sealed product IS available — ${hits.length} of ${attempts.length} attempts returned a named sealed item.`
-        : "No sealed product came back from any attempt. Every endpoint tried is card-only, or the names are indexed differently.",
+        : attempts.some((a) => a.ok && (a.records as number) > 0)
+          ? "Endpoints answered, but every record came back as a card rather than the sealed product asked for. Check the attempts below — if a record's name looks like a box or a tin, the check is being too strict and should be loosened rather than trusted."
+          : "Nothing came back from any attempt. Every endpoint tried either does not exist or holds no product by these names.",
       hits: hits.map((h) => ({ path: h.path, query: h.query, firstName: h.firstName })),
       attempts,
     });
