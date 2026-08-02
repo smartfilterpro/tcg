@@ -2290,6 +2290,7 @@ function PriceSyncPanel() {
       matched?: number;
       addsPaused?: string | null;
       budgetPaused?: string | null;
+      idConflicts?: number;
       done: boolean;
       error: string | null;
     } | null;
@@ -2407,6 +2408,8 @@ function PriceSyncPanel() {
               </>
             )}
             {(st.skippedAmbiguous ?? 0) > 0 && ` · ${st.skippedAmbiguous} skipped as ambiguous`}
+            {(st.idConflicts ?? 0) > 0 &&
+              ` · ${st.idConflicts} already claimed by a duplicate row (merge them below)`}
           </p>
           {/* Zero matches with cards streaming past is the signature of a
               broken index, and looks identical to "their data is missing"

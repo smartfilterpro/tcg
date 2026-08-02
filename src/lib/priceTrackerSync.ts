@@ -34,6 +34,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { cleanCardName, numberKey } from "@/lib/pokemontcg";
 import { budgetState, effectiveRemaining, priceTrackerEnabled, ptFetch } from "@/lib/priceTracker";
+import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
 
 export const SYNC_STATE_KEY = "price_tracker_sync";
 
@@ -87,6 +88,9 @@ export interface SyncState {
   budgetPaused?: string | null;
   /** Cards we didn't hold at all, created from their record. */
   cardsAdded: number;
+  /** Cards whose TCGplayer id was already claimed by another row — a direct
+   *  count of duplicates in the catalogue, discovered for free. */
+  idConflicts?: number;
   /** A few of their cards that matched nothing of ours, verbatim. "Nothing
    *  matched" has two very different causes — we don't hold the card, or we
    *  hold it under a different name/number format — and only seeing real
@@ -116,6 +120,7 @@ export function freshSyncState(): SyncState {
     rateLimited: false,
     budgetPaused: null,
     cardsAdded: 0,
+    idConflicts: 0,
     unmatchedSamples: [],
     startedAt: now,
     updatedAt: now,
@@ -759,15 +764,30 @@ export async function runPriceSync(
       }
 
       for (const patch of patches) {
-        const { id, ...fields } = patch;
+        const { id, tcgplayer_id, ...fields } = patch;
+        // The id goes in its OWN statement. It is uniquely indexed, so when
+        // the catalogue holds a duplicate the twin already owns that id and
+        // the write is rejected — and bundled in here, that rejection threw
+        // away the price, the artwork and the printing details along with
+        // it, silently, for precisely the cards that most needed fixing.
+        // The price is the point; the id is a bonus.
         const { error } = await admin
           .from("cards")
           .update({ ...fields, price_updated_at: new Date().toISOString() })
           .eq("id", id);
-        if (error) continue;
+        if (error) {
+          console.warn(`price sync: couldn't update ${id}: ${error.message}`);
+          continue;
+        }
+        let idSaved = false;
+        if (tcgplayer_id) {
+          const attached = await attachTcgPlayerId(admin, id, tcgplayer_id);
+          idSaved = attached.saved;
+          if (attached.conflict) state.idConflicts = (state.idConflicts ?? 0) + 1;
+        }
         if (fields.market_price != null) state.pricesFilled += 1;
         if (fields.image_small) state.imagesFilled += 1;
-        if (fields.tcgplayer_id) state.idsFilled += 1;
+        if (idSaved) state.idsFilled += 1;
         if (
           fields.rarity ||
           fields.supertype ||
