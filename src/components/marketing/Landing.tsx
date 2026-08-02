@@ -3,7 +3,6 @@
 // OAuth buttons, no demo video, real-only footer links) are itemised in the
 // phase report rather than smuggled in.
 
-import Image from "next/image";
 import Link from "next/link";
 import { MarketingNav, MarketingFooter } from "@/components/marketing/Chrome";
 import { PricingSection } from "@/components/marketing/Pricing";
@@ -42,22 +41,16 @@ const STEPS = [
     n: "01",
     title: "Shoot the pile",
     body: "Cards flat, decent light, collector numbers visible. One photo covers a whole row.",
-    shot: "/shots/scan-reading.jpg",
-    shotAlt: "A photo of three cards laid on a table while the app reads them.",
   },
   {
     n: "02",
     title: "Skim and confirm",
     body: "Confident reads are already right. Only the flagged ones want a look.",
-    shot: "/shots/scan-identifying.jpg",
-    shotAlt: "Four of four cards identified, each name ticked off with its collector number.",
   },
   {
     n: "03",
     title: "Build and play",
     body: "Ask for a deck, get a list you can physically assemble tonight, then have it coached.",
-    shot: "/shots/deck-detail.jpg",
-    shotAlt: "A finished sixty-card deck list, laid out by Pokemon and Trainer with counts on every card.",
   },
 ];
 
@@ -67,42 +60,6 @@ const FAMILY_POINTS = [
   "Trading inside the family is free and doesn't need approvals.",
   "Coaching answers in plain English, no TCG jargon required.",
 ];
-
-/** A real screenshot of the app.
- *
- *  These were hatched placeholders reading "Screenshot coming soon", on the
- *  reasoning that shipping someone else's screenshot or none at all are both
- *  worse than admitting the gap. That reasoning holds; the gap is simply
- *  closed now, with captures of the real thing.
- *
- *  Phone captures are tall and these slots are wide, so they are anchored to
- *  the TOP rather than centred: the top of each screen is where the heading
- *  and the first result live, and centring would crop away the part that
- *  says what the screen is. */
-function Shot({
-  src,
-  alt,
-  className,
-  priority = false,
-}: {
-  src: string;
-  alt: string;
-  className?: string;
-  priority?: boolean;
-}) {
-  return (
-    <div className={`relative overflow-hidden bg-brand-sunken ${className ?? ""}`}>
-      <Image
-        src={src}
-        alt={alt}
-        fill
-        sizes="(max-width: 720px) 100vw, 560px"
-        className="object-cover object-top"
-        priority={priority}
-      />
-    </div>
-  );
-}
 
 /** The hero numbers are measured, so they arrive as props from the server
  *  component that reads them rather than being imported as constants. */
@@ -160,22 +117,6 @@ export default function Landing({
               </div>
               <p className="mb-6 mt-3 max-w-[52ch] text-[11.5px] leading-snug text-brand-ink5">{statsNote}</p>
             </div>
-
-            <div className="min-w-[320px] flex-[1_1_420px] self-end">
-              <div className="rounded-t-[20px] bg-brand-ink p-3.5 pb-0 shadow-[0_-8px_60px_-30px_rgba(22,23,27,.5)]">
-                <div className="flex gap-1.5 px-1.5 pb-3">
-                  <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
-                  <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
-                  <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
-                </div>
-                <Shot
-                  src="/shots/scan-review.jpg"
-                  alt="The scan review screen: five cards read in fifteen seconds, each with a confidence badge, set, collector number and price."
-                  className="h-[300px] rounded-t-xl min-[720px]:h-[420px]"
-                  priority
-                />
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -214,18 +155,11 @@ export default function Landing({
           </h2>
           <div className="grid grid-cols-1 gap-5 min-[720px]:grid-cols-3">
             {STEPS.map((s) => (
-              <div key={s.n} className="flex flex-col gap-4">
-                <Shot
-                  src={s.shot}
-                  alt={s.shotAlt}
-                  className="h-[230px] rounded-2xl"
-                />
-                <div className="flex gap-3">
-                  <span className="font-display text-[14px] font-bold text-brand-highlight">{s.n}</span>
-                  <div>
-                    <h3 className="m-0 font-display text-[20px] font-bold tracking-[-.02em]">{s.title}</h3>
-                    <p className="mt-1.5 text-[14.5px] leading-[1.6] text-dark-ink3 [text-wrap:pretty]">{s.body}</p>
-                  </div>
+              <div key={s.n} className="flex gap-3">
+                <span className="font-display text-[14px] font-bold text-brand-highlight">{s.n}</span>
+                <div>
+                  <h3 className="m-0 font-display text-[20px] font-bold tracking-[-.02em]">{s.title}</h3>
+                  <p className="mt-1.5 text-[14.5px] leading-[1.6] text-dark-ink3 [text-wrap:pretty]">{s.body}</p>
                 </div>
               </div>
             ))}

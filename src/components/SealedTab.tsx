@@ -88,6 +88,7 @@ export default function SealedTab() {
           kind: pick?.kind ?? kind,
           setName: pick?.setName ?? productSet,
           year: pick?.year ?? undefined,
+          tcgPlayerId: pick?.tcgPlayerId ?? undefined,
           quantity,
           condition,
         }),
@@ -244,10 +245,16 @@ export default function SealedTab() {
                     <span className="block text-[11px] text-slate-400">
                       {sug.kindLabel}
                       {sug.year ? ` · ${sug.year}` : ""}
-                      {/* Saying which are already held is the whole point:
-                          picking one of those joins an existing product
-                          instead of minting a near-duplicate of it. */}
-                      {sug.source === "catalogue" ? " · already in the catalogue" : ""}
+                      {/* The three sources mean different things and the
+                          difference is worth showing: one joins an existing
+                          product, one is a real product from the price
+                          database, and one is a name we built that may not
+                          name anything at all. */}
+                      {sug.source === "catalogue"
+                        ? " · already in your catalogue"
+                        : sug.source === "tracker"
+                          ? " · product database"
+                          : " · suggested name"}
                       {sug.marketPrice != null ? ` · $${sug.marketPrice.toFixed(2)}` : ""}
                     </span>
                   </span>

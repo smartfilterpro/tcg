@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { sealedKindLabel, type SealedSuggestion } from "@/lib/sealed";
+import { searchTrackerSealed } from "@/lib/sealedTracker";
 
 export const maxDuration = 30;
 
@@ -24,6 +25,24 @@ export const maxDuration = 30;
 //
 // Free text still works for anything unusual: Japanese product, old boxes,
 // promo tins. The suggestion list is a shortcut, never a gate.
+
+/** Read the product type out of a real product name.
+ *
+ *  Their catalogue names the product but does not categorise it, and the
+ *  kind is what the collection list shows under each row. Longest phrases
+ *  first, so "Elite Trainer Box" is not read as "Box", and "other" when
+ *  nothing matches rather than a guess. */
+function kindFromName(name: string): string {
+  const n = name.toLowerCase();
+  if (/elite trainer box|\betb\b/.test(n)) return "etb";
+  if (/booster bundle/.test(n)) return "booster_bundle";
+  if (/booster box|display box/.test(n)) return "booster_box";
+  if (/booster pack|single pack/.test(n)) return "booster_pack";
+  if (/collection box|premium collection|special collection/.test(n)) return "collection_box";
+  if (/\btin\b/.test(n)) return "tin";
+  if (/blister|three pack|3-pack/.test(n)) return "blister";
+  return "other";
+}
 
 /** The product types worth offering for every set. Deliberately short — a
  *  list of twelve per set is noise, and these four are what people hold. */
@@ -75,7 +94,39 @@ export async function GET(req: Request) {
       }
     }
 
-    // 2. Built from real set names.
+    // 2. The paid sealed catalogue — real products, with real names, real
+    // prices and official product shots.
+    //
+    // This is what the generated suggestions below were standing in for.
+    // Those are guesses: "<Set> Booster Bundle" is offered for every set,
+    // including the ones that never had a bundle, and picking one creates a
+    // product that can never be priced because it does not exist. These are
+    // things that demonstrably exist, because a catalogue is naming them.
+    //
+    // Costs credits per search, so it is gated on a real query rather than
+    // firing on an empty box, and results are cached upstream for an hour.
+    if (q.length >= 3) {
+      for (const p of await searchTrackerSealed(q)) {
+        push({
+          name: p.name,
+          kind: kindFromName(p.name),
+          kindLabel: sealedKindLabel(kindFromName(p.name)),
+          setName: p.setName,
+          year: null,
+          source: "tracker",
+          marketPrice: p.price,
+          image: p.image,
+          tcgPlayerId: p.tcgPlayerId,
+        });
+      }
+    }
+
+    // 3. Built from real set names.
+    //
+    // Kept as a fallback beneath the real catalogue rather than deleted:
+    // it costs nothing, it answers instantly while the paid search is in
+    // flight, and it covers an empty query box, which the paid search
+    // cannot be asked about.
     //
     // Matched on the SET, not on the whole product name: someone typing
     // "surging" wants Surging Sparks products, and requiring their words to
