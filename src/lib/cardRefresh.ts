@@ -29,6 +29,15 @@ import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
  *  genuine retry after a failure isn't blocked. */
 const COOLDOWN_MS = 60_000;
 
+/** …and the shorter floor for a card that still has NO price.
+ *
+ *  A full minute is the wrong wall for the one case somebody is actively
+ *  trying to fix: they press, nothing appears, they press again, and being
+ *  told "just checked" is infuriating when the card is still blank. Short
+ *  enough to allow a real retry, long enough that holding the button down
+ *  can't spend a credit a tap. */
+const UNPRICED_COOLDOWN_MS = 15_000;
+
 export interface CardRefreshResult {
   ok: boolean;
   /** What actually changed, for telling the member something true. */
@@ -56,7 +65,8 @@ export async function refreshCard(
 
   const hadPrice = card.market_price != null;
   const lastChecked = card.price_updated_at ? Date.parse(card.price_updated_at as string) : 0;
-  if (Number.isFinite(lastChecked) && Date.now() - lastChecked < COOLDOWN_MS) {
+  const floor = hadPrice ? COOLDOWN_MS : UNPRICED_COOLDOWN_MS;
+  if (Number.isFinite(lastChecked) && Date.now() - lastChecked < floor) {
     return {
       ok: true,
       priceFound: hadPrice,
@@ -116,15 +126,49 @@ export async function refreshCard(
 
   if (market != null) patch.market_price = market;
 
-  const { data: updated } = await admin
-    .from("cards")
-    .update(patch)
-    .eq("id", id)
-    .select("*")
-    .maybeSingle();
+  const { error: writeError } = await admin.from("cards").update(patch).eq("id", id);
 
-  const priceFound = market != null;
-  const imageFound = !!patch.image_small;
+  // Read the row back rather than trusting what the update returned.
+  //
+  // `.update(...).select().maybeSingle()` hands back a representation only
+  // when PostgREST is asked for one, and a null there is indistinguishable
+  // from "no such row" — so the old code fell back to the PRE-update copy
+  // it already had in hand. That copy still has no price, which is how the
+  // panel ended up printing "Found a price" directly above "No market price
+  // yet": the message came from the lookup and the card came from before
+  // the write. One extra cheap select removes the ambiguity entirely, and
+  // what it returns is by definition what the card now is.
+  const { data: updated } = await admin.from("cards").select("*").eq("id", id).maybeSingle();
+
+  // THE SAVED ROW DECIDES, not what we set out to do.
+  //
+  // This reported success from intent: "did a source hand us a number?"
+  // rather than "does the card have a price now?". Those come apart
+  // whenever the write fails — a rejected value, a column that isn't there,
+  // a constraint — and the result was the panel cheerfully saying "Found a
+  // price" directly above "No market price yet". A claim about stored data
+  // has to be read back from the store.
+  const saved = (updated ?? null) as Record<string, unknown> | null;
+  const priceFound = saved ? saved.market_price != null : false;
+  const imageFound = saved ? !!saved.image_small && !card.image_small : false;
+
+  if (writeError || (market != null && !priceFound)) {
+    // Loud, because this is the case that used to lie. It lands in the
+    // server log, which is now readable from the admin page.
+    console.error(
+      `card refresh: ${id} ("${card.name}") — found ${market ?? "no"} price but the row ` +
+        `did not take it.${writeError ? ` db: ${writeError.message}` : " (no error reported)"}`
+    );
+    return {
+      ok: false,
+      priceFound: false,
+      imageFound: false,
+      message: writeError
+        ? `Found a price but couldn't save it: ${writeError.message}`
+        : "Found a price but it didn't save. This has been logged.",
+      card: saved ?? card,
+    };
+  }
 
   // Say what happened, specifically. "Refreshed" tells a member nothing
   // when the thing they wanted is still blank.
@@ -139,5 +183,12 @@ export async function refreshCard(
       "can take a while to appear; the nightly refresh keeps trying.";
   }
 
-  return { ok: true, priceFound, imageFound, message, card: updated ?? card };
+  // One line per refresh, so the server log can answer "I pressed it and
+  // nothing happened" without anyone having to reproduce it.
+  console.log(
+    `card refresh: ${id} ("${card.name}" #${card.number}) — ` +
+      `price ${saved?.market_price ?? "none"}, art ${imageFound ? "found" : "unchanged"}`
+  );
+
+  return { ok: true, priceFound, imageFound, message, card: saved ?? card };
 }
