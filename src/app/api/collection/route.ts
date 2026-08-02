@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { priceTrackerEnabled, priceTrackerMarketPrice } from "@/lib/priceTracker";
+import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { summaryToRow, type CardSummary, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 
@@ -145,16 +145,15 @@ export async function POST(req: Request) {
       added += w.qty;
     }
 
-    // 4) Price anything that landed without one, in the background.
+    // 4) Fill gaps on anything that landed without a price or a picture.
     //
-    // A scanned card takes whatever price its catalogue row already holds,
-    // and for a card the free sources never priced that is nothing — it
-    // then showed $0 until the nightly refresher's rotation reached it,
-    // which on a big collection is days. The paid tracker answers in one
+    // A scanned card takes whatever its catalogue row already holds, and
+    // for a card the free sources never covered that is nothing — no price
+    // and often no picture — until some sweep happened to reach its set,
+    // which for a new set is weeks. The paid tracker answers both in ONE
     // credit, so the honest fix is to just ask, now, for the handful of
-    // cards that need it. Detached: nobody waits on a price to finish
-    // saving their cards.
-    void priceMissing(cardIds);
+    // cards that need it. Detached: nobody waits on this to save cards.
+    void fillMissing(cardIds);
 
     return NextResponse.json({ ok: true, added });
   } catch (err) {
@@ -162,17 +161,24 @@ export async function POST(req: Request) {
   }
 }
 
-/** Fill in prices for freshly-saved cards that have none. Best-effort and
- *  capped: a bulk save of 200 unpriced cards should not become 200 API
- *  calls in one request. The rest are caught by the nightly refresher,
- *  which now consults the same source. */
-async function priceMissing(cardIds: string[]): Promise<void> {
+/** Fill in what freshly-saved cards are missing — price AND picture.
+ *
+ *  One lookup answers both, so a card missing either is worth the credit
+ *  and a card missing both costs no more than a card missing one. Capped:
+ *  a bulk save of 200 gap-ridden cards should not become 200 API calls in
+ *  one request; the rest fall to the nightly refresher, which runs the
+ *  same source.
+ *
+ *  Member photos and admin-locked art are never overwritten — same rule
+ *  the catalogue import and the price sync follow, for the same reason:
+ *  those exist precisely because the stock image was missing or wrong. */
+async function fillMissing(cardIds: string[]): Promise<void> {
   if (!priceTrackerEnabled()) return;
   try {
     const admin = createAdminClient();
     const { data: rows } = await admin
       .from("cards")
-      .select("id, name, number, set_name, market_price")
+      .select("id, name, number, set_name, market_price, image_small, image_locked")
       .in("id", cardIds.slice(0, 200));
     const needy = ((rows ?? []) as Array<{
       id: string;
@@ -180,25 +186,32 @@ async function priceMissing(cardIds: string[]): Promise<void> {
       number: string | null;
       set_name: string | null;
       market_price: number | null;
+      image_small: string | null;
+      image_locked: boolean | null;
     }>)
-      .filter((c) => c.market_price == null)
+      .filter((c) => c.market_price == null || !c.image_small)
       .slice(0, 25);
     for (const card of needy) {
-      const price = await priceTrackerMarketPrice({
+      const found = await priceTrackerCard({
         name: card.name,
         setName: card.set_name,
         number: card.number,
       });
-      if (price != null) {
-        await admin
-          .from("cards")
-          .update({ market_price: price, price_updated_at: new Date().toISOString() })
-          .eq("id", card.id)
-          .then(() => {});
+      const patch: Record<string, unknown> = {};
+      if (card.market_price == null && found.market != null) {
+        patch.market_price = found.market;
+        patch.price_updated_at = new Date().toISOString();
+      }
+      if (!card.image_small && card.image_locked !== true && found.image) {
+        patch.image_small = found.image;
+        patch.image_large = found.image;
+      }
+      if (Object.keys(patch).length > 0) {
+        await admin.from("cards").update(patch).eq("id", card.id).then(() => {});
       }
     }
   } catch {
-    // A missing price is the status quo, not a reason to shout.
+    // A gap is the status quo, not a reason to shout.
   }
 }
 

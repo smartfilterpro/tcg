@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getCardById } from "@/lib/pokemontcg";
 import { getTcgdexPriceById } from "@/lib/tcgdex";
 import { poketraceEnabled, searchPoketraceCard, getPoketracePrices } from "@/lib/poketrace";
-import { priceTrackerEnabled, priceTrackerMarketPrice } from "@/lib/priceTracker";
+import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { getBattleDataById } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { fetchAllRows } from "@/lib/fetchAll";
@@ -53,6 +53,8 @@ export interface PriceRefreshSummary {
   textWarmed?: number;
   /** Priced by the paid tracker after the free sources had nothing. */
   trackerPriced?: number;
+  /** Given artwork by the paid tracker, on the same lookups. */
+  trackerArt?: number;
   /** Set when the run failed partway — shown in the admin panel. */
   error?: string;
 }
@@ -211,15 +213,27 @@ export async function refreshStalePrices(
           // the free sources don't price stayed blank until the sweep
           // happened to reach its set — which for a new set is weeks. One
           // credit each, against 20,000 a day.
-          if (nextMarket == null && priceTrackerEnabled()) {
-            const tracked = await priceTrackerMarketPrice({
+          const needsArt = !(card.image_small as string | null) && card.image_locked !== true;
+          if ((nextMarket == null || needsArt) && priceTrackerEnabled()) {
+            const found = await priceTrackerCard({
               name: card.name as string,
               setName: (card.set_name as string | null) ?? null,
               number: (card.number as string | null) ?? null,
             });
-            if (tracked != null) {
-              nextMarket = tracked;
+            if (nextMarket == null && found.market != null) {
+              nextMarket = found.market;
               summary.trackerPriced = (summary.trackerPriced ?? 0) + 1;
+            }
+            // The same credit already bought the artwork. A card with no
+            // picture is as broken-looking as one with no price, and the
+            // art mirror copies whatever lands here into our own storage
+            // on its next sweep.
+            if (needsArt && found.image) {
+              const { error: artErr } = await admin
+                .from("cards")
+                .update({ image_small: found.image, image_large: found.image })
+                .eq("id", card.id);
+              if (!artErr) summary.trackerArt = (summary.trackerArt ?? 0) + 1;
             }
           }
           summary.checked += 1;
@@ -384,6 +398,7 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
       pt: value.pt ?? null,
       textWarmed: value.textWarmed ?? 0,
       trackerPriced: value.trackerPriced ?? 0,
+      trackerArt: value.trackerArt ?? 0,
       ...(value.error ? { error: value.error } : {}),
     };
   } catch {

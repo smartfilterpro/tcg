@@ -422,27 +422,35 @@ export async function findCard(query: {
   }
 }
 
-/** One card's market price from the paid tracker.
+/** Everything one lookup can tell us about a card: price AND artwork.
  *
- *  The tracker was wired in for the set-by-set sync and for finding
- *  artwork, but never as a PRICE source for one card on demand — so a
- *  freshly scanned card whose catalogue row had no price stayed blank
- *  until the set sweep happened to reach its set, which can be weeks. It
- *  is the best price source we have and it costs one credit, which is
- *  nothing against 20,000 a day.
+ *  One credit buys the whole card record, so reading only the price off it
+ *  — which is what this did at first — throws away the picture we already
+ *  paid for. Both come back from the same call; a card that needs either
+ *  gets both.
  *
- *  Returns null on anything unexpected: an absent price is the status quo,
- *  and a wrong one is worse than none. */
+ *  Returns nulls on anything unexpected: an absent price or image is the
+ *  status quo, and a wrong one is worse than none. */
+export async function priceTrackerCard(query: {
+  name: string;
+  setName?: string | null;
+  number?: string | null;
+}): Promise<{ market: number | null; image: string | null }> {
+  try {
+    const card = await findCard(query);
+    if (!card) return { market: null, image: null };
+    const images = extractImageUrls(card);
+    return { market: extractMarketPrice(card), image: images[0] ?? null };
+  } catch {
+    return { market: null, image: null };
+  }
+}
+
+/** Price only, for callers that don't care about art. Same one credit. */
 export async function priceTrackerMarketPrice(query: {
   name: string;
   setName?: string | null;
   number?: string | null;
 }): Promise<number | null> {
-  try {
-    const card = await findCard(query);
-    if (!card) return null;
-    return extractMarketPrice(card);
-  } catch {
-    return null;
-  }
+  return (await priceTrackerCard(query)).market;
 }

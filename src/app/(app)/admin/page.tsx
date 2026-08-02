@@ -1831,6 +1831,7 @@ function PriceRefreshPanel({
     } | null;
     textWarmed?: number;
     trackerPriced?: number;
+    trackerArt?: number;
     error?: string;
   } | null;
 }) {
@@ -1917,6 +1918,8 @@ function PriceRefreshPanel({
             {(current.unpriced ?? 0) > 0 && `, ${current.unpriced} had no price data`}
             {(current.trackerPriced ?? 0) > 0 &&
               `, ${current.trackerPriced} priced by the paid tracker`}
+            {(current.trackerArt ?? 0) > 0 &&
+              `, ${current.trackerArt} given artwork by it`}
             {(current.textWarmed ?? 0) > 0 && `, ${current.textWarmed} cards' text cached`}. Runs
             by itself about once a day, stalest cards first.
           </span>
