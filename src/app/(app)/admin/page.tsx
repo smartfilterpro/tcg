@@ -1332,6 +1332,10 @@ export default function AdminPage() {
             <DedupeCardsPanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">📦 Sealed product check</h2>
+            <SealedProbePanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🪵 Server log</h2>
             <ServerLogPanel />
           </div>
@@ -3679,6 +3683,70 @@ function ServerLogPanel() {
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Asks the paid source whether it carries sealed product at all.
+ *
+ *  Everything built against them so far is card-shaped, so whether booster
+ *  boxes and Elite Trainer Boxes exist in their index is genuinely unknown.
+ *  This tries a few plausible shapes for the question and reports what came
+ *  back — a 404 is a real answer and shown as one. Nothing is built on any
+ *  of it until an attempt succeeds. Costs a few credits. */
+function SealedProbePanel() {
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<{
+    verdict?: string;
+    hits?: Array<{ path: string; query: string; firstName: string | null }>;
+    attempts?: Array<Record<string, unknown>>;
+    error?: string;
+  } | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setOut(null);
+    try {
+      const res = await fetch("/api/admin/sealed-probe");
+      const json = await res.json();
+      setOut(res.ok ? json : { error: json.error || "Probe failed" });
+    } catch (e) {
+      setOut({ error: e instanceof Error ? e.message : "Probe failed" });
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="m-0 text-xs text-brand-ink4">
+        Asks the paid pricing source whether it holds booster boxes, Elite Trainer Boxes and
+        tins — the thing we&apos;d need before sealed product could go in a collection with a
+        value on it. Costs a handful of credits and changes nothing.
+      </p>
+      <button className="btn-secondary text-xs" disabled={busy} onClick={run}>
+        {busy ? "Asking…" : "Run the check"}
+      </button>
+      {out?.error && <p className="m-0 text-xs text-brand-negative">{out.error}</p>}
+      {out?.verdict && (
+        <>
+          <p className="m-0 text-xs font-semibold text-brand-ink3">{out.verdict}</p>
+          {(out.hits?.length ?? 0) > 0 && (
+            <div className="font-mono text-[11px] text-brand-ink4">
+              {out.hits!.map((h, i) => (
+                <div key={i}>
+                  {h.path} · {h.query} → {h.firstName}
+                </div>
+              ))}
+            </div>
+          )}
+          <details className="text-[11px] text-brand-ink4">
+            <summary className="cursor-pointer">Every attempt, verbatim</summary>
+            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-brand-sunken p-2">
+              {JSON.stringify(out.attempts, null, 1)}
+            </pre>
+          </details>
+        </>
       )}
     </div>
   );
