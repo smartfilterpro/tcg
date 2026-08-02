@@ -6,6 +6,7 @@ import {
   sealedKindLabel,
   sealedItemPrice,
   type SealedItem,
+  type SealedSuggestion,
 } from "@/lib/sealed";
 
 /** Sealed product in the collection — booster boxes, ETBs, tins.
@@ -31,6 +32,8 @@ export default function SealedTab() {
   const [quantity, setQuantity] = useState(1);
   const [condition, setCondition] = useState("sealed");
   const [adding, setAdding] = useState(false);
+  const [suggestions, setSuggestions] = useState<SealedSuggestion[]>([]);
+  const [searching, setSearching] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -48,15 +51,46 @@ export default function SealedTab() {
     load();
   }, [load]);
 
-  async function add() {
-    if (!name.trim() || adding) return;
+  // Suggestions while typing. Debounced, because every keystroke firing a
+  // query is a query per keystroke, and the answer for "surg" is thrown
+  // away the moment "surgi" is typed.
+  useEffect(() => {
+    if (!showAdd) return;
+    let live = true;
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/sealed/search?q=${encodeURIComponent(name)}`);
+        const json = await res.json();
+        if (live && res.ok) setSuggestions(json.suggestions ?? []);
+      } catch {
+        // Suggestions are a convenience — typing a name still works.
+      }
+      if (live) setSearching(false);
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [name, showAdd]);
+
+  async function add(pick?: SealedSuggestion) {
+    const chosenName = (pick?.name ?? name).trim();
+    if (!chosenName || adding) return;
     setAdding(true);
     setError(null);
     try {
       const res = await fetch("/api/sealed", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, kind, setName: productSet, quantity, condition }),
+        body: JSON.stringify({
+          name: chosenName,
+          kind: pick?.kind ?? kind,
+          setName: pick?.setName ?? productSet,
+          year: pick?.year ?? undefined,
+          quantity,
+          condition,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Couldn't add that");
@@ -151,23 +185,16 @@ export default function SealedTab() {
         <div className="card-panel space-y-2 p-3">
           <input
             className="input w-full text-sm"
-            placeholder="e.g. Surging Sparks Booster Box"
+            placeholder="Search a set or product — e.g. Surging Sparks"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && add()}
+            autoFocus
           />
-          <div className="flex flex-wrap gap-2">
-            <select
-              className="input w-auto flex-1 text-sm"
-              value={kind}
-              onChange={(e) => setKind(e.target.value)}
-            >
-              {SEALED_KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {sealedKindLabel(k)}
-                </option>
-              ))}
-            </select>
+
+          {/* Quantity and condition are chosen BEFORE picking, because a
+              suggestion adds in one tap and there is no second step to set
+              them in. */}
+          <div className="flex flex-wrap items-center gap-2">
             <select
               className="input w-auto text-sm"
               value={condition}
@@ -177,28 +204,86 @@ export default function SealedTab() {
               <option value="opened">Opened</option>
               <option value="damaged">Damaged</option>
             </select>
-            <input
-              className="input w-20 text-sm"
-              type="number"
-              min={1}
-              value={quantity}
-              onChange={(e) => setQuantity(Number(e.target.value) || 1)}
-            />
+            <label className="flex items-center gap-1 text-xs text-slate-500">
+              Qty
+              <input
+                className="input w-16 text-sm"
+                type="number"
+                min={1}
+                value={quantity}
+                onChange={(e) => setQuantity(Number(e.target.value) || 1)}
+              />
+            </label>
+            {searching && <span className="text-[11px] text-slate-400">Searching…</span>}
           </div>
-          <input
-            className="input w-full text-sm"
-            placeholder="Set (optional)"
-            value={productSet}
-            onChange={(e) => setProductSet(e.target.value)}
-          />
-          <div className="flex items-center gap-2">
-            <button className="btn-primary text-sm" disabled={adding || !name.trim()} onClick={add}>
-              {adding ? "Adding…" : "Add"}
-            </button>
-            <span className="text-[11px] text-slate-400">
-              A value is looked up from current sealed listings.
-            </span>
-          </div>
+
+          {suggestions.length > 0 && (
+            <div className="max-h-64 divide-y divide-slate-100 overflow-y-auto rounded border border-slate-200">
+              {suggestions.map((sug) => (
+                <button
+                  key={`${sug.source}|${sug.name}`}
+                  className="flex w-full items-center gap-2 px-2 py-2 text-left hover:bg-slate-50"
+                  disabled={adding}
+                  onClick={() => add(sug)}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm">{sug.name}</span>
+                    <span className="block text-[11px] text-slate-400">
+                      {sug.kindLabel}
+                      {sug.year ? ` · ${sug.year}` : ""}
+                      {/* Saying which are already held is the whole point:
+                          picking one of those joins an existing product
+                          instead of minting a near-duplicate of it. */}
+                      {sug.source === "catalogue" ? " · already in the catalogue" : ""}
+                      {sug.marketPrice != null ? ` · $${sug.marketPrice.toFixed(2)}` : ""}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs text-brand-accent">Add</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* The escape hatch. Japanese product, older boxes and promo tins
+              won't be in any suggestion list, and refusing to accept a name
+              nobody suggested would make those impossible to record. */}
+          {name.trim().length > 2 && (
+            <details className="text-xs text-slate-500">
+              <summary className="cursor-pointer">Not listed? Add it by hand</summary>
+              <div className="mt-2 space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    className="input w-auto flex-1 text-sm"
+                    value={kind}
+                    onChange={(e) => setKind(e.target.value)}
+                  >
+                    {SEALED_KINDS.map((k) => (
+                      <option key={k} value={k}>
+                        {sealedKindLabel(k)}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className="input w-auto flex-1 text-sm"
+                    placeholder="Set (optional)"
+                    value={productSet}
+                    onChange={(e) => setProductSet(e.target.value)}
+                  />
+                </div>
+                <button
+                  className="btn-primary text-sm"
+                  disabled={adding}
+                  onClick={() => add()}
+                >
+                  {adding ? "Adding…" : `Add "${name.trim()}"`}
+                </button>
+              </div>
+            </details>
+          )}
+
+          <p className="m-0 text-[11px] text-slate-400">
+            A value is looked up from current sealed listings after you add.
+          </p>
         </div>
       )}
 

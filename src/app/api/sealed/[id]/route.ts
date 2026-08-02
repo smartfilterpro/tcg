@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
-import { priceProduct } from "../route";
+import { priceProduct } from "@/lib/sealed";
 
 export const maxDuration = 60;
 

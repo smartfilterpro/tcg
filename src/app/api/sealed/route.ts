@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, AuthError } from "@/lib/auth";
-import { SEALED_CONDITIONS, SEALED_KINDS, sealedPrice } from "@/lib/sealed";
+import { SEALED_CONDITIONS, SEALED_KINDS, priceProduct } from "@/lib/sealed";
 
 export const maxDuration = 60;
 
@@ -148,31 +148,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, product });
   } catch (err) {
     return errorResponse(err);
-  }
-}
-
-/** Look a product's market value up and record it. Best-effort throughout:
- *  a product with no price is the status quo, not a failure. */
-export async function priceProduct(
-  productId: string,
-  name: string,
-  kind: string | null
-): Promise<number | null> {
-  try {
-    const price = await sealedPrice({ name, kind });
-    if (!price) return null;
-    const admin = createAdminClient();
-    await admin
-      .from("sealed_products")
-      .update({
-        market_price: price.median,
-        price_updated_at: new Date().toISOString(),
-        price_source: `${price.source} (${price.count} listings)`,
-      })
-      .eq("id", productId);
-    return price.median;
-  } catch {
-    return null;
   }
 }
 

@@ -204,3 +204,50 @@ export async function sealedPrice(query: {
   cache.set(key, { at: Date.now(), value: result });
   return result;
 }
+
+/* --------------------------------------------------- persisting a price */
+
+/** Look a product's market value up and record it against the shared row.
+ *
+ *  Best-effort throughout: a product with no price is the status quo, not a
+ *  failure, and nothing the caller is doing should fail because a price
+ *  lookup did. Lives here rather than beside the route that first needed it
+ *  — route files may only export request handlers, and a helper hiding in
+ *  one is a helper nobody else can call. */
+export async function priceProduct(
+  productId: string,
+  name: string,
+  kind: string | null
+): Promise<number | null> {
+  try {
+    const price = await sealedPrice({ name, kind });
+    if (!price) return null;
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const admin = createAdminClient();
+    await admin
+      .from("sealed_products")
+      .update({
+        market_price: price.median,
+        price_updated_at: new Date().toISOString(),
+        price_source: `${price.source} (${price.count} listings)`,
+      })
+      .eq("id", productId);
+    return price.median;
+  } catch {
+    return null;
+  }
+}
+
+/** One row in the add-product suggestion list. */
+export interface SealedSuggestion {
+  name: string;
+  kind: string;
+  kindLabel: string;
+  setName: string | null;
+  year: number | null;
+  /** "catalogue" — a product someone already holds, so adding it joins them
+   *  rather than creating a near-duplicate. "suggested" — built from a real
+   *  set name. */
+  source: "catalogue" | "suggested";
+  marketPrice?: number | null;
+}
