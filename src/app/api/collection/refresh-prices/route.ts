@@ -4,6 +4,8 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { getCardById } from "@/lib/pokemontcg";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { findTcgdexImage } from "@/lib/tcgdex";
+import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const maxDuration = 120;
 
@@ -105,7 +107,11 @@ export async function POST() {
           patch.image_small = found.image;
           patch.image_large = found.image;
         }
-        if (found.tcgPlayerId && !card.tcgplayer_id) patch.tcgplayer_id = found.tcgPlayerId;
+        // Separately, because it is uniquely indexed and a duplicate card
+        // would otherwise reject the price alongside it.
+        if (found.tcgPlayerId && !card.tcgplayer_id) {
+          await attachTcgPlayerId(createAdminClient(), card.id, found.tcgPlayerId);
+        }
         if (Object.keys(patch).length > 0) {
           await supabase.from("cards").update(patch).eq("id", card.id);
           if (patch.market_price != null) updated++;
