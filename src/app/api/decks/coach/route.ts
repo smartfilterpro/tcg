@@ -12,7 +12,13 @@ import { DECK_EDIT_TOOL, runDeckEditProposal } from "@/lib/deckEditTool";
 import type { DeckEditProposal } from "@/lib/deckEdit";
 import type Anthropic from "@anthropic-ai/sdk";
 
-export const maxDuration = 120;
+// Raised from 120 when the tool loop landed. A question that ends in a
+// proposed edit is no longer one model call — it is the proposal, then the
+// reply that explains it, each of which can spend real time reasoning. Two
+// sequential calls plus a collection read was running past two minutes and
+// the gateway was closing the connection, which reaches the player as an
+// unreadable non-JSON response rather than as an error.
+export const maxDuration = 300;
 
 /** Enough rounds for the model to propose, be told the edit was invalid,
  *  and correct itself. Each round is a billed model call, so not more. */
@@ -157,6 +163,11 @@ export async function POST(req: Request) {
     // A change the model proposed this turn, carried out with the reply so
     // the player can approve it. Nothing has been written.
     let pendingEdit: DeckEditProposal | null = null;
+    // Timed, because the failure this route actually produces is a timeout,
+    // and a timeout leaves NO log of its own — the process is killed
+    // mid-await and the catch below never runs. A line per round is the only
+    // way to see how close to the limit a question came.
+    const startedAt = Date.now();
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // Thinking tokens and the visible answer share max_tokens. The cap is
@@ -180,6 +191,10 @@ export async function POST(req: Request) {
         },
         // Every attempt is logged, including a retry — it cost what it cost.
         (r) => logAiUsage(supabase, user.id, "coach", MODEL, r.usage)
+      );
+      console.log(
+        `coach: round ${round + 1} done at ${Math.round((Date.now() - startedAt) / 1000)}s ` +
+          `(stop: ${response.stop_reason}, out: ${response.usage?.output_tokens ?? "?"} tokens)`
       );
       if (response.stop_reason !== "tool_use") break;
 
@@ -205,6 +220,11 @@ export async function POST(req: Request) {
         if (proposal.proposal && !pendingEdit) pendingEdit = proposal.proposal;
         results.push({ type: "tool_result", tool_use_id: b.id, content: proposal.forModel });
       }
+      // An assistant turn that stopped on tool_use always carries a tool_use
+      // block, so this should be unreachable — but a user turn with an empty
+      // content array is a 400 from the API, which would surface as a broken
+      // chat rather than as the impossible thing it is.
+      if (results.length === 0) break;
       messages.push({ role: "user", content: results });
     }
 

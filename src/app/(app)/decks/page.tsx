@@ -518,11 +518,49 @@ function CoachBox({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ deck, question, deckId: deckId ?? null }),
       });
-      const json = await res.json();
-      setAnswer(res.ok ? json.answer : json.error || "Something went wrong");
-      if (res.ok && json.edit) setEdit(json.edit as DeckEditProposal);
-    } catch {
-      setAnswer("Something went wrong — try again.");
+
+      // Read the body as TEXT first, then try to parse it.
+      //
+      // This used to be a bare res.json() inside a try/catch whose only
+      // answer was "Something went wrong — try again." A route that times out
+      // or crashes at the gateway replies with an HTML error page, json()
+      // throws on the first '<', and every one of those very different
+      // failures came out as the same six words — which is no use to the
+      // person reading them and no use to whoever has to fix it either.
+      const body = await res.text();
+      type CoachReply = { answer?: string; error?: string; edit?: DeckEditProposal };
+      let json: CoachReply | null = null;
+      try {
+        json = JSON.parse(body) as CoachReply;
+      } catch {
+        /* not JSON — handled below */
+      }
+
+      if (!json) {
+        // Say what actually happened. 504 and 502 are the timeout shapes and
+        // deserve their own words, because "try again" is the wrong advice
+        // for a question that will take just as long the second time.
+        setAnswer(
+          res.status === 504 || res.status === 502
+            ? `That took too long and the connection gave up (HTTP ${res.status}). A shorter or more specific question usually gets through.`
+            : `The server answered with something unreadable (HTTP ${res.status}). Try again — if it keeps happening, this is worth reporting.`
+        );
+        return;
+      }
+      if (!res.ok) {
+        setAnswer(json.error || `The request failed (HTTP ${res.status}).`);
+        return;
+      }
+      setAnswer(json.answer ?? "No answer came back.");
+      if (json.edit) setEdit(json.edit);
+    } catch (err) {
+      // fetch itself rejected: no response at all. On a phone this is almost
+      // always the network, or the tab being backgrounded mid-request.
+      setAnswer(
+        `Couldn't reach the server — ${
+          err instanceof Error ? err.message : "the connection dropped"
+        }. Nothing was changed.`
+      );
     } finally {
       setAsking(false);
     }
