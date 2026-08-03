@@ -34,8 +34,25 @@ export const maxDuration = 300;
 //   "Silvally - 95/84" the number repeated inside a shop product name.
 //
 // Both are no-ops on values that were already plain.
+// LETTERS ARE PART OF THE NUMBER. This stripped every non-digit, which
+// collapsed "112a" onto "112" — and pokemontcg.io uses that suffix for an
+// alternate or full-art printing that shares a collector number. Burning
+// Shadows Acerola is 112 at $0.27 and 112a at $3.33: two different cards,
+// grouped as one, and merging would have deleted the expensive one and
+// repointed everybody's collection at the cheap one. The same goes for
+// "TG12" and "SWSH095", where the prefix names a subset.
+//
+// Only the thing this was built for is normalised: leading zeros, so "#050"
+// and "#50" still meet. Everything else survives.
 const numKey = (n: string | null) =>
-  (n ?? "").split("/")[0].replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+  (n ?? "")
+    .split("/")[0]
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    // Leading zeros on any digit run: "050" → "50", "swsh095" → "swsh95",
+    // while "100" is left alone.
+    .replace(/(^|[^0-9])0+(?=\d)/g, "$1");
 const nameKey = (n: string | null) =>
   (n ?? "")
     .replace(/\s*[-–—]\s*#?\d+\s*(?:\/\s*\w+)?\s*$/, "")
@@ -77,6 +94,25 @@ interface CardRow {
 const keyOf = (c: CardRow) =>
   `${nameKey(c.name)}|${numKey(c.number)}|${setKey(c.set_name)}`;
 
+/** Two rows that both name a TCGplayer product, and name DIFFERENT ones,
+ *  are different products. That is not a heuristic like name-and-number is
+ *  — it is the vendor's own identity for the thing — so it outranks any
+ *  grouping this file does, and such a group is refused rather than merely
+ *  flagged. */
+function idConflict(group: CardRow[]): boolean {
+  const ids = new Set(group.map((c) => c.tcgplayer_id).filter(Boolean));
+  return ids.size > 1;
+}
+
+/** Prices far apart mean the rows are probably different printings — a
+ *  full art next to its plain version, most often. Not proof, so this only
+ *  draws the eye rather than blocking anything. */
+function priceGap(group: CardRow[]): boolean {
+  const prices = group.map((c) => c.market_price).filter((p): p is number => p != null && p > 0);
+  if (prices.length < 2) return false;
+  return Math.max(...prices) >= Math.min(...prices) * 3;
+}
+
 /** Best-provenanced first: the survivor is [0], the twins are the rest. */
 function ordered(group: CardRow[]): CardRow[] {
   return [...group].sort(
@@ -89,7 +125,8 @@ function ordered(group: CardRow[]): CardRow[] {
 
 export async function POST(req: Request) {
   try {
-    await requireAdmin();
+    const { user: actorUser } = await requireAdmin();
+    const actor = actorUser?.id ?? null;
     const body = (await req.json().catch(() => ({}))) as { dryRun?: boolean; keys?: string[] };
     const dryRun = body.dryRun !== false;
     const wanted = Array.isArray(body.keys) ? new Set(body.keys) : null;
@@ -137,10 +174,21 @@ export async function POST(req: Request) {
     // carries what the eye needs.
     const detail = dupEntries.slice(0, 300).map(([key, g]) => {
       const rows = ordered(g);
+      const blocked = idConflict(rows);
       return {
         key,
         name: rows[0].name,
         set: rows[0].set_name,
+        // Why this pair might not be one card. The UI leaves anything with
+        // a warning unticked, because the cost of a wrong merge is a
+        // deleted card and somebody's collection repointed at the wrong
+        // row — and the cost of a missed merge is one duplicate.
+        blocked,
+        warning: blocked
+          ? "These name different TCGplayer products, so they are different cards. This group cannot be merged."
+          : priceGap(rows)
+            ? "Prices are far apart — likely a full art next to its plain version. Check the pictures."
+            : null,
         rows: rows.map((c, i) => ({
           id: c.id,
           number: c.number,
@@ -162,7 +210,14 @@ export async function POST(req: Request) {
       // No keys given means every group — the old behaviour, kept so a
       // scripted call still works. The UI always sends its ticked list.
       const toMerge = wanted ? dupEntries.filter(([key]) => wanted.has(key)) : dupEntries;
-      for (const [, group] of toMerge) {
+      for (const [key, group] of toMerge) {
+        // Refused server-side, not just unticked in the UI. A destructive
+        // action whose only guard is a checkbox is one mis-tap from losing
+        // a card.
+        if (idConflict(group)) {
+          failures.push(`${key}: different TCGplayer products — not merged`);
+          continue;
+        }
         const sorted = ordered(group);
         const survivor = sorted[0];
         kept++;
@@ -189,6 +244,10 @@ export async function POST(req: Request) {
             .from("collection_items")
             .select("id, user_id, variant, quantity")
             .eq("card_id", twin.id);
+          // What moved, recorded BEFORE it moves — afterwards the original
+          // card_id is gone and the folded quantities cannot be separated
+          // again. This is the whole of the undo.
+          const moveLog: Array<Record<string, unknown>> = [];
           let stranded = 0;
           for (const item of items ?? []) {
             const { error: moveErr } = await admin
@@ -196,6 +255,7 @@ export async function POST(req: Request) {
               .update({ card_id: survivor.id })
               .eq("id", item.id);
             if (!moveErr) {
+              moveLog.push({ ...item, action: "repointed", from: twin.id });
               itemsMoved++;
               continue;
             }
@@ -212,6 +272,13 @@ export async function POST(req: Request) {
                 .update({ quantity: (existing.quantity as number) + (item.quantity as number) })
                 .eq("id", existing.id);
               if (!qtyErr) {
+                moveLog.push({
+                  ...item,
+                  action: "folded",
+                  from: twin.id,
+                  intoItemId: existing.id,
+                  intoQuantityBefore: existing.quantity,
+                });
                 await admin.from("collection_items").delete().eq("id", item.id).then(() => {});
                 itemsMoved++;
                 continue;
@@ -221,6 +288,20 @@ export async function POST(req: Request) {
           }
 
           if (stranded === 0) {
+            // Written BEFORE the delete. A log that only exists once the
+            // destructive step succeeded is a log that is missing precisely
+            // when something went wrong halfway.
+            await admin
+              .from("card_merges")
+              .insert({
+                merged_by: actor,
+                source: "admin",
+                survivor_id: survivor.id,
+                twin_id: twin.id,
+                twin,
+                items: moveLog,
+              })
+              .then(() => {});
             const { error: delErr } = await admin.from("cards").delete().eq("id", twin.id);
             if (delErr) failures.push(`${twin.id}: ${delErr.message}`);
             else merged++;

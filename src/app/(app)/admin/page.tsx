@@ -3393,6 +3393,8 @@ function DedupeCardsPanel() {
       key: string;
       name: string;
       set: string | null;
+      blocked?: boolean;
+      warning?: string | null;
       rows: Array<{
         id: string;
         number: string;
@@ -3409,7 +3411,13 @@ function DedupeCardsPanel() {
   const [error, setError] = useState<string | null>(null);
   /** Keys the admin has UNticked. Absent means merge it — the default is
    *  yes, because the grouping is right the vast majority of the time and
-   *  ticking seventy boxes by hand is its own kind of mistake. */
+   *  ticking seventy boxes by hand is its own kind of mistake.
+   *
+   *  Anything the server flagged starts here, though. Grouping HAS been
+   *  wrong — it treated a full art as a duplicate of its plain version —
+   *  and a wrong merge deletes a card and repoints somebody's collection,
+   *  while a missed merge leaves one duplicate. Those costs are not
+   *  symmetrical, so a doubtful pair defaults to no. */
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
 
   async function run(dryRun: boolean) {
@@ -3428,7 +3436,17 @@ function DedupeCardsPanel() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Dedupe failed");
       setOut(json);
-      if (dryRun) setSkipped(new Set());
+      // Start with every flagged pair unticked, so a warning has to be read
+      // and overridden rather than merely ignored.
+      if (dryRun) {
+        setSkipped(
+          new Set(
+            (json.groups ?? [])
+              .filter((g: { warning?: string | null }) => g.warning)
+              .map((g: { key: string }) => g.key)
+          )
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Dedupe failed");
     }
@@ -3512,6 +3530,20 @@ function DedupeCardsPanel() {
                           {g.name}
                           <span className="font-normal opacity-70"> · {g.set ?? "no set"}</span>
                         </div>
+                        {/* Said plainly and in the row itself. A warning in
+                            a legend somewhere is a warning nobody reads at
+                            the moment they are about to delete a card. */}
+                        {g.warning && (
+                          <div
+                            className={`mt-1 rounded px-2 py-1 text-[11px] leading-snug ${
+                              g.blocked
+                                ? "bg-brand-negative/15 text-brand-negative"
+                                : "bg-brand-warning/15 text-brand-warning"
+                            }`}
+                          >
+                            {g.warning}
+                          </div>
+                        )}
                         {/* The pictures ARE the check: two thumbnails of the
                             same art means one card under two ids; two
                             different arts means leave it alone. */}

@@ -135,8 +135,18 @@ async function mergeTcgpDuplicates(
   // turned "58/102" into 58102, so the twins this function exists to clean
   // up could never be found — the merge quietly did nothing. Both are no-ops
   // on a number and name that were already plain.
+  // Letters kept — see the dedupe route for the full reasoning. Stripping
+  // them collapsed "112a" onto "112", and that suffix marks an alternate or
+  // full-art printing sharing a collector number. This function DELETES the
+  // twin it matches, so a wrong match here destroys a real card silently, on
+  // every imported page, with nobody watching.
   const numKey = (n: string) =>
-    (n ?? "").split("/")[0].replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+    (n ?? "")
+      .split("/")[0]
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "")
+      .replace(/(^|[^0-9])0+(?=\d)/g, "$1");
   const nameKey = (n: string) =>
     (n ?? "")
       .replace(/\s*[-–—]\s*#?\d+\s*(?:\/\s*\w+)?\s*$/, "")
