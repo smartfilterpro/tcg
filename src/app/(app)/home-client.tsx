@@ -48,6 +48,10 @@ export default function CollectionPage({
   const [changingCard, setChangingCard] = useState(false);
   const [addVariant, setAddVariant] = useState("auto");
   const [variantFilter, setVariantFilter] = useState("");
+  /** Show only the cards nothing has priced yet. Driven from the count in
+   *  the header rather than the filter row, because it is that number the
+   *  question is always about. */
+  const [unpricedOnly, setUnpricedOnly] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [notesDraft, setNotesDraft] = useState("");
   const [notesSaved, setNotesSaved] = useState(false);
@@ -255,6 +259,7 @@ export default function CollectionPage({
     if (rarityFilter) list = list.filter((i) => canonicalRarity(i.card.rarity) === rarityFilter);
     if (supertypeFilter) list = list.filter((i) => i.card.supertype === supertypeFilter);
     if (variantFilter) list = list.filter((i) => (i.variant ?? "normal") === variantFilter);
+    if (unpricedOnly) list = list.filter((i) => itemPrice(i) == null);
     switch (sort) {
       case "name":
         list = [...list].sort((a, b) => a.card.name.localeCompare(b.card.name));
@@ -271,7 +276,7 @@ export default function CollectionPage({
         break;
     }
     return list;
-  }, [items, search, typeFilter, setFilter, rarityFilter, supertypeFilter, variantFilter, sort]);
+  }, [items, search, typeFilter, setFilter, rarityFilter, supertypeFilter, variantFilter, unpricedOnly, sort]);
 
   /** One tile per card, not per finish.
    *
@@ -599,10 +604,29 @@ export default function CollectionPage({
               ~${totals.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} value
             </span>
             {totals.unpriced > 0 && (
-              <span className="text-slate-400">
-                {" "}
-                · {totals.unpriced.toLocaleString()} with no price yet
-              </span>
+              <>
+                {" · "}
+                {/* A bare count invites the obvious question — WHICH ones? —
+                    and a number that goes up rather than down reads as a bug
+                    when it is usually a shelf of bulk commons and promos no
+                    source prices. So the number is the filter: one tap shows
+                    exactly which cards are behind it. */}
+                <button
+                  type="button"
+                  className={`underline decoration-dotted underline-offset-2 ${
+                    unpricedOnly ? "font-semibold text-brand-ink2" : "text-slate-400"
+                  }`}
+                  onClick={() => setUnpricedOnly((v) => !v)}
+                  title={
+                    unpricedOnly
+                      ? "Show the whole collection again"
+                      : "Show only the cards with no price"
+                  }
+                >
+                  {totals.unpriced.toLocaleString()} with no price yet
+                  {unpricedOnly ? " — showing these" : ""}
+                </button>
+              </>
             )}
           </p>
           {/* The grand total, on its own line and only when there IS sealed
