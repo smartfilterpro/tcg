@@ -3,6 +3,7 @@
 // OAuth buttons, no demo video, real-only footer links) are itemised in the
 // phase report rather than smuggled in.
 
+import Image from "next/image";
 import Link from "next/link";
 import { MarketingNav, MarketingFooter } from "@/components/marketing/Chrome";
 import { PricingSection } from "@/components/marketing/Pricing";
@@ -78,6 +79,55 @@ function Placeholder({ label, dark = false, className }: { label: string; dark?:
   );
 }
 
+/** The hero shot: two phones, the one in front reviewing a scan.
+ *
+ *  A browser frame with a wide, short window sat here, and a phone capture
+ *  in it could only ever show a strip of a screen. The product is used on a
+ *  phone, so the frame is a phone — which means a whole screen fits, at its
+ *  real proportions, with nothing cropped away to make it fit a hole.
+ *
+ *  The stack runs off the bottom of the band on purpose. Anchoring the tops
+ *  and letting the container clip keeps the interesting half — the heading,
+ *  the count, the first results — always visible, whatever height the band
+ *  ends up at.
+ */
+function PhoneStack() {
+  return (
+    <div className="relative mx-auto h-[330px] w-full max-w-[520px] overflow-hidden min-[720px]:h-[500px]">
+      {/* Behind: a card's detail, tilted and mostly covered. It is there to
+          say "there is more than one screen", so it only needs an edge. */}
+      <div className="absolute -left-2 top-8 hidden w-[54%] -rotate-[7deg] overflow-hidden rounded-[26px] border-[7px] border-brand-ink bg-brand-ink shadow-[0_30px_60px_-25px_rgba(22,23,27,.45)] min-[560px]:block">
+        <Image
+          src="/shots/hero-card.jpg"
+          alt=""
+          width={640}
+          height={1261}
+          className="block h-auto w-full"
+        />
+      </div>
+
+      {/* In front: the scan review, upright and unobstructed — the one
+          screen the headline is about. */}
+      <div className="absolute right-0 top-0 w-[76%] overflow-hidden rounded-[32px] border-[9px] border-brand-ink bg-brand-ink shadow-[0_36px_70px_-28px_rgba(22,23,27,.5)] min-[560px]:w-[68%]">
+        <Image
+          src="/shots/hero-scan.jpg"
+          alt="Reviewing a scan: five cards read in fifteen seconds, each with a confidence badge, set, collector number and price."
+          width={640}
+          height={1129}
+          className="block h-auto w-full"
+          priority
+        />
+      </div>
+
+      {/* The claim the screenshot backs up, said out loud. Straddles the
+          phone edge so it reads as a callout rather than part of the UI. */}
+      <span className="absolute right-[2%] top-[6%] z-10 rounded-full bg-brand-highlight px-3 py-1 font-mono text-[10.5px] font-medium tracking-[.06em] text-brand-ink shadow-sm">
+        5 CARDS · 15s
+      </span>
+    </div>
+  );
+}
+
 /** The hero numbers are measured, so they arrive as props from the server
  *  component that reads them rather than being imported as constants. */
 export default function Landing({
@@ -136,17 +186,7 @@ export default function Landing({
             </div>
 
             <div className="min-w-[320px] flex-[1_1_420px] self-end">
-              <div className="rounded-t-[20px] bg-brand-ink p-3.5 pb-0 shadow-[0_-8px_60px_-30px_rgba(22,23,27,.5)]">
-                <div className="flex gap-1.5 px-1.5 pb-3">
-                  <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
-                  <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
-                  <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
-                </div>
-                <Placeholder
-                  label="Screenshot coming soon — the /scan review grid"
-                  className="h-[300px] rounded-t-xl min-[720px]:h-[420px]"
-                />
-              </div>
+              <PhoneStack />
             </div>
           </div>
         </div>
