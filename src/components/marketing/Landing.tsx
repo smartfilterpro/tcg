@@ -61,6 +61,23 @@ const FAMILY_POINTS = [
   "Coaching answers in plain English, no TCG jargon required.",
 ];
 
+/** The mock's screenshot slots, kept as hatched placeholders until real
+ *  captures exist — shipping someone else's screenshot or none at all are
+ *  both worse. */
+function Placeholder({ label, dark = false, className }: { label: string; dark?: boolean; className?: string }) {
+  return (
+    <div
+      className={`flex flex-col items-center justify-center gap-2 p-6 text-center ${
+        dark
+          ? "border border-dark-line2 [background:repeating-linear-gradient(135deg,#22242A_0_8px,#1C1E23_8px_16px)]"
+          : "[background:repeating-linear-gradient(135deg,#F2F0EC_0_8px,#E9E6E0_8px_16px)]"
+      } ${className ?? ""}`}
+    >
+      <span className={`font-mono text-[11.5px] ${dark ? "text-dark-ink4" : "text-brand-ink4"}`}>{label}</span>
+    </div>
+  );
+}
+
 /** The hero numbers are measured, so they arrive as props from the server
  *  component that reads them rather than being imported as constants. */
 export default function Landing({
@@ -117,6 +134,20 @@ export default function Landing({
               </div>
               <p className="mb-6 mt-3 max-w-[52ch] text-[11.5px] leading-snug text-brand-ink5">{statsNote}</p>
             </div>
+
+            <div className="min-w-[320px] flex-[1_1_420px] self-end">
+              <div className="rounded-t-[20px] bg-brand-ink p-3.5 pb-0 shadow-[0_-8px_60px_-30px_rgba(22,23,27,.5)]">
+                <div className="flex gap-1.5 px-1.5 pb-3">
+                  <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
+                  <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
+                  <span className="h-[9px] w-[9px] rounded-full bg-[#4A4C52]" />
+                </div>
+                <Placeholder
+                  label="Screenshot coming soon — the /scan review grid"
+                  className="h-[300px] rounded-t-xl min-[720px]:h-[420px]"
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -155,11 +186,14 @@ export default function Landing({
           </h2>
           <div className="grid grid-cols-1 gap-5 min-[720px]:grid-cols-3">
             {STEPS.map((s) => (
-              <div key={s.n} className="flex gap-3">
-                <span className="font-display text-[14px] font-bold text-brand-highlight">{s.n}</span>
-                <div>
-                  <h3 className="m-0 font-display text-[20px] font-bold tracking-[-.02em]">{s.title}</h3>
-                  <p className="mt-1.5 text-[14.5px] leading-[1.6] text-dark-ink3 [text-wrap:pretty]">{s.body}</p>
+              <div key={s.n} className="flex flex-col gap-4">
+                <Placeholder dark label="Screenshot coming soon" className="h-[230px] rounded-2xl" />
+                <div className="flex gap-3">
+                  <span className="font-display text-[14px] font-bold text-brand-highlight">{s.n}</span>
+                  <div>
+                    <h3 className="m-0 font-display text-[20px] font-bold tracking-[-.02em]">{s.title}</h3>
+                    <p className="mt-1.5 text-[14.5px] leading-[1.6] text-dark-ink3 [text-wrap:pretty]">{s.body}</p>
+                  </div>
                 </div>
               </div>
             ))}
