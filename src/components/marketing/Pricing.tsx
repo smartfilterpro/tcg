@@ -2,7 +2,7 @@
 // FAQ. Rendered inside the landing page and standalone at /pricing.
 
 import Link from "next/link";
-import { BOOSTS, BOOSTS_NOTE, CREDIT_COSTS, CREDIT_COSTS_NOTE, FAQS, TIERS } from "@/lib/marketing";
+import { BOOSTS, BOOSTS_NOTE, CREDIT_COSTS, CREDIT_COSTS_NOTE, FAQS, TIERS, FREE_LIMITS, FREE_LIMITS_NOTE } from "@/lib/marketing";
 import { AI_NAME } from "@/lib/branding";
 
 export function PricingSection() {
@@ -81,6 +81,32 @@ export function PricingSection() {
               </Link>
             </div>
           ))}
+        </div>
+
+        {/* What free does NOT do.
+            Its own block rather than more crosses in the Free column: the
+            crosses are read as a comparison between tiers, and this is the
+            question somebody asks on its own — "what will stop me?" — which
+            deserves a plain answer in one place instead of being inferred
+            from three lists. */}
+        <div className="mt-5 rounded-[20px] border border-brand-line bg-brand-panel p-[22px] min-[720px]:p-[30px]">
+          <h3 className="m-0 mb-1.5 font-display text-[19px] font-bold tracking-[-.02em]">
+            What the free plan won&apos;t let you do
+          </h3>
+          <p className="m-0 mb-3.5 max-w-[62ch] text-[14px] leading-[1.6] text-brand-ink3">
+            Short list, and worth reading before you sign up rather than after.
+          </p>
+          <ul className="m-0 flex list-none flex-col gap-2 p-0">
+            {FREE_LIMITS.map((limit) => (
+              <li key={limit} className="flex items-start gap-[9px] text-[14.5px] leading-[1.5]">
+                <span className="mt-px shrink-0 font-mono text-[12px] text-brand-ink5">—</span>
+                <span className="text-brand-ink2">{limit}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mb-0 mt-3.5 max-w-[62ch] text-[13px] leading-[1.55] text-brand-ink5">
+            {FREE_LIMITS_NOTE}
+          </p>
         </div>
 
         {/* credits explainer + boosts */}
