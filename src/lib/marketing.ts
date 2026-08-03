@@ -3,6 +3,7 @@
 // lives in the components.
 
 import { BOOST_LIST, BOOSTS_NOTE } from "@/lib/boosts";
+import { FREE_DECK_LIMIT } from "@/lib/limits";
 import { CREDIT_MENU, MONTHLY_GRANT, SIGNUP_GRANT } from "@/lib/credits";
 
 // STATS / STATS_ASOF / STATS_DISCLAIMER lived here as hand-measured
@@ -49,7 +50,11 @@ export const TIERS: Tier[] = [
     featured: false,
     dark: false,
     features: [
-      f("Unlimited cards and decks"),
+      // Driven by the constant the API actually enforces, not restated by
+      // hand. This line read "Unlimited cards and decks" while the save gate
+      // refused the fourth one — the worst kind of pricing copy, because
+      // somebody finds out by being stopped.
+      f(`Unlimited cards · up to ${FREE_DECK_LIMIT} saved decks`),
       f("Add cards by database search"),
       f("Collection value + weekly price refresh"),
       f("Two-player battles"),
@@ -70,6 +75,9 @@ export const TIERS: Tier[] = [
     dark: true,
     features: [
       f("Everything in Free"),
+      // Stated outright: "Everything in Free" otherwise carries Free's deck
+      // cap with it, which is the opposite of what Pro is for.
+      f("Unlimited saved decks"),
       f("Bulk camera scanning, 20+ cards a shot"),
       f("TrainerAI deck building + coaching"),
       f("Card grading reports"),
