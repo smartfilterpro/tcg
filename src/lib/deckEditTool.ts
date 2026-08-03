@@ -16,6 +16,7 @@ import {
   applyChanges,
   validateEdit,
   missingCopies,
+  categoryFromSupertype,
   type DeckEditProposal,
 } from "@/lib/deckEdit";
 import type { DeckEntry } from "@/lib/deckLegality";
@@ -60,6 +61,41 @@ export const DECK_EDIT_TOOL = {
   },
 };
 
+/** What kind of card each of these names is, from the catalogue.
+ *
+ *  A deck row's category is only ever written when the card is added, and
+ *  the writer used to guess — returning "pokemon" for anything that wasn't
+ *  basic energy. So every Trainer the assistant added showed up in the
+ *  Pokémon column and the section counts went wrong. The catalogue already
+ *  knows; one lookup settles it.
+ *
+ *  Names are matched case-insensitively but exactly otherwise, because a
+ *  fuzzy match here would file a card under the wrong heading with more
+ *  confidence than the guess it replaced. Anything unmatched is simply
+ *  absent, and the caller keeps whatever it had. */
+export async function categoryLookup(
+  supabase: SupabaseClient,
+  names: string[]
+): Promise<(name: string) => DeckEntry["category"] | undefined> {
+  const wanted = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+  if (wanted.length === 0) return () => undefined;
+
+  const byName = new Map<string, DeckEntry["category"]>();
+  // Chunked: a deck is small, but `in` with a long list is a URL nobody
+  // needs to find the limit of.
+  for (let i = 0; i < wanted.length; i += 100) {
+    const { data } = await supabase
+      .from("cards")
+      .select("name, supertype")
+      .in("name", wanted.slice(i, i + 100));
+    for (const row of data ?? []) {
+      const category = categoryFromSupertype(row.supertype as string | null);
+      if (category) byName.set((row.name as string).trim().toLowerCase(), category);
+    }
+  }
+  return (name: string) => byName.get(name.trim().toLowerCase());
+}
+
 /** Turn a proposed edit into a preview, without writing anything.
  *
  *  Validated here rather than only at apply time so the model learns
@@ -89,7 +125,13 @@ export async function runDeckEditProposal(
   }
 
   const before = (deck.cards ?? []) as DeckEntry[];
-  const { cards: after, applied } = applyChanges(before, changes);
+  // Every name in play: what the deck already holds plus what is being
+  // added, so existing miscategorised rows are corrected at the same time.
+  const category = await categoryLookup(supabase, [
+    ...before.map((c) => c.name),
+    ...changes.map((c) => c.name),
+  ]);
+  const { cards: after, applied } = applyChanges(before, changes, category);
   if (applied.length === 0) {
     return { forModel: "The deck already matches that — no change to propose.", proposal: null };
   }
