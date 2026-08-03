@@ -491,6 +491,14 @@ function ManualBuilder({
   );
 }
 
+/** How long the client will wait for a coach job before giving up.
+ *
+ *  The server treats a job as dead after six minutes, so this sits just
+ *  inside that: the poll should end with a real answer or a real error from
+ *  the server, and this is only the backstop for the server never replying
+ *  at all. Whatever happens, the spinner ends. */
+const POLL_LIMIT_MS = 5 * 60 * 1000;
+
 function CoachBox({
   deck,
   deckId,
@@ -508,6 +516,9 @@ function CoachBox({
   const [edit, setEdit] = useState<DeckEditProposal | null>(null);
   const [asking, setAsking] = useState(false);
   const [waited, setWaited] = useState(0);
+  /** A server-side caveat worth reading alongside the answer — currently
+   *  only "the background-job migration has not been run". */
+  const [note, setNote] = useState<string | null>(null);
 
   /** Read one JSON body, saying what happened when it isn't JSON.
    *
@@ -535,6 +546,7 @@ function CoachBox({
     setAsking(true);
     setAnswer(null);
     setEdit(null);
+    setNote(null);
     setWaited(0);
     const startedAt = Date.now();
     try {
@@ -556,6 +568,7 @@ function CoachBox({
         answer?: string;
         edit?: DeckEditProposal | null;
         error?: string;
+        note?: string;
       }>(res);
       if (!json) {
         setAnswer(`${failure} Try again — if it keeps happening, this is worth reporting.`);
@@ -567,9 +580,12 @@ function CoachBox({
       }
 
       // Answered inline: migration 049 hasn't run, so the route did the work
-      // in the request. Still a valid answer, just a fragile delivery.
+      // inside the request. Still a valid answer, just a fragile delivery —
+      // and the note is SHOWN rather than swallowed, because a background job
+      // that silently isn't running is the same bug wearing a disguise.
       if (!json.jobId) {
         setAnswer(json.answer ?? "No answer came back.");
+        setNote(json.note ?? null);
         if (json.edit) setEdit(json.edit);
         return;
       }
@@ -577,9 +593,23 @@ function CoachBox({
       // Poll. resilientFetch waits for the tab to come back rather than
       // treating a sleeping phone as a failure.
       const jobId = json.jobId;
+      const deadline = startedAt + POLL_LIMIT_MS;
       for (;;) {
         await new Promise((r) => setTimeout(r, 1500));
         setWaited(Math.round((Date.now() - startedAt) / 1000));
+        // A bounded loop, because an unbounded one is how "thinking…" becomes
+        // permanent. Whatever went wrong server-side, the person watching a
+        // spinner is owed an ending — and the job id makes the difference
+        // between a shrug and something reportable.
+        if (Date.now() > deadline) {
+          setAnswer(
+            `That answer has been running for ${Math.round(
+              POLL_LIMIT_MS / 60000
+            )} minutes, which is far longer than it should take, so I've stopped waiting. ` +
+              `Nothing was changed. (job ${jobId.slice(0, 8)})`
+          );
+          return;
+        }
         const poll = await resilientFetch(`/api/decks/coach?job=${encodeURIComponent(jobId)}`);
         const { json: state, failure: pollFailure } = await readJson<{
           job?: {
@@ -668,6 +698,14 @@ function CoachBox({
               </span>
             </>
           )}
+        </p>
+      )}
+      {/* Shown ABOVE the answer, because it explains why the answer took as
+          long as it did — and because a background job that is quietly not
+          running is the original bug wearing a disguise. */}
+      {note && (
+        <p className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-[11.5px] leading-snug text-amber-900">
+          ⚠︎ {note}
         </p>
       )}
       {answer && (
