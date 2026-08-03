@@ -397,6 +397,28 @@ function firstCard(json: unknown): PtCard | null {
   return null;
 }
 
+/** Do two collector numbers refer to the same card?
+ *
+ *  Compared on the part before the slash, with leading zeros dropped, so
+ *  "15/88", "15" and "015" all agree. Anything with letters keeps them —
+ *  "112a" marks an alternate printing sharing a number with "112", and
+ *  collapsing the two is how a full art gets a common's price.
+ *
+ *  A missing number on either side agrees with nothing. That is deliberate:
+ *  this exists to check a widened search, and "we can't tell" must not read
+ *  as "yes". */
+function numbersAgree(theirs: string | undefined, ours: string | null | undefined): boolean {
+  const norm = (n: string | null | undefined) =>
+    (n ?? "")
+      .split("/")[0]
+      .trim()
+      .toLowerCase()
+      .replace(/^0+(?=\d)/, "");
+  const a = norm(theirs);
+  const b = norm(ours);
+  return a.length > 0 && a === b;
+}
+
 /** Look a card up by name, set and number. Null on anything going wrong —
  *  this is a fallback, and it must never be the reason a page fails. */
 export async function findCard(query: {
@@ -415,15 +437,60 @@ export async function findCard(query: {
     // spans name, setName, cardNumber and rarity, and handles the "4/102"
     // form directly, which is how collector numbers are written.
     const search = [query.name, query.number ?? ""].filter(Boolean).join(" ");
-    const json = await ptFetch("/cards", {
+
+    // A LADDER, because the set filter was quietly losing common cards.
+    //
+    // `set` is an exact filter on THEIR set name, which comes from
+    // TCGplayer, while ours comes from pokemontcg.io. The two disagree often
+    // — "SV: Paldea Evolved" against "Paldea Evolved" — and when they do,
+    // the filter excludes the very card we are asking about and the answer
+    // is an honest-looking "no source has a price". The set-by-set sync
+    // learned this already and deliberately keys on name and number alone;
+    // this lookup never got the lesson, which is how a Common in a current
+    // set ends up with no price.
+    //
+    // So: ask with the set, then without it, then with the collector number
+    // trimmed to its plain form ("15/88" → "15"). Each rung costs one credit
+    // and only runs if the one above found nothing, against an allowance of
+    // 20,000 a day.
+    // The widened rungs need a collector number to check the answer against,
+    // so they are only built when we have one. Without a number a bare-name
+    // search cannot be verified, and an unverifiable widening is exactly the
+    // thing that puts a wrong price on somebody's card.
+    const plain = (query.number ?? "").split("/")[0].trim();
+    const widened: Array<Record<string, string>> = [];
+    if (plain) {
+      if (query.setName) widened.push({ search, limit: "1" });
+      if (plain !== (query.number ?? "").trim()) {
+        widened.push({ search: [query.name, plain].filter(Boolean).join(" "), limit: "1" });
+      }
+    }
+
+    // Rung one is the original query, unchanged and still trusted on its own
+    // terms: the set filter makes its single answer specific enough to take.
+    let json: unknown = await ptFetch("/cards", {
       search,
       ...(query.setName ? { set: query.setName } : {}),
       // ONE. Billing is limit × includes, so this is the difference between
       // 1 credit and 50 for the same answer.
       limit: "1",
     });
+    let card: PtCard | null = firstCard(json);
 
-    const card = firstCard(json);
+    for (const params of widened) {
+      if (card) break;
+      const wider = await ptFetch("/cards", params);
+      const candidate = firstCard(wider);
+      // Dropping the set filter widens the search, so the answer has to be
+      // CHECKED rather than taken. A bare name can return any printing of
+      // it, and a confidently wrong price on somebody's card is worse than
+      // no price at all — that is the whole reason the filter was there.
+      if (candidate && numbersAgree(candidate.cardNumber, query.number)) {
+        card = candidate;
+        json = wider;
+      }
+    }
+
     let images = card ? imagesOf(card) : [];
     // Nothing in the documented places — try the tolerant walk before giving
     // up, in case the shape moved.
