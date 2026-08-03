@@ -6,6 +6,8 @@ import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import type { DeckCardEntry } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { legalityBriefing } from "@/lib/deckLegality";
+import { completeWithRoom, answerText } from "@/lib/aiAnswer";
 
 export const maxDuration = 120;
 
@@ -85,37 +87,42 @@ export async function POST(req: Request) {
       .join("\n");
     const total = cards.reduce((s, c) => s + c.quantity, 0);
 
-    const client = anthropic();
-    const stream = client.messages.stream({
-      model: MODEL,
-      max_tokens: 8000,
-      system: SYSTEM,
-      messages: [
-        {
-          role: "user",
-          content: `DECK IN PROGRESS${name ? ` — "${name}"` : ""} (${total}/60 cards):\n${deckList}\n\nTHE PLAYER'S FULL COLLECTION:\n${collectionList}\n\n${
-            question?.trim()
-              ? `PLAYER'S QUESTION: ${question.trim().slice(0, 2000)}`
-              : "Please review this deck."
-          }`,
-        },
-      ],
-    });
-    const response = await stream.finalMessage();
+    // The counting is done here, not by the model. The review is asked to
+    // put legality first, and legality is arithmetic — so give it the
+    // arithmetic and let it spend its budget on the advice.
+    const briefing = legalityBriefing(
+      cards.map((c) => ({ name: c.name, quantity: c.quantity, category: c.category }))
+    );
 
-    await logAiUsage(supabase, user.id, "deck_review", MODEL, response.usage);
+    const client = anthropic();
+    const response = await completeWithRoom(
+      client,
+      {
+        model: MODEL,
+        max_tokens: 16000,
+        system: SYSTEM,
+        messages: [
+          {
+            role: "user",
+            content: `DECK IN PROGRESS${name ? ` — "${name}"` : ""} (${total}/60 cards):\n${deckList}\n\n${briefing}\n\nTHE PLAYER'S FULL COLLECTION:\n${collectionList}\n\n${
+              question?.trim()
+                ? `PLAYER'S QUESTION: ${question.trim().slice(0, 2000)}`
+                : "Please review this deck."
+            }`,
+          },
+        ],
+      },
+      (r) => logAiUsage(supabase, user.id, "deck_review", MODEL, r.usage)
+    );
 
     if (response.stop_reason === "refusal") {
       return NextResponse.json({
         answer: "I can only help review Pokémon TCG decks — ask me about this deck!",
       });
     }
-    const textBlock = response.content.find((b) => b.type === "text");
+    const text = answerText(response);
     return NextResponse.json({
-      answer:
-        textBlock && textBlock.type === "text"
-          ? textBlock.text
-          : "I ran out of room thinking about that — try asking again!",
+      answer: text || "I ran out of room thinking about that — try asking again!",
     });
   } catch (err) {
     if (err instanceof AuthError) {

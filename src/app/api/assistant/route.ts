@@ -10,6 +10,7 @@ import { applyChanges, validateEdit, type DeckEditProposal } from "@/lib/deckEdi
 import type { DeckEntry } from "@/lib/deckLegality";
 import { buildContext } from "@/lib/assistantContext";
 import { ASSISTANT_SYSTEM, OFF_TOPIC_REPLY, isClearlyOffTopic } from "@/lib/assistantScope";
+import { completeWithRoom, answerText } from "@/lib/aiAnswer";
 
 export const maxDuration = 120;
 
@@ -377,19 +378,24 @@ async function runChat(opts: {
   // the client can offer it for approval. Nothing has been written.
   let pendingEdit: DeckEditProposal | null = null;
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const stream = client.messages.stream({
-      model: MODEL,
-      max_tokens: 4000,
-      system,
-      tools: [CARD_LOOKUP_TOOL, SET_COMPLETION_TOOL, DECK_EDIT_TOOL],
-      // The last permitted round forbids another lookup, so the model
-      // answers with what it has instead of ending mid-thought on a tool
-      // call nothing will ever run.
-      ...(round === MAX_TOOL_ROUNDS - 1 ? { tool_choice: { type: "none" as const } } : {}),
-      messages,
-    });
-    response = await stream.finalMessage();
-    await logAiUsage(supabase, userId, "chat", MODEL, response.usage);
+    response = await completeWithRoom(
+      client,
+      {
+        model: MODEL,
+        // Reasoning and the reply share this budget, and 4000 was tight
+        // enough that a hard question could spend all of it thinking and
+        // return no text at all. The cap is a ceiling, not a charge.
+        max_tokens: 12000,
+        system,
+        tools: [CARD_LOOKUP_TOOL, SET_COMPLETION_TOOL, DECK_EDIT_TOOL],
+        // The last permitted round forbids another lookup, so the model
+        // answers with what it has instead of ending mid-thought on a tool
+        // call nothing will ever run.
+        ...(round === MAX_TOOL_ROUNDS - 1 ? { tool_choice: { type: "none" as const } } : {}),
+        messages,
+      },
+      (r) => logAiUsage(supabase, userId, "chat", MODEL, r.usage)
+    );
     if (response.stop_reason !== "tool_use") break;
 
     messages.push({ role: "assistant", content: response.content });
@@ -423,13 +429,10 @@ async function runChat(opts: {
     messages.push({ role: "user", content: results });
   }
 
-  const block = response.content.find((b) => b.type === "text");
   const refused = response.stop_reason === "refusal";
   const answer = refused
     ? OFF_TOPIC_REPLY
-    : block && block.type === "text"
-      ? block.text
-      : "I lost my thread there — ask me again?";
+    : answerText(response) || "I lost my thread there — ask me again?";
 
   await save("assistant", answer, refused, pendingEdit ? { deckEdit: pendingEdit } : null);
   return { answer, refused, pendingEdit };
