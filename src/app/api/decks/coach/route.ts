@@ -5,6 +5,8 @@ import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import type { DeckCardEntry } from "@/lib/types";
+import { legalityBriefing } from "@/lib/deckLegality";
+import { completeWithRoom, answerText } from "@/lib/aiAnswer";
 
 export const maxDuration = 120;
 
@@ -49,47 +51,64 @@ export async function POST(req: Request) {
     }
 
     const client = anthropic();
-    // Thinking tokens and the visible answer share max_tokens — keep headroom.
-    const stream = client.messages.stream({
-      model: MODEL,
-      max_tokens: 8000,
-      system: SYSTEM,
-      messages: [
-        {
-          role: "user",
-          // Lines, not JSON. A 60-card deck as JSON repeats "name",
-          // "quantity", "category", "card_id" and "reason" on every entry —
-          // 57% of this payload was field names and punctuation.
-          content:
-            `THE PLAYER'S DECK — "${deck.name ?? "Untitled"}"\n` +
-            (deck.strategy ? `Their notes: ${deck.strategy}\n` : "") +
-            `Cards, one per line, as: qty name [category] — why it's in the deck\n` +
-            (deck.cards ?? [])
-              .map(
-                (c) =>
-                  `${c.quantity}x ${c.name} [${c.category}]` +
-                  (c.reason ? ` — ${c.reason}` : "")
-              )
-              .join("\n") +
-            `\n\nPLAYER'S QUESTION: ${question.trim()}`,
-        },
-      ],
-    });
-    const response = await stream.finalMessage();
+    // "What's wrong with this deck?" is the question that kept coming back
+    // empty: the model was spending its entire budget counting sixty cards
+    // against the copy limit before it wrote anything. So the app counts
+    // first and hands over the answer — cheaper, exact, and it leaves the
+    // budget for the coaching.
+    const briefing = legalityBriefing(
+      (deck.cards ?? []).map((c) => ({
+        name: c.name,
+        quantity: c.quantity,
+        category: c.category,
+      }))
+    );
 
-    await logAiUsage(supabase, user.id, "coach", MODEL, response.usage);
+    // Thinking tokens and the visible answer share max_tokens. The cap is a
+    // ceiling, not a bill — a generous one costs nothing on the questions
+    // that answer in three lines, and rescues the ones that don't.
+    const response = await completeWithRoom(
+      client,
+      {
+        model: MODEL,
+        max_tokens: 16000,
+        system: SYSTEM,
+        messages: [
+          {
+            role: "user",
+            // Lines, not JSON. A 60-card deck as JSON repeats "name",
+            // "quantity", "category", "card_id" and "reason" on every entry —
+            // 57% of this payload was field names and punctuation.
+            content:
+              `THE PLAYER'S DECK — "${deck.name ?? "Untitled"}"\n` +
+              (deck.strategy ? `Their notes: ${deck.strategy}\n` : "") +
+              `Cards, one per line, as: qty name [category] — why it's in the deck\n` +
+              (deck.cards ?? [])
+                .map(
+                  (c) =>
+                    `${c.quantity}x ${c.name} [${c.category}]` +
+                    (c.reason ? ` — ${c.reason}` : "")
+                )
+                .join("\n") +
+              `\n\n${briefing}` +
+              `\n\nPLAYER'S QUESTION: ${question.trim()}`,
+          },
+        ],
+      },
+      // Every attempt is logged, including a retry — it cost what it cost.
+      (r) => logAiUsage(supabase, user.id, "coach", MODEL, r.usage)
+    );
 
     if (response.stop_reason === "refusal") {
       return NextResponse.json(
         { answer: "I can only help with Pokémon TCG decks — try a question about this deck!" }
       );
     }
-    const textBlock = response.content.find((b) => b.type === "text");
+    const text = answerText(response);
     return NextResponse.json({
       answer:
-        textBlock && textBlock.type === "text"
-          ? textBlock.text
-          : "I thought about that one too long and ran out of room — try asking again, maybe a bit more specifically!",
+        text ||
+        "I thought about that one too long and ran out of room — try asking again, maybe a bit more specifically!",
     });
   } catch (err) {
     if (err instanceof AuthError) {

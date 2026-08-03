@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import { itemPrice, variantLabel, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { tradingOff, TRADING_OFF_ERROR } from "@/lib/tradeBoard";
+import { completeWithRoom, answerText } from "@/lib/aiAnswer";
 
 export const maxDuration = 120;
 
@@ -178,27 +179,26 @@ export async function POST(req: Request) {
     )}\n${formatTrade(`${friendName} gives`, body.trade?.theirs ?? [])}`;
 
     const client = anthropic();
-    const stream = client.messages.stream({
-      model: MODEL,
-      max_tokens: 8000,
-      system: `${SYSTEM_BASE}\n\n${context}`,
-      messages,
-    });
-    const response = await stream.finalMessage();
-
-    await logAiUsage(supabase, user.id, "trade_chat", MODEL, response.usage);
+    const response = await completeWithRoom(
+      client,
+      {
+        model: MODEL,
+        max_tokens: 16000,
+        system: `${SYSTEM_BASE}\n\n${context}`,
+        messages,
+      },
+      (r) => logAiUsage(supabase, user.id, "trade_chat", MODEL, r.usage)
+    );
 
     if (response.stop_reason === "refusal") {
       return NextResponse.json({
         answer: "I can only help with Pokémon card trades — ask me about the cards on the table!",
       });
     }
-    const textBlock = response.content.find((b) => b.type === "text");
+    const text = answerText(response);
     return NextResponse.json({
       answer:
-        textBlock && textBlock.type === "text"
-          ? textBlock.text
-          : "I thought about that one too long and ran out of room — try asking again!",
+        text || "I thought about that one too long and ran out of room — try asking again!",
     });
   } catch (err) {
     if (err instanceof AuthError) {

@@ -208,6 +208,39 @@ export function checkDeck(cards: DeckEntry[]): Violation[] {
   return problems;
 }
 
+/** The app's own count of a deck, written for the model to read.
+ *
+ *  Counting sixty entries and cross-referencing every name against every
+ *  other name is the single most expensive thing we ask a model to do about
+ *  a deck, it is arithmetic rather than judgement, and it is the part it
+ *  gets wrong. Doing it here and handing over the result costs nothing,
+ *  cannot be miscounted, and leaves the model's attention for the question
+ *  actually asked.
+ *
+ *  Says plainly what was NOT checked. A model told "the app checked
+ *  legality" will report a deck as legal, and this can only see what is in
+ *  the deck row — for a saved deck that is names, quantities and categories,
+ *  with no card text or subtypes to recognise an ACE SPEC by. */
+export function legalityBriefing(cards: DeckEntry[]): string {
+  const problems = checkDeck(cards);
+  const knowsSubtypes = cards.some((c) => (c.subtypes ?? []).length > 0);
+
+  const lines = problems.length
+    ? problems.map((p) => `- ${p.message}`).join("\n")
+    : `- ${totalCards(cards)} cards, and no card appears more than ${MAX_COPIES} times by name.`;
+
+  const unchecked = knowsSubtypes
+    ? "evolution lines and format legality"
+    : "ACE SPEC and Radiant limits (the app has no card text here, so it only spotted them by name), evolution lines, and format legality";
+
+  return `THE APP'S OWN COUNT OF THIS DECK — these numbers are exact. Use them
+instead of counting the list yourself:
+${lines}
+
+Not checked by the app: ${unchecked}. Judge those from your own knowledge of
+the cards, and say so plainly if something is wrong.`;
+}
+
 /** Bring an illegal list back inside the rules, deterministically.
  *
  *  Trimming is always safe: it removes copies the deck may not legally
