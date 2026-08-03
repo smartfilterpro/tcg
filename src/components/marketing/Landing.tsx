@@ -95,10 +95,10 @@ function Placeholder({ label, dark = false, className }: { label: string; dark?:
 function PhoneStack() {
   return (
     <div className="relative mx-auto flex w-full max-w-[560px] items-center justify-end py-4">
-      {/* Behind: a card's detail, tilted and mostly covered. It is there to
-          say "there is more than one screen", so it only needs an edge —
-          and it hides entirely on narrow screens, where two phones is
-          clutter rather than depth. */}
+      {/* Behind: a card's detail with a live market price on it, tilted and
+          mostly covered. It is there to say "there is more than one screen",
+          so it only needs an edge — and it hides entirely on narrow screens,
+          where two phones is clutter rather than depth. */}
       <div className="absolute bottom-[6%] left-0 hidden aspect-[9/17] w-[50%] -rotate-[8deg] overflow-hidden rounded-[30px] border-[9px] border-brand-ink bg-brand-ink shadow-[0_30px_60px_-25px_rgba(22,23,27,.45)] min-[640px]:block">
         <Image
           src="/shots/hero-card.jpg"
