@@ -58,9 +58,26 @@ export interface AppliedChange extends DeckEditChange {
  *  saying so is better than reporting a no-op as an edit. */
 export function applyChanges(
   cards: DeckEntry[],
-  changes: DeckEditChange[]
+  changes: DeckEditChange[],
+  /** The catalogue's answer to "what kind of card is this?", by lowercased
+   *  name. Without it every added card was filed as a Pokémon — see
+   *  guessCategory below. Entries it doesn't know fall back to the guess. */
+  categoryFor?: (name: string) => DeckEntry["category"] | undefined
 ): { cards: DeckEntry[]; applied: AppliedChange[] } {
-  const next = cards.map((c) => ({ ...c }));
+  const categorise = (name: string) =>
+    categoryFor?.(name.trim().toLowerCase()) ?? guessCategory(name);
+
+  // Correct what is already there, too.
+  //
+  // Decks edited before this carry Trainers filed as Pokémon, and nothing
+  // else will ever fix them — the category is written once, when a card is
+  // added. Re-deriving it from the catalogue on every edit costs one lookup
+  // we are making anyway and quietly repairs the deck as it is used. Only
+  // ever changes a label; quantities and names are untouched.
+  const next = cards.map((c) => ({
+    ...c,
+    category: categoryFor?.(c.name.trim().toLowerCase()) ?? c.category,
+  }));
   const applied: AppliedChange[] = [];
 
   for (const change of changes) {
@@ -76,7 +93,7 @@ export function applyChanges(
       next.push({
         name: change.name.trim(),
         quantity: to,
-        category: guessCategory(change.name),
+        category: categorise(change.name),
         card_id: change.card_id ?? null,
       });
     } else if (to === 0) {
@@ -102,11 +119,30 @@ export function applyChanges(
   return { cards: next.filter((c) => c.quantity > 0), applied };
 }
 
-/** A rough category for a card the deck doesn't hold yet. Only used for
- *  grouping in the editor; the deck's legality does not depend on it. */
-function guessCategory(name: string): string {
+/** Last resort for a card the catalogue has never heard of.
+ *
+ *  This used to be the ONLY answer, and it returns "pokemon" for anything
+ *  that isn't basic energy — so every Trainer TrainerAI added landed in the
+ *  Pokémon column, and the deck's section counts were wrong from then on.
+ *  Callers now pass a lookup from the real catalogue; this only covers the
+ *  case where even that comes back empty, and basic energy is the one thing
+ *  a name alone can settle. */
+function guessCategory(name: string): DeckEntry["category"] {
   if (isBasicEnergy(name)) return "energy";
   return "pokemon";
+}
+
+/** The catalogue's supertype in the vocabulary a deck row uses. */
+export function categoryFromSupertype(
+  supertype: string | null | undefined
+): DeckEntry["category"] | undefined {
+  const s = (supertype ?? "").trim().toLowerCase();
+  // "Pokémon" with the accent, "Pokemon" without — both arrive, depending
+  // on which source imported the row.
+  if (s.startsWith("pok")) return "pokemon";
+  if (s.startsWith("trainer")) return "trainer";
+  if (s.startsWith("energy")) return "energy";
+  return undefined;
 }
 
 export interface EditValidation {

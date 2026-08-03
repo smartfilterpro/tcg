@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { applyChanges, validateEdit, type DeckEditChange } from "@/lib/deckEdit";
+import { categoryLookup } from "@/lib/deckEditTool";
 import type { DeckEntry } from "@/lib/deckLegality";
 
 export const maxDuration = 60;
@@ -61,7 +62,14 @@ export async function POST(req: Request) {
     }
 
     const before = (deck.cards ?? []) as DeckEntry[];
-    const { cards: after, applied } = applyChanges(before, changes);
+    // Categories come from the catalogue, not from a guess. Resolved again
+    // here rather than trusted from the proposal, for the same reason
+    // everything else is: the proposal arrived through a browser.
+    const category = await categoryLookup(supabase, [
+      ...before.map((c) => c.name),
+      ...changes.map((c) => c.name),
+    ]);
+    const { cards: after, applied } = applyChanges(before, changes, category);
     if (applied.length === 0) {
       return NextResponse.json({
         ok: true,
