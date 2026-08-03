@@ -79,7 +79,7 @@ export async function buildContext(
     ),
     supabase
       .from("decks")
-      .select("name, strategy, cards")
+      .select("id, name, strategy, cards")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(12),
@@ -219,13 +219,16 @@ export async function buildContext(
   const decks = decksRes.data ?? [];
   if (decks.length > 0) {
     parts.push(
-      "THEIR DECKS:\n" +
+      "THEIR DECKS (the value in [brackets] is the deck id, for propose_deck_edit):\n" +
         decks
           .map((d) => {
             const cards = (d.cards ?? []) as Array<{ name: string; quantity: number }>;
             const list = cards.map((c) => `${c.quantity}x ${c.name}`).join(", ");
             const notes = (d.strategy ?? "").trim();
-            return `- "${d.name}" (${cards.reduce((s, c) => s + c.quantity, 0)} cards): ${list}` +
+            // The id is included so a proposed edit can name a specific
+            // deck. Without it the assistant could describe a change and
+            // never point at what to change.
+            return `- [${d.id}] "${d.name}" (${cards.reduce((s, c) => s + c.quantity, 0)} cards): ${list}` +
               (notes ? `\n  Their notes: ${notes.slice(0, 600)}` : "");
           })
           .join("\n")
