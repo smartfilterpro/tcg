@@ -16,6 +16,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { searchAllCardsPage } from "@/lib/pokemontcg";
 import { summaryToRow } from "@/lib/types";
+import { emptyColumns, CARD_COMPANIONS } from "@/lib/cardWrite";
 
 export const IMPORT_STATE_KEY = "card_import";
 
@@ -260,48 +261,34 @@ async function importOnePage(
   // and PostgREST's ON CONFLICT only assigns the columns it was given.
   // Whatever a group omits survives untouched on the existing row.
   //
-  // A card the API has no picture for keeps the one we hold. Writing its null
-  // over ours can only ever lose something — and cards the database is thin
-  // on are exactly the ones somebody has bothered to photograph or find an
-  // image for by hand.
+  // What gets omitted is decided by emptyColumns, which knows the one rule
+  // that matters here: a source with no value for a field is saying it
+  // doesn't know, not that the field is empty. This function had that
+  // reasoning written out for artwork and never applied it to price, and the
+  // result was a continuously-running loop quietly blanking prices across the
+  // whole table. Shared now, so the next column added to the row gets the
+  // same protection without anyone having to remember it.
   //
-  // THE SAME IS TRUE OF PRICE, and it wasn't being done.
-  //
-  // pokemontcg.io carries no TCGplayer price for a great many cards, so
-  // summaryToRow hands back market_price: null and prices: null for them.
-  // Upserting that wrote NULL over prices the paid sync, the per-card refresh
-  // and the nightly job had already found — and stamped price_updated_at as
-  // if the card had just been priced, which sank it to the back of the
-  // refresh queue. The import loop walks the whole catalogue continuously, so
-  // it was stripping prices faster than the refresh could restore them and
-  // the collection's "no price yet" count climbed on its own overnight.
-  //
-  // A price map of all-nulls counts as no price: {"normal": null} carries no
-  // more information than null itself, and overwriting a real map with it
-  // loses the same data by a different route.
-  const hasPrice = (r: (typeof rows)[number]) =>
-    r.market_price != null ||
-    (r.prices != null && Object.values(r.prices).some((v) => v != null));
+  // Artwork is force-omitted on top of that: a member's photo or a curated
+  // image must survive even when the source DOES carry a picture.
   const keepsImage = (r: (typeof rows)[number]) => protectedIds.has(r.id) || r.image_small == null;
 
-  type Row = (typeof rows)[number];
   const groups = new Map<string, Array<Record<string, unknown>>>();
   let imagesKept = 0;
   let pricesKept = 0;
   for (const row of rows) {
-    const omit: string[] = [];
-    if (keepsImage(row)) {
-      omit.push("image_small", "image_large");
-      imagesKept += 1;
-    }
-    if (!hasPrice(row)) pricesKept += 1;
-    // price_updated_at goes with the price. Stamping "checked just now" while
-    // writing no price is the lie that pushed these cards down the queue.
-    if (!hasPrice(row)) omit.push("market_price", "prices", "price_updated_at");
+    const omit = emptyColumns(row as unknown as Record<string, unknown>, {
+      companions: CARD_COMPANIONS,
+      force: keepsImage(row) ? ["image_small", "image_large"] : [],
+    });
+    if (omit.includes("image_small")) imagesKept += 1;
+    if (omit.includes("market_price")) pricesKept += 1;
 
-    const key = omit.join(",");
-    const trimmed: Record<string, unknown> = { ...row };
-    for (const col of omit) delete trimmed[col as keyof Row];
+    const drop = new Set(omit);
+    const key = [...drop].sort().join(",");
+    const trimmed = Object.fromEntries(
+      Object.entries(row).filter(([k]) => !drop.has(k))
+    );
     const list = groups.get(key);
     if (list) list.push(trimmed);
     else groups.set(key, [trimmed]);

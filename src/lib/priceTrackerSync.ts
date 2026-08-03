@@ -35,6 +35,7 @@ import { fetchAllRows } from "@/lib/fetchAll";
 import { cleanCardName, numberKey } from "@/lib/pokemontcg";
 import { budgetState, effectiveRemaining, priceTrackerEnabled, ptFetch } from "@/lib/priceTracker";
 import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
+import { gapFill, CARD_COMPANIONS } from "@/lib/cardWrite";
 
 export const SYNC_STATE_KEY = "price_tracker_sync";
 
@@ -722,13 +723,9 @@ export async function runPriceSync(
               // fields makes the second write a gap-fill instead. The same
               // mistake in the catalogue import was erasing prices across
               // the whole table.
-              // The NOT NULL columns are never stripped — an insert missing
-              // one fails outright rather than gap-filling, and a null there
-              // is a bug worth seeing rather than hiding.
-              const required = new Set(["id", "name", "number", "set_id", "set_name"]);
-              const insertable = Object.fromEntries(
-                Object.entries(row).filter(([k, v]) => v != null || required.has(k))
-              );
+              const insertable = gapFill(row as Record<string, unknown>, {
+                companions: CARD_COMPANIONS,
+              });
               const { error: insErr } = await admin
                 .from("cards")
                 .upsert(insertable, { onConflict: "id" });
