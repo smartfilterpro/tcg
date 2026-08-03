@@ -209,15 +209,26 @@ export async function refreshCard(
   else if (imageFound) message = "Found a picture, but no source has a price for this card.";
   else if (hadPrice) message = "No newer price available — keeping the one we have.";
   else {
+    // Says what was ASKED and what came back, rather than asserting a fact
+    // about the whole market. "No source has a price for this card" is a
+    // claim about every price list in the world; what actually happened is
+    // that two lookups on a name and a number found nothing, which is a very
+    // different thing and fails in ways a member can sometimes see — a set
+    // named differently at TCGplayer, a collector number written another way.
+    const tried = priceTrackerEnabled()
+      ? "the card database and the paid price service"
+      : "the card database";
     message =
-      "No source has a price for this card yet. Newly released and very obscure cards " +
-      "can take a while to appear; the nightly refresh keeps trying.";
+      `Looked up "${card.name}" #${card.number} from ${card.set_name ?? "an unknown set"} in ` +
+      `${tried} and neither returned a price. Newly released cards can take a while to ` +
+      `appear, and a set whose name is written differently at the source can be missed ` +
+      `entirely — the nightly refresh keeps trying.`;
   }
 
   // One line per refresh, so the server log can answer "I pressed it and
   // nothing happened" without anyone having to reproduce it.
   console.log(
-    `card refresh: ${id} ("${card.name}" #${card.number}) — ` +
+    `card refresh: ${id} ("${card.name}" #${card.number}, set "${card.set_name ?? "?"}") — ` +
       `price ${saved?.market_price ?? "none"}, art ${imageFound ? "found" : "unchanged"}`
   );
 
