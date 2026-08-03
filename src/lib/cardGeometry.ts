@@ -918,6 +918,10 @@ export function rectifyRegion(
 ): RGBAImage | null {
   const H = cardToSource(quad);
   if (!H) return null;
+  // Exported and called with computed sizes, so the same fractional-length
+  // throw that took down the grade screen is reachable here too. A refused
+  // rectify shows "couldn't measure"; a thrown one shows a white page.
+  if (!Number.isInteger(outW) || !Number.isInteger(outH) || outW < 1 || outH < 1) return null;
   const data = new Uint8ClampedArray(outW * outH * 4);
   for (let oy = 0; oy < outH; oy++) {
     const v = v0 + ((oy + 0.5) / outH) * (v1 - v0);
@@ -1140,9 +1144,21 @@ function frameEdgeDepth(
     return horizontal ? px(card, pos, a) : px(card, a, pos);
   };
 
-  const lo = Math.max(start + minDepth, 3);
-  const hi = Math.min(maxDepth, across - 3);
-  if (hi - lo < 6) return null;
+  // INTEGERS, explicitly.
+  //
+  // `start` is a median, and median() averages the middle pair on an even
+  // count — so it is routinely x.5. That made `hi - lo` fractional, and
+  // `new Array(8.5)` is a hard throw: Safari words it "Array length must be
+  // a positive integer of safe magnitude", which is what took down the whole
+  // grade screen while corners were being dragged. Every re-detect rolled
+  // the dice on whether the median landed on a half.
+  //
+  // Flooring is also the correct fix rather than merely a safe one: `lo`
+  // indexes into the array below as `d - lo`, so a fractional offset wrote
+  // to fractional keys and left every real slot at its initial zero.
+  const lo = Math.floor(Math.max(start + minDepth, 3));
+  const hi = Math.floor(Math.min(maxDepth, across - 3));
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi - lo < 6) return null;
 
   const as: number[] = [];
   for (let a = Math.floor(along * 0.18); a < along * 0.82; a += 2) as.push(a);
