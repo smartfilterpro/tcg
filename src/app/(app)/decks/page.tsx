@@ -12,6 +12,7 @@ import Markdown from "@/components/Markdown";
 import { CreditLock } from "@/components/CreditLock";
 import { useCredits } from "@/components/useCredits";
 import { FREE_DECK_LIMIT } from "@/lib/limits";
+import DeckEditCard, { type DeckEditProposal } from "@/components/DeckEditCard";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -489,24 +490,37 @@ function ManualBuilder({
   );
 }
 
-function CoachBox({ deck }: { deck: { name: string; strategy: string | null; cards: DeckCardEntry[] } }) {
+function CoachBox({
+  deck,
+  deckId,
+  onEdited,
+}: {
+  deck: { name: string; strategy: string | null; cards: DeckCardEntry[] };
+  /** A saved deck's id. Absent for the deck that has just been built and not
+   *  saved: there is no row to change, so no edits are offered. */
+  deckId?: string | null;
+  onEdited?: () => void;
+}) {
   const credits = useCredits();
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<string | null>(null);
+  const [edit, setEdit] = useState<DeckEditProposal | null>(null);
   const [asking, setAsking] = useState(false);
 
   async function ask() {
     if (!question.trim() || asking) return;
     setAsking(true);
     setAnswer(null);
+    setEdit(null);
     try {
       const res = await fetch("/api/decks/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deck, question }),
+        body: JSON.stringify({ deck, question, deckId: deckId ?? null }),
       });
       const json = await res.json();
       setAnswer(res.ok ? json.answer : json.error || "Something went wrong");
+      if (res.ok && json.edit) setEdit(json.edit as DeckEditProposal);
     } catch {
       setAnswer("Something went wrong — try again.");
     } finally {
@@ -518,11 +532,16 @@ function CoachBox({ deck }: { deck: { name: string; strategy: string | null; car
     <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
       <p className="mb-2 text-xs font-semibold text-slate-500">
         🎓 Ask {AI_NAME} about this deck — how to pilot it, opening plays, rules, matchups
+        {deckId ? ", or ask for a change" : ""}
       </p>
       <div className="flex gap-2">
         <input
           className="input text-sm"
-          placeholder='e.g. "What do I search for first turn?" or "How do I beat water decks?"'
+          placeholder={
+            deckId
+              ? 'e.g. "What do I search for first turn?" or "Swap the Poké Pad for a Nest Ball"'
+              : 'e.g. "What do I search for first turn?" or "How do I beat water decks?"'
+          }
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && ask()}
@@ -543,6 +562,14 @@ function CoachBox({ deck }: { deck: { name: string; strategy: string | null; car
       {answer && (
         <div className="mt-2 rounded bg-white p-3 text-sm leading-[1.6] text-slate-700 shadow-sm">
           <Markdown text={answer} />
+          {edit && (
+            <DeckEditCard
+              proposal={edit}
+              // The deck is on screen above this box, so a change that isn't
+              // reflected there reads as one that didn't happen.
+              onApplied={() => onEdited?.()}
+            />
+          )}
         </div>
       )}
     </div>
@@ -990,6 +1017,22 @@ export default function DecksPage() {
     setViewing((v) => (v && v.id === deck.id ? { ...v, ...patch } : v));
   }
 
+  /** Re-read one deck from the server after something changed it.
+   *
+   *  Used after TrainerAI's edit is approved. Reading it back rather than
+   *  patching from the proposal is the point: the server validates the edit
+   *  again on the way in, so the screen should show what the deck IS, not
+   *  what the change asked for. */
+  async function reloadDeck(id: string) {
+    const res = await fetch("/api/decks").catch(() => null);
+    if (!res?.ok) return;
+    const json = await res.json().catch(() => null);
+    const fresh = ((json?.decks ?? []) as Deck[]).find((d) => d.id === id);
+    if (!fresh) return;
+    setDecks((prev) => prev.map((d) => (d.id === id ? fresh : d)));
+    setViewing((v) => (v && v.id === id ? fresh : v));
+  }
+
   const groupCards = (cards: DeckCardEntry[]) => ({
     pokemon: cards.filter((c) => c.category === "pokemon"),
     trainer: cards.filter((c) => c.category === "trainer"),
@@ -1260,6 +1303,8 @@ export default function DecksPage() {
                     strategy: viewing.strategy,
                     cards: viewing.cards ?? [],
                   }}
+                  deckId={viewing.id}
+                  onEdited={() => reloadDeck(viewing.id)}
                 />
               </div>
             </div>

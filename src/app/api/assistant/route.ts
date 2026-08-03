@@ -6,8 +6,8 @@ import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { applyChanges, validateEdit, type DeckEditProposal } from "@/lib/deckEdit";
-import type { DeckEntry } from "@/lib/deckLegality";
+import type { DeckEditProposal } from "@/lib/deckEdit";
+import { DECK_EDIT_TOOL, runDeckEditProposal } from "@/lib/deckEditTool";
 import { buildContext } from "@/lib/assistantContext";
 import { ASSISTANT_SYSTEM, OFF_TOPIC_REPLY, isClearlyOffTopic } from "@/lib/assistantScope";
 import { completeWithRoom, answerText } from "@/lib/aiAnswer";
@@ -140,52 +140,6 @@ const SET_COMPLETION_TOOL = {
       },
     },
     required: ["set_name"],
-  },
-};
-
-/** Proposing a deck edit.
- *
- *  The model does NOT write. It calls this to describe a change, the tool
- *  hands back a validated preview, and the player approves it in the chat
- *  before anything is saved. That split is the point: a model with direct
- *  write access to saved decks is one misread question away from rewriting
- *  a list somebody spent an evening on, whereas a wrong proposal is simply
- *  declined.
- *
- *  Quantities are FINAL counts, not deltas. "Add one" is ambiguous when a
- *  deck holds the card across two printings; "make it 3" is not. */
-const DECK_EDIT_TOOL = {
-  name: "propose_deck_edit",
-  description:
-    "Propose a change to one of the player's saved decks. The player sees " +
-    "the change and approves it before anything is saved — you are never " +
-    "writing directly, so propose freely when they ask you to change, fix " +
-    "or improve a deck. Give FINAL quantities, not differences: to go from " +
-    "2 to 3 copies, send to=3. Send to=0 to remove a card. Only name cards " +
-    "the player owns (basic energy excepted) and keep the result legal: 60 " +
-    "cards, at most 4 of a name, at most 1 ACE SPEC.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      deck_id: {
-        type: "string",
-        description: "The id of the deck to change, from the deck list you were given.",
-      },
-      changes: {
-        type: "array",
-        description: "Every card whose count should change.",
-        items: {
-          type: "object" as const,
-          properties: {
-            name: { type: "string", description: "Exact card name." },
-            to: { type: "integer", description: "How many copies AFTER the change. 0 removes it." },
-            reason: { type: "string", description: "One short line on why." },
-          },
-          required: ["name", "to"],
-        },
-      },
-    },
-    required: ["deck_id", "changes"],
   },
 };
 
@@ -438,76 +392,6 @@ async function runChat(opts: {
   return { answer, refused, pendingEdit };
 }
 
-/** Turn a proposed edit into a preview, without writing anything.
- *
- *  Validated here rather than only at apply time so the model learns
- *  immediately when it has asked for something impossible — five copies, a
- *  card the player doesn't own — and can correct itself in the same turn
- *  instead of offering the player a button that will fail. */
-async function runDeckEditProposal(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
-  args: { deck_id?: string; changes?: Array<{ name: string; to: number; reason?: string }> }
-): Promise<{ forModel: string; proposal: DeckEditProposal | null }> {
-  const deckId = (args.deck_id ?? "").trim();
-  const changes = (args.changes ?? []).filter(
-    (c) => c && typeof c.name === "string" && Number.isFinite(c.to)
-  );
-  if (!deckId || changes.length === 0) {
-    return { forModel: "No deck id or no changes given — nothing to propose.", proposal: null };
-  }
-
-  const { data: deck } = await supabase
-    .from("decks")
-    .select("id, name, cards, user_id")
-    .eq("id", deckId)
-    .maybeSingle();
-  if (!deck || deck.user_id !== userId) {
-    return { forModel: "That deck id doesn't belong to this player.", proposal: null };
-  }
-
-  const before = (deck.cards ?? []) as DeckEntry[];
-  const { cards: after, applied } = applyChanges(before, changes);
-  if (applied.length === 0) {
-    return { forModel: "The deck already matches that — no change to propose.", proposal: null };
-  }
-
-  const { data: items } = await supabase
-    .from("collection_items")
-    .select("quantity, card:cards(name)")
-    .eq("user_id", userId);
-  const ownedByName = new Map<string, number>();
-  for (const i of items ?? []) {
-    const name = (i.card as unknown as { name?: string } | null)?.name;
-    if (!name) continue;
-    const key = name.trim().toLowerCase();
-    ownedByName.set(key, (ownedByName.get(key) ?? 0) + ((i.quantity as number) ?? 0));
-  }
-
-  const check = validateEdit(after, ownedByName);
-  if (!check.ok) {
-    return {
-      forModel:
-        `That edit is not valid, so it was NOT offered to the player. Fix it and propose ` +
-        `again, or explain the problem instead: ${check.errors.join(" ")}`,
-      proposal: null,
-    };
-  }
-
-  const total = after.reduce((n, c) => n + c.quantity, 0);
-  return {
-    forModel:
-      `Proposed and shown to the player for approval — do NOT claim it is done. ` +
-      `${applied.map((a) => `${a.name} ${a.from}→${a.to}`).join(", ")}. ` +
-      `Deck would be ${total} cards.` +
-      (check.warnings.length ? ` Note: ${check.warnings.join(" ")}` : ""),
-    proposal: {
-      deckId: deck.id as string,
-      deckName: deck.name as string,
-      changes: applied,
-    },
-  };
-}
 
 /** POST { message } → { jobId } immediately; the reply continues server-side
  *  and lands in history, so a phone that locks mid-answer loses nothing.
