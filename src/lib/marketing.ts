@@ -3,6 +3,7 @@
 // lives in the components.
 
 import { BOOST_LIST, BOOSTS_NOTE } from "@/lib/boosts";
+import { FREE_DECK_LIMIT } from "@/lib/limits";
 import { CREDIT_MENU, MONTHLY_GRANT, SIGNUP_GRANT } from "@/lib/credits";
 
 // STATS / STATS_ASOF / STATS_DISCLAIMER lived here as hand-measured
@@ -38,6 +39,28 @@ export interface Tier {
 
 const f = (text: string, included = true) => ({ text, included });
 
+/** What the free plan actually stops you doing.
+ *
+ *  Every line here is a gate that EXISTS in the code — the deck cap the save
+ *  route enforces, the sharing lock the decks page shows, the one-time
+ *  credit grant. Nothing aspirational, and nothing the app in fact allows:
+ *  a limits list that overstates is as bad as a features list that does,
+ *  and it is the one people read after being stopped by something.
+ *
+ *  Scanning and grading are deliberately absent. They carry a padlock in
+ *  the nav because they are the paid pitch, but they are not blocked — they
+ *  run on whatever credits you have, and calling them unavailable would be
+ *  the false kind of honest. */
+export const FREE_LIMITS: string[] = [
+  `Save more than ${FREE_DECK_LIMIT} decks at a time`,
+  "Share a deck, or open one someone shared with you",
+  "Get more credits each month — the free grant is one-time",
+];
+
+export const FREE_LIMITS_NOTE =
+  "Everything else keeps working when your credits run out: your collection, your decks, " +
+  "price tracking and battles never stop.";
+
 export const TIERS: Tier[] = [
   {
     name: "Free",
@@ -49,11 +72,19 @@ export const TIERS: Tier[] = [
     featured: false,
     dark: false,
     features: [
-      f("Unlimited cards and decks"),
+      // Driven by the constant the API actually enforces, not restated by
+      // hand. This line read "Unlimited cards and decks" while the save gate
+      // refused the fourth one — the worst kind of pricing copy, because
+      // somebody finds out by being stopped.
+      f(`Unlimited cards · up to ${FREE_DECK_LIMIT} saved decks`),
       f("Add cards by database search"),
       f("Collection value + weekly price refresh"),
       f("Two-player battles"),
-      f("CSV export", false),
+      f("CSV export"),
+      // Sharing is a real gate — the decks page shows a lock, and the API
+      // refuses. It belongs on the list precisely because being stopped by
+      // it after signing up is how people found out.
+      f("Share decks with friends", false),
       f("Ongoing TrainerAI credits", false),
     ],
     cta: "Start free",
@@ -70,6 +101,9 @@ export const TIERS: Tier[] = [
     dark: true,
     features: [
       f("Everything in Free"),
+      // Stated outright: "Everything in Free" otherwise carries Free's deck
+      // cap with it, which is the opposite of what Pro is for.
+      f("Unlimited saved decks"),
       f("Bulk camera scanning, 20+ cards a shot"),
       f("TrainerAI deck building + coaching"),
       f("Card grading reports"),
