@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { DECK_RULES_PROMPT, checkDeck, repairDeck } from "@/lib/deckLegality";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { anthropic, MODEL } from "@/lib/anthropic";
@@ -126,11 +127,11 @@ CARD POOL:
   include whatever basic energy the deck needs even if none appear in the
   collection. Special energy cards are NOT exempt — those must be owned.
 
-DECK CONSTRUCTION RULES:
-- Exactly 60 cards. Max 4 copies of any card by name (basic energy exempt).
-- Respect evolution lines: an evolution needs its pre-evolution in the deck.
-  Use ratios like 4-3-3 or 3-2-3, or lean on Rare Candy for Stage 2 lines.
+${DECK_RULES_PROMPT}
+
 - Never include more copies than the player owns (except basic energy).
+- Use evolution ratios like 4-3-3 or 3-2-3, or lean on Rare Candy for
+  Stage 2 lines.
 
 DECK QUALITY CRAFT — apply these principles:
 - Pick a clear win condition first (usually 1 main attacker line, ideally with
@@ -746,6 +747,70 @@ export async function POST(req: Request) {
           const k = normalizeForSearch(c.name);
           ownedQtyByName.set(k, (ownedQtyByName.get(k) ?? 0) + c.qty);
         }
+        // LEGALITY, ENFORCED — not merely requested.
+        //
+        // The prompt above states the rules plainly and a build still came
+        // back with 5x Duskull, which is an illegal list and the kind of
+        // mistake nobody catches until a judge does. So the returned deck
+        // is checked and repaired in code before anyone sees it, and the
+        // repairs are told to the player rather than applied silently: the
+        // strategy text describes the deck the model wrote, and if the
+        // counts changed they deserve to know which.
+        {
+          // Rule text and subtypes, keyed by name, so the one-per-deck
+          // checks have something to read. ACE SPEC and Radiant print their
+          // own restriction on the card, and bd.rules is where we keep it.
+          const cardMetaByName = new Map<
+            string,
+            { text: string | null; rarity: string | null; subtypes: string[] | null }
+          >();
+          for (const c of collection) {
+            const key = normalizeForSearch(c.name);
+            if (cardMetaByName.has(key)) continue;
+            const subtypes = c.subtypes ?? (c.bd?.stage ? [c.bd.stage] : null);
+            cardMetaByName.set(key, {
+              text: (c.bd?.rules ?? []).join(" ") || null,
+              rarity: c.rarity,
+              subtypes,
+            });
+          }
+
+          const entries = (deck.cards ?? []).map((c) => {
+            const meta = cardMetaByName.get(normalizeForSearch(c.name));
+            return {
+              name: c.name,
+              quantity: c.quantity,
+              category: c.category,
+              card_id: c.card_id,
+              text: meta?.text ?? null,
+              rarity: meta?.rarity ?? null,
+              subtypes: meta?.subtypes ?? null,
+            };
+          });
+          const before = checkDeck(entries);
+          if (before.length > 0) {
+            const { cards: fixed, notes } = repairDeck(entries);
+            const byKey = new Map(
+              fixed.map((f) => [`${normalizeForSearch(f.name)}|${f.card_id ?? ""}`, f.quantity])
+            );
+            deck.cards = (deck.cards ?? [])
+              .map((c) => ({
+                ...c,
+                quantity: byKey.get(`${normalizeForSearch(c.name)}|${c.card_id ?? ""}`) ?? 0,
+              }))
+              .filter((c) => c.quantity > 0);
+            if (notes.length > 0) {
+              deck.strategy =
+                `${deck.strategy ?? ""}\n\n**Legality fixes applied automatically:** ${notes.join(
+                  " "
+                )}`.trim();
+            }
+            console.warn(
+              `deck build: illegal list repaired — ${before.map((v) => v.message).join(" | ")}`
+            );
+          }
+        }
+
         const deckQtyByName = new Map<string, number>();
         for (const c of deck.cards ?? []) {
           const k = normalizeForSearch(c.name);

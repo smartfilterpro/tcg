@@ -14,12 +14,124 @@ import Markdown from "@/components/Markdown";
 import { OutOfCreditsNote } from "@/components/CreditLock";
 import { useCredits } from "@/components/useCredits";
 
+interface DeckEditChange {
+  name: string;
+  from: number;
+  to: number;
+  reason?: string | null;
+}
+
+interface DeckEditProposal {
+  deckId: string;
+  deckName: string;
+  changes: DeckEditChange[];
+}
+
 interface Msg {
   id?: string;
   role: "user" | "assistant";
   content: string;
   refused?: boolean;
   pending?: boolean;
+  /** A deck change TrainerAI has proposed. Nothing is written until the
+   *  player presses Apply — it rides along with the message so it survives
+   *  a reload, which matters because the reply arrives through a job and is
+   *  often read after one. */
+  meta?: { deckEdit?: DeckEditProposal } | null;
+}
+
+/** The approval card for a proposed deck edit.
+ *
+ *  Shows the whole diff before anything happens. The model wrote the
+ *  numbers; the player decides; the server checks again on the way in. A
+ *  card removed reads as a removal rather than "→ 0", because that is what
+ *  it is. */
+function DeckEditCard({ proposal }: { proposal: DeckEditProposal }) {
+  const [state, setState] = useState<"idle" | "busy" | "done" | "declined">("idle");
+  const [note, setNote] = useState<string | null>(null);
+
+  async function apply() {
+    setState("busy");
+    setNote(null);
+    try {
+      const res = await fetch("/api/decks/apply-edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deckId: proposal.deckId, changes: proposal.changes }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        // The server re-validates, so a refusal here is real and worth
+        // reading — not a generic failure.
+        setNote([json.error, ...(json.reasons ?? [])].filter(Boolean).join(" "));
+        setState("idle");
+        return;
+      }
+      setNote(json.message ?? "Deck updated.");
+      setState("done");
+    } catch {
+      setNote("Couldn't reach the server — nothing was changed.");
+      setState("idle");
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-[12px] border border-brand-line bg-brand-sunken p-3">
+      <div className="text-[12.5px] font-semibold text-brand-ink2">
+        Change &ldquo;{proposal.deckName}&rdquo;?
+      </div>
+      <div className="mt-2 flex flex-col gap-1">
+        {proposal.changes.map((c) => (
+          <div key={c.name} className="flex items-baseline gap-2 text-[12.5px]">
+            <span
+              className={`w-4 shrink-0 text-center font-mono ${
+                c.to === 0 || c.to < c.from ? "text-brand-negative" : "text-brand-positive"
+              }`}
+            >
+              {c.to === 0 ? "✕" : c.to > c.from ? "+" : "−"}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="font-medium">{c.name}</span>{" "}
+              <span className="text-brand-ink4">
+                {c.to === 0 ? "removed" : `${c.from} → ${c.to}`}
+              </span>
+              {c.reason && (
+                <span className="block text-[11.5px] leading-snug text-brand-ink4">{c.reason}</span>
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {state === "done" ? (
+        <p className="m-0 mt-2.5 text-[12px] text-brand-positive">✓ {note}</p>
+      ) : state === "declined" ? (
+        <p className="m-0 mt-2.5 text-[12px] text-brand-ink4">Left alone.</p>
+      ) : (
+        <>
+          <div className="mt-2.5 flex gap-2">
+            <button
+              type="button"
+              className="btn-primary px-3 py-1.5 text-[12.5px]"
+              disabled={state === "busy"}
+              onClick={apply}
+            >
+              {state === "busy" ? "Applying…" : "Apply to deck"}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary px-3 py-1.5 text-[12.5px]"
+              disabled={state === "busy"}
+              onClick={() => setState("declined")}
+            >
+              No thanks
+            </button>
+          </div>
+          {note && <p className="m-0 mt-2 text-[12px] text-brand-negative">{note}</p>}
+        </>
+      )}
+    </div>
+  );
 }
 
 /** A definite verdict from the server — as opposed to a network blip,
@@ -30,7 +142,9 @@ class ChatFailed extends Error {}
  *  whole cure for the sleeping phone: every fetch here is independent, so
  *  the phone can sleep through any number of them and the first poll after
  *  waking collects the answer. */
-async function watchJob(jobId: string): Promise<{ answer: string; refused?: boolean }> {
+async function watchJob(
+  jobId: string
+): Promise<{ answer: string; refused?: boolean; pendingEdit?: DeckEditProposal | null }> {
   // Generous, and only enforced while the job still says "running" — a
   // phone asleep past the deadline whose job finished still gets the
   // answer from its first poll after waking.
@@ -42,7 +156,11 @@ async function watchJob(jobId: string): Promise<{ answer: string; refused?: bool
       const json = await res.json();
       const job = json?.job;
       if (job?.status === "done" && typeof job.result?.answer === "string") {
-        return job.result as { answer: string; refused?: boolean };
+        return job.result as {
+          answer: string;
+          refused?: boolean;
+          pendingEdit?: DeckEditProposal | null;
+        };
       }
       if (job?.status === "error" || (job?.status === "done" && !job.result?.answer)) {
         throw new ChatFailed(job.error || "The chat failed");
@@ -93,7 +211,15 @@ export default function TrainerChat() {
           setBusy(true);
           watchJob(json.job.id as string)
             .then((r) => {
-              setMsgs((m) => [...m, { role: "assistant", content: r.answer, refused: r.refused }]);
+              setMsgs((m) => [
+                ...m,
+                {
+                  role: "assistant",
+                  content: r.answer,
+                  refused: r.refused,
+                  meta: r.pendingEdit ? { deckEdit: r.pendingEdit } : null,
+                },
+              ]);
               credits.refresh();
             })
             .catch((e) => setError(e instanceof Error ? e.message : "The chat failed"))
@@ -143,7 +269,7 @@ export default function TrainerChat() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "The chat failed");
-      let reply: { answer: string; refused?: boolean };
+      let reply: { answer: string; refused?: boolean; pendingEdit?: DeckEditProposal | null };
       if (typeof json.answer === "string") {
         // The no-cost fast path (off-topic refusals) still answers inline.
         reply = json;
@@ -156,7 +282,15 @@ export default function TrainerChat() {
       } else {
         throw new Error("The chat failed");
       }
-      setMsgs((m) => [...m, { role: "assistant", content: reply.answer, refused: reply.refused }]);
+      setMsgs((m) => [
+        ...m,
+        {
+          role: "assistant",
+          content: reply.answer,
+          refused: reply.refused,
+          meta: reply.pendingEdit ? { deckEdit: reply.pendingEdit } : null,
+        },
+      ]);
       // Re-read the balance: this is the one surface someone uses repeatedly
       // in a sitting, so it's where the lock has to appear on time rather
       // than at the next page load.
@@ -292,6 +426,7 @@ export default function TrainerChat() {
                     }`}
                   >
                     <Markdown text={m.content} />
+                    {m.meta?.deckEdit && <DeckEditCard proposal={m.meta.deckEdit} />}
                   </div>
                 )
               )}
