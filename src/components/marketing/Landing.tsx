@@ -83,45 +83,49 @@ function Placeholder({ label, dark = false, className }: { label: string; dark?:
  *
  *  A browser frame with a wide, short window sat here, and a phone capture
  *  in it could only ever show a strip of a screen. The product is used on a
- *  phone, so the frame is a phone — which means a whole screen fits, at its
- *  real proportions, with nothing cropped away to make it fit a hole.
+ *  phone, so the frame is a phone.
  *
- *  The stack runs off the bottom of the band on purpose. Anchoring the tops
- *  and letting the container clip keeps the interesting half — the heading,
- *  the count, the first results — always visible, whatever height the band
- *  ends up at.
+ *  WHOLE phones, not bled off the band. An earlier pass clipped them at the
+ *  section edge, which looked like the layout had run out of room rather
+ *  than like a composition. Each frame carries its own aspect ratio and the
+ *  screenshot fills it with object-cover anchored to the top: the frame
+ *  keeps its shape at every width, and what gets cropped is the bottom of
+ *  the screen — the part below the fold on a real phone anyway.
  */
 function PhoneStack() {
   return (
-    <div className="relative mx-auto h-[330px] w-full max-w-[520px] overflow-hidden min-[720px]:h-[500px]">
+    <div className="relative mx-auto flex w-full max-w-[560px] items-center justify-end py-4">
       {/* Behind: a card's detail, tilted and mostly covered. It is there to
-          say "there is more than one screen", so it only needs an edge. */}
-      <div className="absolute -left-2 top-8 hidden w-[54%] -rotate-[7deg] overflow-hidden rounded-[26px] border-[7px] border-brand-ink bg-brand-ink shadow-[0_30px_60px_-25px_rgba(22,23,27,.45)] min-[560px]:block">
+          say "there is more than one screen", so it only needs an edge —
+          and it hides entirely on narrow screens, where two phones is
+          clutter rather than depth. */}
+      <div className="absolute bottom-[6%] left-0 hidden aspect-[9/17] w-[50%] -rotate-[8deg] overflow-hidden rounded-[30px] border-[9px] border-brand-ink bg-brand-ink shadow-[0_30px_60px_-25px_rgba(22,23,27,.45)] min-[640px]:block">
         <Image
           src="/shots/hero-card.jpg"
           alt=""
-          width={640}
-          height={1261}
-          className="block h-auto w-full"
+          fill
+          sizes="240px"
+          className="object-cover object-top"
         />
       </div>
 
       {/* In front: the scan review, upright and unobstructed — the one
           screen the headline is about. */}
-      <div className="absolute right-0 top-0 w-[76%] overflow-hidden rounded-[32px] border-[9px] border-brand-ink bg-brand-ink shadow-[0_36px_70px_-28px_rgba(22,23,27,.5)] min-[560px]:w-[68%]">
+      <div className="relative aspect-[550/935] w-full max-w-[420px] overflow-hidden rounded-[42px] border-[12px] border-brand-ink bg-brand-ink shadow-[0_40px_80px_-30px_rgba(22,23,27,.5)] min-[640px]:w-[76%]">
         <Image
           src="/shots/hero-scan.jpg"
           alt="Reviewing a scan: five cards read in fifteen seconds, each with a confidence badge, set, collector number and price."
-          width={640}
-          height={1129}
-          className="block h-auto w-full"
+          fill
+          sizes="(max-width: 640px) 90vw, 420px"
+          className="object-cover object-top"
           priority
         />
       </div>
 
       {/* The claim the screenshot backs up, said out loud. Straddles the
-          phone edge so it reads as a callout rather than part of the UI. */}
-      <span className="absolute right-[2%] top-[6%] z-10 rounded-full bg-brand-highlight px-3 py-1 font-mono text-[10.5px] font-medium tracking-[.06em] text-brand-ink shadow-sm">
+          phone's top-right corner so it reads as a callout rather than as
+          part of the UI underneath it. */}
+      <span className="absolute right-[-2%] top-[8%] z-10 rounded-full bg-brand-highlight px-3.5 py-1.5 font-mono text-[11px] font-medium tracking-[.06em] text-brand-ink shadow-md">
         5 CARDS · 15s
       </span>
     </div>
@@ -185,7 +189,7 @@ export default function Landing({
               <p className="mb-6 mt-3 max-w-[52ch] text-[11.5px] leading-snug text-brand-ink5">{statsNote}</p>
             </div>
 
-            <div className="min-w-[320px] flex-[1_1_420px] self-end">
+            <div className="min-w-[320px] flex-[1_1_420px]">
               <PhoneStack />
             </div>
           </div>
