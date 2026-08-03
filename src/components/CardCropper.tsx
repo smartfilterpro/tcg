@@ -65,9 +65,16 @@ export default function CardCropper({
 
   function pointFromEvent(e: React.PointerEvent): Point | null {
     const rect = boxRef.current?.getBoundingClientRect();
-    if (!rect || rect.width === 0) return null;
+    if (!rect || rect.width === 0 || rect.height === 0) return null;
+    // A photo with no measured size yet turns every coordinate into NaN,
+    // which then travels out through onChange into the caller's geometry
+    // and into CSS as "NaN%". Refusing to produce the point is the honest
+    // response: the drag does nothing for a frame instead of poisoning the
+    // quad.
+    if (!(photo.width > 0) || !(photo.height > 0)) return null;
     const x = ((e.clientX - rect.left) / rect.width) * photo.width;
     const y = ((e.clientY - rect.top) / rect.height) * photo.height;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
     return {
       x: Math.max(0, Math.min(photo.width, x)),
       y: Math.max(0, Math.min(photo.height, y)),
@@ -82,19 +89,38 @@ export default function CardCropper({
     onChange(next);
   }
 
+  // Percentages, with a safe value for anything that isn't a real number.
+  // These land in clip-path, and one NaN there silently voids the whole
+  // declaration — the dimming and the outline vanish with no error.
+  const safePct = (value: number, span: number) => {
+    const n = span > 0 ? (value / span) * 100 : 0;
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+  };
+
   const pct = (p: Point) => ({
-    left: `${(p.x / photo.width) * 100}%`,
-    top: `${(p.y / photo.height) * 100}%`,
+    left: `${safePct(p?.x ?? 0, photo.width)}%`,
+    top: `${safePct(p?.y ?? 0, photo.height)}%`,
   });
 
   const polygon = quad
-    .map((p) => `${(p.x / photo.width) * 100}% ${(p.y / photo.height) * 100}%`)
+    .map((p) => `${safePct(p?.x ?? 0, photo.width)}% ${safePct(p?.y ?? 0, photo.height)}%`)
     .join(", ");
+
+  // The dragged corner, read ONCE and defensively.
+  //
+  // Two places used to reach for quad[dragging] and dereference it straight
+  // away. If that index is ever momentarily absent — the parent swapping in
+  // a fresh quad, a re-detect landing mid-drag — the read throws, and a
+  // throw during render takes the entire page down with "a client-side
+  // exception has occurred". A dropped handle is a recoverable annoyance;
+  // losing the grade screen is not, so nothing here assumes the index is
+  // still good.
+  const activePoint = dragging != null ? quad[dragging] : undefined;
 
   // Keep the magnifier away from the finger: show it on the opposite side
   // of the corner being dragged.
   const loupeSide: "left" | "right" =
-    dragging != null && quad[dragging].x < photo.width / 2 ? "right" : "left";
+    activePoint && activePoint.x < photo.width / 2 ? "right" : "left";
 
   return (
     <div>
@@ -117,12 +143,21 @@ export default function CardCropper({
           return (
             <button
               key={i}
+              type="button"
               aria-label={`Move the ${CORNER_NAMES[i]} corner`}
               className="absolute flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 touch-none items-center justify-center"
               style={pct(p)}
               onPointerDown={(e) => {
                 e.preventDefault();
-                (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                // Capture keeps the drag alive when the finger leaves the
+                // 44px handle, which it always does. It throws if the
+                // element has already gone, and an exception in a pointer
+                // handler is the same page-killing crash as one in render.
+                try {
+                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                } catch {
+                  /* dragging still works, just without capture */
+                }
                 setDragging(i);
               }}
               onPointerMove={(e) => {
@@ -151,7 +186,7 @@ export default function CardCropper({
           );
         })}
 
-        {dragging != null && <Loupe photo={photo} point={quad[dragging]} side={loupeSide} />}
+        {activePoint && <Loupe photo={photo} point={activePoint} side={loupeSide} />}
       </div>
 
       <div className="mt-2.5 space-y-2">
