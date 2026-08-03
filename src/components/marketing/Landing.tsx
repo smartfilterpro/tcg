@@ -42,16 +42,22 @@ const STEPS = [
     n: "01",
     title: "Shoot the pile",
     body: "Cards flat, decent light, collector numbers visible. One photo covers a whole row.",
+    shot: "/shots/step-1-scan.jpg",
+    shotAlt: "Cards laid on a table being identified, each name ticking off as it is matched.",
   },
   {
     n: "02",
-    title: "Skim and confirm",
-    body: "Confident reads are already right. Only the flagged ones want a look.",
+    title: "Confirm and value",
+    body: "Set, collector number, rarity and market price already filled in. Only the flagged ones want a look.",
+    shot: "/shots/step-2-confirm.jpg",
+    shotAlt: "The review list: every card with its set, number, rarity, finish and price.",
   },
   {
     n: "03",
     title: "Build and play",
-    body: "Ask for a deck, get a list you can physically assemble tonight, then have it coached.",
+    body: "Ask for a deck, get a 60-card list you can physically assemble tonight, then have it coached.",
+    shot: "/shots/step-3-deck.jpg",
+    shotAlt: "A finished sixty-card deck, laid out by Pokémon and Trainer with counts on every card.",
   },
 ];
 
@@ -61,23 +67,6 @@ const FAMILY_POINTS = [
   "Trading inside the family is free and doesn't need approvals.",
   "Coaching answers in plain English, no TCG jargon required.",
 ];
-
-/** The mock's screenshot slots, kept as hatched placeholders until real
- *  captures exist — shipping someone else's screenshot or none at all are
- *  both worse. */
-function Placeholder({ label, dark = false, className }: { label: string; dark?: boolean; className?: string }) {
-  return (
-    <div
-      className={`flex flex-col items-center justify-center gap-2 p-6 text-center ${
-        dark
-          ? "border border-dark-line2 [background:repeating-linear-gradient(135deg,#22242A_0_8px,#1C1E23_8px_16px)]"
-          : "[background:repeating-linear-gradient(135deg,#F2F0EC_0_8px,#E9E6E0_8px_16px)]"
-      } ${className ?? ""}`}
-    >
-      <span className={`font-mono text-[11.5px] ${dark ? "text-dark-ink4" : "text-brand-ink4"}`}>{label}</span>
-    </div>
-  );
-}
 
 /** The hero shot: two phones, the one in front reviewing a scan.
  *
@@ -231,7 +220,15 @@ export default function Landing({
           <div className="grid grid-cols-1 gap-5 min-[720px]:grid-cols-3">
             {STEPS.map((s) => (
               <div key={s.n} className="flex flex-col gap-4">
-                <Placeholder dark label="Screenshot coming soon" className="h-[230px] rounded-2xl" />
+                <div className="relative aspect-[9/15] w-full overflow-hidden rounded-[26px] border-[8px] border-[#2A2C33] bg-[#2A2C33] shadow-[0_24px_50px_-25px_rgba(0,0,0,.7)]">
+                  <Image
+                    src={s.shot}
+                    alt={s.shotAlt}
+                    fill
+                    sizes="(max-width: 720px) 90vw, 340px"
+                    className="object-cover object-top"
+                  />
+                </div>
                 <div className="flex gap-3">
                   <span className="font-display text-[14px] font-bold text-brand-highlight">{s.n}</span>
                   <div>
