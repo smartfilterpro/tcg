@@ -35,6 +35,7 @@ import { fetchAllRows } from "@/lib/fetchAll";
 import { cleanCardName, numberKey } from "@/lib/pokemontcg";
 import { budgetState, effectiveRemaining, priceTrackerEnabled, ptFetch } from "@/lib/priceTracker";
 import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
+import { gapFill, CARD_COMPANIONS } from "@/lib/cardWrite";
 
 export const SYNC_STATE_KEY = "price_tracker_sync";
 
@@ -712,9 +713,22 @@ export async function runPriceSync(
           if (!ambiguous.has(key) && state.addsPaused == null) {
             const row = rowFromTheirs(theirs, set);
             if (row) {
+              // Nulls are stripped before the upsert.
+              //
+              // This branch adds a card we don't hold, so a conflict on the
+              // tcgp- id is unusual — but it happens when one TCGplayer id
+              // reaches us under two different name/number keys, and then
+              // ON CONFLICT assigns every column given, blanking a price or
+              // picture the earlier pass had found. Omitting the empty
+              // fields makes the second write a gap-fill instead. The same
+              // mistake in the catalogue import was erasing prices across
+              // the whole table.
+              const insertable = gapFill(row as Record<string, unknown>, {
+                companions: CARD_COMPANIONS,
+              });
               const { error: insErr } = await admin
                 .from("cards")
-                .upsert(row, { onConflict: "id" });
+                .upsert(insertable, { onConflict: "id" });
               if (!insErr) {
                 state.cardsAdded += 1;
                 // Into the index, so the same card met again this run (a

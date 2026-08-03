@@ -1351,6 +1351,7 @@ interface ImportState {
   page: number;
   written: number;
   imagesPreserved: number;
+  pricesPreserved?: number;
   totalCount: number | null;
   updatedAt: string;
   finishedAt: string | null;
@@ -1438,6 +1439,8 @@ function CardImportPanel() {
           {state.totalCount ? ` of ${state.totalCount.toLocaleString()}` : ""}
           {pct != null && ` (${pct}%)`}
           {state.imagesPreserved > 0 && ` · ${state.imagesPreserved} kept their own artwork`}
+          {(state.pricesPreserved ?? 0) > 0 &&
+            ` · ${state.pricesPreserved} kept a price the source didn't carry`}
           {done ? " · finished" : ` · next page ${state.page}`}
           {state.updatedAt && ` · ${new Date(state.updatedAt).toLocaleString()}`}
         </div>

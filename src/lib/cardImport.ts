@@ -16,6 +16,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { searchAllCardsPage } from "@/lib/pokemontcg";
 import { summaryToRow } from "@/lib/types";
+import { emptyColumns, CARD_COMPANIONS } from "@/lib/cardWrite";
 
 export const IMPORT_STATE_KEY = "card_import";
 
@@ -48,6 +49,10 @@ export interface CardImportState {
   written: number;
   /** Rows whose artwork was deliberately left alone. */
   imagesPreserved: number;
+  /** Rows whose price was deliberately left alone, because the incoming
+   *  record had none. Optional: states written before this existed have no
+   *  such field, and a missing count must not read as zero preserved. */
+  pricesPreserved?: number;
   totalCount: number | null;
   startedAt: string;
   updatedAt: string;
@@ -62,6 +67,7 @@ export function freshImportState(): CardImportState {
     page: 1,
     written: 0,
     imagesPreserved: 0,
+    pricesPreserved: 0,
     totalCount: null,
     startedAt: now,
     updatedAt: now,
@@ -251,26 +257,46 @@ async function importOnePage(
       .map((r) => r.id)
   );
 
-  // Two upserts, because a single call can't vary its columns per row. The
-  // second omits the image columns entirely; PostgREST's ON CONFLICT only
-  // assigns the columns it was given, so the existing artwork is untouched.
+  // Upserted in groups, because a single call can't vary its columns per row
+  // and PostgREST's ON CONFLICT only assigns the columns it was given.
+  // Whatever a group omits survives untouched on the existing row.
   //
-  // A card the API has no picture for also goes in the second group. Writing
-  // its null over whatever we hold can only ever lose something — and cards
-  // missing from the database are exactly the ones somebody has bothered to
-  // photograph or find an image for by hand.
+  // What gets omitted is decided by emptyColumns, which knows the one rule
+  // that matters here: a source with no value for a field is saying it
+  // doesn't know, not that the field is empty. This function had that
+  // reasoning written out for artwork and never applied it to price, and the
+  // result was a continuously-running loop quietly blanking prices across the
+  // whole table. Shared now, so the next column added to the row gets the
+  // same protection without anyone having to remember it.
+  //
+  // Artwork is force-omitted on top of that: a member's photo or a curated
+  // image must survive even when the source DOES carry a picture.
   const keepsImage = (r: (typeof rows)[number]) => protectedIds.has(r.id) || r.image_small == null;
-  const plain = rows.filter((r) => !keepsImage(r));
-  const keepImages = rows
-    .filter(keepsImage)
-    .map(({ image_small: _s, image_large: _l, ...rest }) => rest);
 
-  if (plain.length > 0) {
-    const { error } = await admin.from("cards").upsert(plain, { onConflict: "id" });
-    if (error) throw error;
+  const groups = new Map<string, Array<Record<string, unknown>>>();
+  let imagesKept = 0;
+  let pricesKept = 0;
+  for (const row of rows) {
+    const omit = emptyColumns(row as unknown as Record<string, unknown>, {
+      companions: CARD_COMPANIONS,
+      force: keepsImage(row) ? ["image_small", "image_large"] : [],
+    });
+    if (omit.includes("image_small")) imagesKept += 1;
+    if (omit.includes("market_price")) pricesKept += 1;
+
+    const drop = new Set(omit);
+    const key = [...drop].sort().join(",");
+    const trimmed = Object.fromEntries(
+      Object.entries(row).filter(([k]) => !drop.has(k))
+    );
+    const list = groups.get(key);
+    if (list) list.push(trimmed);
+    else groups.set(key, [trimmed]);
   }
-  if (keepImages.length > 0) {
-    const { error } = await admin.from("cards").upsert(keepImages, { onConflict: "id" });
+
+  for (const batch of groups.values()) {
+    if (batch.length === 0) continue;
+    const { error } = await admin.from("cards").upsert(batch, { onConflict: "id" });
     if (error) throw error;
   }
 
@@ -288,7 +314,8 @@ async function importOnePage(
   }
 
   state.written += rows.length;
-  state.imagesPreserved += keepImages.length;
+  state.imagesPreserved += imagesKept;
+  state.pricesPreserved = (state.pricesPreserved ?? 0) + pricesKept;
   state.page += 1;
 
   const seen = (state.page - 1) * IMPORT_PAGE_SIZE;

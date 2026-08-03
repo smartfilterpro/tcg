@@ -114,7 +114,17 @@ export interface MirrorBatchResult {
  *  unbounded amount of work. Timeouts, resets and 5xx are NOT permanent —
  *  treating those as fatal would discard good cards on a bad afternoon. */
 function isPermanentFailure(reason: string): boolean {
-  return /HTTP (?:400|401|403|404|410|451)\b/.test(reason) || /not an image/.test(reason);
+  // 401 and 403 used to be in this list and are not any more.
+  //
+  // The consequence of "permanent" is that the card's art URL is eventually
+  // erased, so the bar has to be "the file is gone", not "we were refused".
+  // A CDN answers 403 for hotlink protection and for rate limiting — both
+  // temporary, both about us rather than the file — and treating that as
+  // proof of deletion threw away a working URL because we asked too often.
+  // 404/410 are the file being gone, 451 is it being legally removed, 400 is
+  // a URL that cannot be requested at all, and a non-image response means
+  // there is no picture at the other end whatever the status says.
+  return /HTTP (?:400|404|410|451)\b/.test(reason) || /not an image/.test(reason);
 }
 
 async function fetchImage(url: string): Promise<{ buffer: Buffer; contentType: string }> {
@@ -271,11 +281,33 @@ export async function mirrorCard(
       isPermanentFailure(firstFailure) &&
       row.image_locked !== true
     ) {
-      await admin
+      // The dead URL is KEPT, in the source_image_* columns that already
+      // exist to remember where a mirrored picture came from.
+      //
+      // Clearing image_small without recording what was there destroys the
+      // only evidence of which artwork this card is supposed to have — and
+      // "the source said 404" is a judgement made by this code from three
+      // fetches, not a fact. Writing it aside costs one column and makes the
+      // decision reversible; the restore path at revertMirror already reads
+      // exactly these columns.
+      const { error } = await admin
         .from("cards")
-        .update({ image_small: null, image_large: null })
-        .eq("id", row.id)
-        .then(() => {});
+        .update({
+          image_small: null,
+          image_large: null,
+          source_image_small: row.image_small,
+          source_image_large: row.image_large,
+        })
+        .eq("id", row.id);
+      if (error) {
+        // Older database without the source_ columns: still clear the dead
+        // URL, since a broken picture is the thing members actually see.
+        await admin
+          .from("cards")
+          .update({ image_small: null, image_large: null })
+          .eq("id", row.id)
+          .then(() => {});
+      }
     }
     return { ok: false, reason: firstFailure ?? "nothing to mirror" };
   }
