@@ -58,6 +58,9 @@ export default function CollectionPage({
   // they get different tabs rather than one blended list. Sealed lives in
   // its own tables and never reaches anything card-shaped.
   const [tab, setTab] = useState<"cards" | "sealed">("cards");
+  // What the sealed side is worth, so the Cards tab can answer "what is the
+  // whole collection worth?" without making anyone add two numbers up.
+  const [sealedValue, setSealedValue] = useState<number | null>(null);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
 
   /** Re-fetch one card's price and picture on demand.
@@ -178,6 +181,29 @@ export default function CollectionPage({
       setError(err instanceof Error ? err.message : "Failed to load collection");
     }
   }
+
+  // Sealed totals, read once. Its own request rather than folded into the
+  // collection response: the two are separate tables on purpose, and a
+  // member with no sealed product should not pay for a join that answers
+  // zero. Silent on failure — a missing grand total is a smaller problem
+  // than an error banner over a collection that loaded fine.
+  useEffect(() => {
+    let live = true;
+    fetch("/api/sealed")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!live || !j?.items) return;
+        const value = (j.items as Array<{ quantity: number; price_override: number | null; product?: { market_price?: number | null } | null }>).reduce(
+          (sum, i) => sum + ((i.price_override ?? i.product?.market_price ?? 0) || 0) * i.quantity,
+          0
+        );
+        setSealedValue(value);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     load();
@@ -503,7 +529,10 @@ export default function CollectionPage({
     return (
       <div>
         {tabs}
-        <SealedTab />
+        {/* The card value is handed down rather than re-fetched: this page
+            already has it, and the sealed tab asking for 3,500 collection
+            rows to print one number would be absurd. */}
+        <SealedTab cardValue={totals.value} />
       </div>
     );
   }
@@ -576,6 +605,28 @@ export default function CollectionPage({
               </span>
             )}
           </p>
+          {/* The grand total, on its own line and only when there IS sealed
+              product to add. The headline number stays the CARD value —
+              "what are my cards worth?" must keep meaning that — and this
+              answers the separate question underneath rather than quietly
+              changing what the first number counts. */}
+          {sealedValue != null && sealedValue > 0 && (
+            <p className="mt-0.5 text-sm text-slate-500">
+              plus{" "}
+              <span className="font-semibold text-brand-positive">
+                ~${sealedValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>{" "}
+              sealed ·{" "}
+              <span className="font-bold text-brand-positive">
+                ~$
+                {(totals.value + sealedValue).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}{" "}
+                total collection
+              </span>
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <button className="btn-secondary" onClick={refreshPrices} disabled={refreshing}>

@@ -18,7 +18,7 @@ import {
  *  The total is shown separately from the card total for the same reason.
  *  Mixing them would answer "what are my cards worth?" with a number that
  *  includes four sealed boxes, and that is a different question. */
-export default function SealedTab() {
+export default function SealedTab({ cardValue }: { cardValue?: number }) {
   const [items, setItems] = useState<SealedItem[] | null>(null);
   const [migrated, setMigrated] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -170,6 +170,18 @@ export default function SealedTab() {
                   {" "}
                   ({items.length - priced} without a value)
                 </span>
+              )}
+              {/* The same grand total the Cards tab shows, so the number
+                  does not depend on which tab you happen to be looking at. */}
+              {cardValue != null && cardValue > 0 && (
+                <div className="mt-0.5 text-slate-500">
+                  plus ${cardValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                  in cards ·{" "}
+                  <b className="text-green-700">
+                    ${(total + cardValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                    total collection
+                  </b>
+                </div>
               )}
             </>
           )}
