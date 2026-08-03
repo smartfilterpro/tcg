@@ -48,6 +48,10 @@ export interface CardImportState {
   written: number;
   /** Rows whose artwork was deliberately left alone. */
   imagesPreserved: number;
+  /** Rows whose price was deliberately left alone, because the incoming
+   *  record had none. Optional: states written before this existed have no
+   *  such field, and a missing count must not read as zero preserved. */
+  pricesPreserved?: number;
   totalCount: number | null;
   startedAt: string;
   updatedAt: string;
@@ -62,6 +66,7 @@ export function freshImportState(): CardImportState {
     page: 1,
     written: 0,
     imagesPreserved: 0,
+    pricesPreserved: 0,
     totalCount: null,
     startedAt: now,
     updatedAt: now,
@@ -251,26 +256,60 @@ async function importOnePage(
       .map((r) => r.id)
   );
 
-  // Two upserts, because a single call can't vary its columns per row. The
-  // second omits the image columns entirely; PostgREST's ON CONFLICT only
-  // assigns the columns it was given, so the existing artwork is untouched.
+  // Upserted in groups, because a single call can't vary its columns per row
+  // and PostgREST's ON CONFLICT only assigns the columns it was given.
+  // Whatever a group omits survives untouched on the existing row.
   //
-  // A card the API has no picture for also goes in the second group. Writing
-  // its null over whatever we hold can only ever lose something — and cards
-  // missing from the database are exactly the ones somebody has bothered to
-  // photograph or find an image for by hand.
+  // A card the API has no picture for keeps the one we hold. Writing its null
+  // over ours can only ever lose something — and cards the database is thin
+  // on are exactly the ones somebody has bothered to photograph or find an
+  // image for by hand.
+  //
+  // THE SAME IS TRUE OF PRICE, and it wasn't being done.
+  //
+  // pokemontcg.io carries no TCGplayer price for a great many cards, so
+  // summaryToRow hands back market_price: null and prices: null for them.
+  // Upserting that wrote NULL over prices the paid sync, the per-card refresh
+  // and the nightly job had already found — and stamped price_updated_at as
+  // if the card had just been priced, which sank it to the back of the
+  // refresh queue. The import loop walks the whole catalogue continuously, so
+  // it was stripping prices faster than the refresh could restore them and
+  // the collection's "no price yet" count climbed on its own overnight.
+  //
+  // A price map of all-nulls counts as no price: {"normal": null} carries no
+  // more information than null itself, and overwriting a real map with it
+  // loses the same data by a different route.
+  const hasPrice = (r: (typeof rows)[number]) =>
+    r.market_price != null ||
+    (r.prices != null && Object.values(r.prices).some((v) => v != null));
   const keepsImage = (r: (typeof rows)[number]) => protectedIds.has(r.id) || r.image_small == null;
-  const plain = rows.filter((r) => !keepsImage(r));
-  const keepImages = rows
-    .filter(keepsImage)
-    .map(({ image_small: _s, image_large: _l, ...rest }) => rest);
 
-  if (plain.length > 0) {
-    const { error } = await admin.from("cards").upsert(plain, { onConflict: "id" });
-    if (error) throw error;
+  type Row = (typeof rows)[number];
+  const groups = new Map<string, Array<Record<string, unknown>>>();
+  let imagesKept = 0;
+  let pricesKept = 0;
+  for (const row of rows) {
+    const omit: string[] = [];
+    if (keepsImage(row)) {
+      omit.push("image_small", "image_large");
+      imagesKept += 1;
+    }
+    if (!hasPrice(row)) pricesKept += 1;
+    // price_updated_at goes with the price. Stamping "checked just now" while
+    // writing no price is the lie that pushed these cards down the queue.
+    if (!hasPrice(row)) omit.push("market_price", "prices", "price_updated_at");
+
+    const key = omit.join(",");
+    const trimmed: Record<string, unknown> = { ...row };
+    for (const col of omit) delete trimmed[col as keyof Row];
+    const list = groups.get(key);
+    if (list) list.push(trimmed);
+    else groups.set(key, [trimmed]);
   }
-  if (keepImages.length > 0) {
-    const { error } = await admin.from("cards").upsert(keepImages, { onConflict: "id" });
+
+  for (const batch of groups.values()) {
+    if (batch.length === 0) continue;
+    const { error } = await admin.from("cards").upsert(batch, { onConflict: "id" });
     if (error) throw error;
   }
 
@@ -288,7 +327,8 @@ async function importOnePage(
   }
 
   state.written += rows.length;
-  state.imagesPreserved += keepImages.length;
+  state.imagesPreserved += imagesKept;
+  state.pricesPreserved = (state.pricesPreserved ?? 0) + pricesKept;
   state.page += 1;
 
   const seen = (state.page - 1) * IMPORT_PAGE_SIZE;

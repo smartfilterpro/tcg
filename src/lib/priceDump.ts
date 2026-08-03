@@ -243,7 +243,19 @@ export async function applyCardDump(
   if (opts.dryRun) return { matched, updated: 0, notes: [...notes, "Dry run: nothing written."] };
 
   let updated = 0;
-  const updates = [...ours.entries()].map(([tcgId, cardId]) => ({
+  // Rows carrying no usable price are dropped rather than written.
+  //
+  // A dump row whose every printing failed to parse leaves market null and
+  // the map empty, and writing that would blank a price another source had
+  // already found — the same way the catalogue import used to. A price
+  // update that removes a price is not an update.
+  const priced = [...ours.entries()].filter(([tcgId]) => {
+    const e = byCard.get(tcgId)!;
+    return e.market != null || Object.keys(e.prices).length > 0;
+  });
+  const skipped = ours.size - priced.length;
+  if (skipped > 0) notes.push(`${skipped.toLocaleString()} had no usable price and were left alone.`);
+  const updates = priced.map(([tcgId, cardId]) => ({
     id: cardId,
     market_price: byCard.get(tcgId)!.market,
     prices: byCard.get(tcgId)!.prices,

@@ -130,9 +130,24 @@ export async function refreshStalePrices(
   }
   const cards = cardChunks.flat();
 
-  // Stalest first; never-priced cards lead.
+  // Cards with NO price lead, then stalest first.
+  //
+  // This used to sort on price_updated_at alone, on the assumption that a
+  // never-priced card carries a null stamp and therefore sorts first. That
+  // assumption held only while nothing else wrote the column. The catalogue
+  // import stamped it on every card it touched, priced or not, so a card it
+  // had just blanked looked freshly checked and sank to the back of a queue
+  // 400 long — the one card guaranteed to be showing the owner nothing.
+  //
+  // Sorting on the price itself can't be undermined that way: it asks the
+  // question that actually matters instead of a proxy for it.
   const queue = (cards ?? [])
-    .sort((a, b) => (a.price_updated_at ?? "").localeCompare(b.price_updated_at ?? ""))
+    .sort((a, b) => {
+      const aBlank = a.market_price == null ? 0 : 1;
+      const bBlank = b.market_price == null ? 0 : 1;
+      if (aBlank !== bBlank) return aBlank - bBlank;
+      return (a.price_updated_at ?? "").localeCompare(b.price_updated_at ?? "");
+    })
     .slice(0, limit);
 
   // PokeTrace usage budget per run: with the free plan's 1-req/2s pacing,
