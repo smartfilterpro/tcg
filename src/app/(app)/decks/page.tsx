@@ -13,6 +13,7 @@ import { CreditLock } from "@/components/CreditLock";
 import { useCredits } from "@/components/useCredits";
 import { FREE_DECK_LIMIT } from "@/lib/limits";
 import DeckEditCard, { type DeckEditProposal } from "@/components/DeckEditCard";
+import { resilientFetch } from "@/lib/clientLoop";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -506,23 +507,121 @@ function CoachBox({
   const [answer, setAnswer] = useState<string | null>(null);
   const [edit, setEdit] = useState<DeckEditProposal | null>(null);
   const [asking, setAsking] = useState(false);
+  const [waited, setWaited] = useState(0);
+
+  /** Read one JSON body, saying what happened when it isn't JSON.
+   *
+   *  A route that times out or crashes at the gateway replies with an HTML
+   *  error page, and res.json() throws on the first '<'. That used to come
+   *  back as "Something went wrong — try again", which is no use to the
+   *  person reading it and no use to whoever has to fix it. */
+  async function readJson<T>(res: Response): Promise<{ json: T | null; failure: string | null }> {
+    const body = await res.text();
+    try {
+      return { json: JSON.parse(body) as T, failure: null };
+    } catch {
+      return {
+        json: null,
+        failure:
+          res.status === 504 || res.status === 502
+            ? `The connection gave up waiting (HTTP ${res.status}).`
+            : `The server answered with something unreadable (HTTP ${res.status}).`,
+      };
+    }
+  }
 
   async function ask() {
     if (!question.trim() || asking) return;
     setAsking(true);
     setAnswer(null);
     setEdit(null);
+    setWaited(0);
+    const startedAt = Date.now();
     try {
-      const res = await fetch("/api/decks/coach", {
+      // Starting the answer and collecting it are two separate requests.
+      //
+      // A question that ends in a proposed deck edit is two sequential model
+      // calls on top of a collection read, and the browser is the one
+      // participant guaranteed to leave — a locked phone kills the fetch and
+      // the gateway gives up before the work does. So the POST only starts
+      // the job and returns; the answer is polled for. Lock the screen
+      // mid-answer now and it is waiting when you come back.
+      const res = await resilientFetch("/api/decks/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ deck, question, deckId: deckId ?? null }),
       });
-      const json = await res.json();
-      setAnswer(res.ok ? json.answer : json.error || "Something went wrong");
-      if (res.ok && json.edit) setEdit(json.edit as DeckEditProposal);
-    } catch {
-      setAnswer("Something went wrong — try again.");
+      const { json, failure } = await readJson<{
+        jobId?: string;
+        answer?: string;
+        edit?: DeckEditProposal | null;
+        error?: string;
+      }>(res);
+      if (!json) {
+        setAnswer(`${failure} Try again — if it keeps happening, this is worth reporting.`);
+        return;
+      }
+      if (!res.ok) {
+        setAnswer(json.error || `The request failed (HTTP ${res.status}).`);
+        return;
+      }
+
+      // Answered inline: migration 049 hasn't run, so the route did the work
+      // in the request. Still a valid answer, just a fragile delivery.
+      if (!json.jobId) {
+        setAnswer(json.answer ?? "No answer came back.");
+        if (json.edit) setEdit(json.edit);
+        return;
+      }
+
+      // Poll. resilientFetch waits for the tab to come back rather than
+      // treating a sleeping phone as a failure.
+      const jobId = json.jobId;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500));
+        setWaited(Math.round((Date.now() - startedAt) / 1000));
+        const poll = await resilientFetch(`/api/decks/coach?job=${encodeURIComponent(jobId)}`);
+        const { json: state, failure: pollFailure } = await readJson<{
+          job?: {
+            status: "running" | "done" | "error";
+            result?: { answer?: string; edit?: DeckEditProposal | null } | null;
+            error?: string | null;
+          } | null;
+          error?: string;
+        }>(poll);
+        if (!state) {
+          setAnswer(`${pollFailure} The answer may still be running — ask again in a moment.`);
+          return;
+        }
+        if (state.error) {
+          setAnswer(state.error);
+          return;
+        }
+        const job = state.job;
+        // A job that vanished is not a job still running. Saying so beats
+        // polling an id nothing will ever answer for.
+        if (!job) {
+          setAnswer("That answer went missing before it finished — ask again.");
+          return;
+        }
+        if (job.status === "error") {
+          setAnswer(job.error || "The coach failed.");
+          return;
+        }
+        if (job.status === "done") {
+          setAnswer(job.result?.answer ?? "No answer came back.");
+          if (job.result?.edit) setEdit(job.result.edit);
+          return;
+        }
+      }
+    } catch (err) {
+      // resilientFetch gives up only after several attempts across a wake-up,
+      // so reaching here means the connection is genuinely gone.
+      setAnswer(
+        `Couldn't reach the server — ${
+          err instanceof Error ? err.message : "the connection dropped"
+        }. Nothing was changed.`
+      );
     } finally {
       setAsking(false);
     }
@@ -555,8 +654,20 @@ function CoachBox({
         )}
       </div>
       {asking && (
-        <p className="mt-2 animate-pulse text-xs text-slate-400">
-          {AI_NAME} is thinking about your deck…
+        <p className="mt-2 text-xs text-slate-400">
+          <span className="animate-pulse">{AI_NAME} is thinking about your deck…</span>
+          {/* The elapsed count and the reassurance appear only once the wait
+              is long enough to worry about. A question that answers in eight
+              seconds doesn't need to be told it's safe to leave. */}
+          {waited >= 12 && (
+            <>
+              {" "}
+              <span className="text-slate-400">
+                ({waited}s — this one&apos;s taking a while. You can lock your phone; the answer
+                carries on without you.)
+              </span>
+            </>
+          )}
         </p>
       )}
       {answer && (

@@ -4,6 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import type { DeckCardEntry } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { legalityBriefing } from "@/lib/deckLegality";
@@ -12,7 +13,13 @@ import { DECK_EDIT_TOOL, runDeckEditProposal } from "@/lib/deckEditTool";
 import type { DeckEditProposal } from "@/lib/deckEdit";
 import type Anthropic from "@anthropic-ai/sdk";
 
-export const maxDuration = 120;
+// Raised from 120 when the tool loop landed. A question that ends in a
+// proposed edit is no longer one model call — it is the proposal, then the
+// reply that explains it, each of which can spend real time reasoning. Two
+// sequential calls plus a collection read was running past two minutes and
+// the gateway was closing the connection, which reaches the player as an
+// unreadable non-JSON response rather than as an error.
+export const maxDuration = 300;
 
 /** Enough rounds for the model to propose, be told the edit was invalid,
  *  and correct itself. Each round is a billed model call, so not more. */
@@ -57,177 +64,316 @@ retype it by hand. You are NOT writing to the deck: the player sees your
 proposed change and approves it. So propose readily, but never say the deck
 has been changed. Say you have offered the change for them to approve.`;
 
+interface CoachRequest {
+  deck: { name?: string; strategy?: string | null; cards?: DeckCardEntry[] };
+  question: string;
+  /** Present only for a SAVED deck. The freshly-built deck on screen has no
+   *  row yet, so there is nothing to edit until it is saved. */
+  deckId?: string | null;
+}
+
+export interface CoachResult {
+  answer: string;
+  edit: DeckEditProposal | null;
+}
+
+/** The whole answer, start to finish.
+ *
+ *  Lifted out of the request handler so it can be run DETACHED. Everything
+ *  here — reading the collection, up to three model rounds, validating a
+ *  proposed edit — used to happen inside a fetch the browser was awaiting,
+ *  and the browser is the one participant guaranteed to leave: a locked
+ *  phone kills the request, and the gateway gives up before the work does.
+ *  The model still finished, the credit was still spent, and the player got
+ *  "Something went wrong". */
+async function runCoach(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  body: CoachRequest
+): Promise<CoachResult> {
+  const { deck, question, deckId } = body;
+
+  // What the player owns, aggregated by name.
+  //
+  // The coach used to be handed the deck and nothing else, so it answered
+  // every "what should I change?" from general knowledge of the game and
+  // named cards the player had never bought. Worse, once it could PROPOSE
+  // edits, a suggestion drawn from thin air fails validation at the apply
+  // step — the player approves a change and is told they don't own it.
+  // Finishes are folded together: a deck list does not care whether a
+  // Nest Ball is reverse holo.
+  const { data: items } = await fetchAllRows(() =>
+    supabase
+      .from("collection_items")
+      .select("quantity, card:cards(name)")
+      .eq("user_id", userId)
+      .order("id")
+  );
+  const owned = new Map<string, number>();
+  for (const it of (items ?? []) as unknown as Array<{
+    quantity: number;
+    card: { name: string } | null;
+  }>) {
+    if (!it.card) continue;
+    owned.set(it.card.name, (owned.get(it.card.name) ?? 0) + it.quantity);
+  }
+  const collectionList = [...owned.entries()]
+    .map(([n, q]) => `${q}x ${n}`)
+    .slice(0, 800)
+    .join("\n");
+
+  const client = anthropic();
+  // "What's wrong with this deck?" is the question that kept coming back
+  // empty: the model was spending its entire budget counting sixty cards
+  // against the copy limit before it wrote anything. So the app counts
+  // first and hands over the answer — cheaper, exact, and it leaves the
+  // budget for the coaching.
+  const briefing = legalityBriefing(
+    (deck.cards ?? []).map((c) => ({
+      name: c.name,
+      quantity: c.quantity,
+      category: c.category,
+    }))
+  );
+
+  // Only a saved deck can be edited, so only a saved deck gets the tool.
+  const savedId = (deckId ?? "").trim();
+  const canEdit = savedId.length > 0;
+
+  const messages: Anthropic.MessageParam[] = [
+    {
+      role: "user",
+      // Lines, not JSON. A 60-card deck as JSON repeats "name",
+      // "quantity", "category", "card_id" and "reason" on every entry —
+      // 57% of this payload was field names and punctuation.
+      content:
+        `THE PLAYER'S DECK — "${deck.name ?? "Untitled"}"` +
+        (canEdit ? ` (deck_id: ${savedId})` : " (not saved yet — it cannot be edited)") +
+        `\n` +
+        (deck.strategy ? `Their notes: ${deck.strategy}\n` : "") +
+        `Cards, one per line, as: qty name [category] — why it's in the deck\n` +
+        (deck.cards ?? [])
+          .map(
+            (c) =>
+              `${c.quantity}x ${c.name} [${c.category}]` +
+              (c.reason ? ` — ${c.reason}` : "")
+          )
+          .join("\n") +
+        `\n\n${briefing}` +
+        `\n\nTHE PLAYER'S FULL COLLECTION (every card they own, by name):\n` +
+        (collectionList || "(nothing scanned yet)") +
+        `\n\nPLAYER'S QUESTION: ${question.trim()}`,
+    },
+  ];
+
+  let response!: Anthropic.Message;
+  // A change the model proposed this turn, carried out with the reply so
+  // the player can approve it. Nothing has been written.
+  let pendingEdit: DeckEditProposal | null = null;
+  // Timed, because the failure this route actually produces is a timeout,
+  // and a timeout leaves NO log of its own — the process is killed
+  // mid-await and the catch below never runs. A line per round is the only
+  // way to see how close to the limit a question came.
+  const startedAt = Date.now();
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    // Thinking tokens and the visible answer share max_tokens. The cap is
+    // a ceiling, not a bill — a generous one costs nothing on the
+    // questions that answer in three lines, and rescues the ones that
+    // don't.
+    response = await completeWithRoom(
+      client,
+      {
+        model: MODEL,
+        max_tokens: 16000,
+        system: canEdit ? SYSTEM + CAN_EDIT : SYSTEM,
+        ...(canEdit ? { tools: [DECK_EDIT_TOOL] } : {}),
+        // The last permitted round takes the tool away, so the model
+        // answers with words instead of ending the turn on a proposal
+        // nothing will ever run.
+        ...(canEdit && round === MAX_TOOL_ROUNDS - 1
+          ? { tool_choice: { type: "none" as const } }
+          : {}),
+        messages,
+      },
+      // Every attempt is logged, including a retry — it cost what it cost.
+      (r) => logAiUsage(supabase, userId, "coach", MODEL, r.usage)
+    );
+    console.log(
+      `coach: round ${round + 1} done at ${Math.round((Date.now() - startedAt) / 1000)}s ` +
+        `(stop: ${response.stop_reason}, out: ${response.usage?.output_tokens ?? "?"} tokens)`
+    );
+    if (response.stop_reason !== "tool_use") break;
+
+    messages.push({ role: "assistant", content: response.content });
+    const results: Anthropic.ToolResultBlockParam[] = [];
+    for (const b of response.content) {
+      if (b.type !== "tool_use") continue;
+      const args = (b.input ?? {}) as {
+        deck_id?: string;
+        changes?: Array<{ name: string; to: number; reason?: string }>;
+      };
+      // The deck on screen is the only one this box may touch. The model
+      // is handed that id and has no reason to send another, but the id
+      // arrives through a browser and an edit aimed at a DIFFERENT saved
+      // deck would be applied out of sight of the player approving it.
+      const proposal = await runDeckEditProposal(supabase, userId, {
+        ...args,
+        deck_id: savedId,
+      });
+      // Only ONE per turn: two pending edits to the same deck would apply
+      // in whatever order they were tapped, and the second would be
+      // validated against a deck the first had already changed.
+      if (proposal.proposal && !pendingEdit) pendingEdit = proposal.proposal;
+      results.push({ type: "tool_result", tool_use_id: b.id, content: proposal.forModel });
+    }
+    // An assistant turn that stopped on tool_use always carries a tool_use
+    // block, so this should be unreachable — but a user turn with an empty
+    // content array is a 400 from the API, which would surface as a broken
+    // chat rather than as the impossible thing it is.
+    if (results.length === 0) break;
+    messages.push({ role: "user", content: results });
+  }
+
+  if (response.stop_reason === "refusal") {
+    return {
+      answer: "I can only help with Pokémon TCG decks — try a question about this deck!",
+      edit: null,
+    };
+  }
+  const text = answerText(response);
+  return {
+    answer:
+      text ||
+      "I thought about that one too long and ran out of room — try asking again, maybe a bit more specifically!",
+    edit: pendingEdit,
+  };
+}
+
+/* ------------------------------------------------------------------ route */
+
+const JOBS_MIGRATION_MSG =
+  "The deck coach needs a one-time database update — run supabase/migrations/049_deck_coach_jobs.sql.";
+
+function isMissingJobsTable(message: string): boolean {
+  return (
+    /deck_coach_jobs/.test(message) &&
+    /(does not exist|not find|schema cache)/i.test(message)
+  );
+}
+
+/** GET ?job=<id> — how that answer is getting on.
+ *
+ *  Read with the caller's own client, so RLS decides whose job this is
+ *  rather than a user_id filter we have to remember to write. */
+export async function GET(req: Request) {
+  try {
+    await requireUser();
+    const jobId = new URL(req.url).searchParams.get("job");
+    if (!jobId) return NextResponse.json({ error: "No job id." }, { status: 400 });
+
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("deck_coach_jobs")
+      .select("id, deck_id, status, result, error, created_at")
+      .eq("id", jobId)
+      .maybeSingle();
+    if (error) {
+      return NextResponse.json(
+        { error: isMissingJobsTable(error.message) ? JOBS_MIGRATION_MSG : error.message },
+        { status: 500 }
+      );
+    }
+    // A job the caller can't see reads as absent, which is the right answer:
+    // "not yours" and "not there" should be indistinguishable from outside.
+    return NextResponse.json({ job: data ?? null });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const { user, profile } = await requireUser();
-    const { deck, question, deckId } = (await req.json()) as {
-      deck?: { name?: string; strategy?: string | null; cards?: DeckCardEntry[] };
-      question?: string;
-      /** Present only for a SAVED deck. The freshly-built deck on screen has
-       *  no row yet, so there is nothing to edit until it is saved. */
-      deckId?: string | null;
-    };
-    if (!question?.trim() || question.length > 2000) {
+    const raw = (await req.json().catch(() => ({}))) as Partial<CoachRequest>;
+    const question = (raw.question ?? "").trim();
+    const deck = raw.deck;
+
+    if (!question || question.length > 2000) {
       return NextResponse.json({ error: "Ask a question (max 2000 chars)." }, { status: 400 });
     }
     if (!deck?.cards || deck.cards.length === 0) {
       return NextResponse.json({ error: "No deck provided." }, { status: 400 });
     }
 
-    const supabase = await createClient();
     const budget = await checkCredits(user, profile);
     if (!budget.ok) {
       return NextResponse.json({ error: budget.message }, { status: 429 });
     }
 
-    // What the player owns, aggregated by name.
-    //
-    // The coach used to be handed the deck and nothing else, so it answered
-    // every "what should I change?" from general knowledge of the game and
-    // named cards the player had never bought. Worse, once it could PROPOSE
-    // edits, a suggestion drawn from thin air fails validation at the apply
-    // step — the player approves a change and is told they don't own it.
-    // Finishes are folded together: a deck list does not care whether a
-    // Nest Ball is reverse holo.
-    const { data: items } = await fetchAllRows(() =>
-      supabase
-        .from("collection_items")
-        .select("quantity, card:cards(name)")
-        .eq("user_id", user.id)
-        .order("id")
-    );
-    const owned = new Map<string, number>();
-    for (const it of (items ?? []) as unknown as Array<{
-      quantity: number;
-      card: { name: string } | null;
-    }>) {
-      if (!it.card) continue;
-      owned.set(it.card.name, (owned.get(it.card.name) ?? 0) + it.quantity);
-    }
-    const collectionList = [...owned.entries()]
-      .map(([n, q]) => `${q}x ${n}`)
-      .slice(0, 800)
-      .join("\n");
+    const supabase = await createClient();
+    const body: CoachRequest = { deck, question, deckId: raw.deckId ?? null };
+    const deckId = (raw.deckId ?? "").trim() || null;
 
-    const client = anthropic();
-    // "What's wrong with this deck?" is the question that kept coming back
-    // empty: the model was spending its entire budget counting sixty cards
-    // against the copy limit before it wrote anything. So the app counts
-    // first and hands over the answer — cheaper, exact, and it leaves the
-    // budget for the coaching.
-    const briefing = legalityBriefing(
-      (deck.cards ?? []).map((c) => ({
-        name: c.name,
-        quantity: c.quantity,
-        category: c.category,
-      }))
-    );
+    // Service role for the job row. The RLS policy lets a member READ their
+    // own jobs and write none: a client that could insert its own job could
+    // write a result containing a deck edit and then approve it, which is
+    // precisely what the propose/approve split exists to prevent.
+    const admin = createAdminClient();
+    const { data: job, error: jobErr } = await admin
+      .from("deck_coach_jobs")
+      .insert({ user_id: user.id, deck_id: deckId, status: "running" })
+      .select("id")
+      .single();
 
-    // Only a saved deck can be edited, so only a saved deck gets the tool.
-    const savedId = (deckId ?? "").trim();
-    const canEdit = savedId.length > 0;
-
-    const messages: Anthropic.MessageParam[] = [
-      {
-        role: "user",
-        // Lines, not JSON. A 60-card deck as JSON repeats "name",
-        // "quantity", "category", "card_id" and "reason" on every entry —
-        // 57% of this payload was field names and punctuation.
-        content:
-          `THE PLAYER'S DECK — "${deck.name ?? "Untitled"}"` +
-          (canEdit ? ` (deck_id: ${savedId})` : " (not saved yet — it cannot be edited)") +
-          `\n` +
-          (deck.strategy ? `Their notes: ${deck.strategy}\n` : "") +
-          `Cards, one per line, as: qty name [category] — why it's in the deck\n` +
-          (deck.cards ?? [])
-            .map(
-              (c) =>
-                `${c.quantity}x ${c.name} [${c.category}]` +
-                (c.reason ? ` — ${c.reason}` : "")
-            )
-            .join("\n") +
-          `\n\n${briefing}` +
-          `\n\nTHE PLAYER'S FULL COLLECTION (every card they own, by name):\n` +
-          (collectionList || "(nothing scanned yet)") +
-          `\n\nPLAYER'S QUESTION: ${question.trim()}`,
-      },
-    ];
-
-    let response!: Anthropic.Message;
-    // A change the model proposed this turn, carried out with the reply so
-    // the player can approve it. Nothing has been written.
-    let pendingEdit: DeckEditProposal | null = null;
-
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      // Thinking tokens and the visible answer share max_tokens. The cap is
-      // a ceiling, not a bill — a generous one costs nothing on the
-      // questions that answer in three lines, and rescues the ones that
-      // don't.
-      response = await completeWithRoom(
-        client,
-        {
-          model: MODEL,
-          max_tokens: 16000,
-          system: canEdit ? SYSTEM + CAN_EDIT : SYSTEM,
-          ...(canEdit ? { tools: [DECK_EDIT_TOOL] } : {}),
-          // The last permitted round takes the tool away, so the model
-          // answers with words instead of ending the turn on a proposal
-          // nothing will ever run.
-          ...(canEdit && round === MAX_TOOL_ROUNDS - 1
-            ? { tool_choice: { type: "none" as const } }
-            : {}),
-          messages,
-        },
-        // Every attempt is logged, including a retry — it cost what it cost.
-        (r) => logAiUsage(supabase, user.id, "coach", MODEL, r.usage)
-      );
-      if (response.stop_reason !== "tool_use") break;
-
-      messages.push({ role: "assistant", content: response.content });
-      const results: Anthropic.ToolResultBlockParam[] = [];
-      for (const b of response.content) {
-        if (b.type !== "tool_use") continue;
-        const args = (b.input ?? {}) as {
-          deck_id?: string;
-          changes?: Array<{ name: string; to: number; reason?: string }>;
-        };
-        // The deck on screen is the only one this box may touch. The model
-        // is handed that id and has no reason to send another, but the id
-        // arrives through a browser and an edit aimed at a DIFFERENT saved
-        // deck would be applied out of sight of the player approving it.
-        const proposal = await runDeckEditProposal(supabase, user.id, {
-          ...args,
-          deck_id: savedId,
-        });
-        // Only ONE per turn: two pending edits to the same deck would apply
-        // in whatever order they were tapped, and the second would be
-        // validated against a deck the first had already changed.
-        if (proposal.proposal && !pendingEdit) pendingEdit = proposal.proposal;
-        results.push({ type: "tool_result", tool_use_id: b.id, content: proposal.forModel });
+    if (jobErr || !job) {
+      // Migration 049 hasn't run yet. Answer INLINE rather than refusing.
+      //
+      // The background job is an improvement to how the answer is delivered,
+      // not a new feature, and breaking the coach outright until somebody
+      // runs a migration would be a worse failure than the one being fixed.
+      // The old timeout risk comes back with it — which is exactly what the
+      // migration removes, so the message says so.
+      if (isMissingJobsTable(jobErr?.message ?? "")) {
+        console.warn("coach: running inline —", JOBS_MIGRATION_MSG);
+        const result = await runCoach(supabase, user.id, body);
+        return NextResponse.json({ ...result, migrated: false, note: JOBS_MIGRATION_MSG });
       }
-      messages.push({ role: "user", content: results });
+      return NextResponse.json({ error: "Couldn't start the coach." }, { status: 500 });
     }
 
-    if (response.stop_reason === "refusal") {
-      return NextResponse.json(
-        { answer: "I can only help with Pokémon TCG decks — try a question about this deck!" }
-      );
-    }
-    const text = answerText(response);
-    return NextResponse.json({
-      answer:
-        text ||
-        "I thought about that one too long and ran out of room — try asking again, maybe a bit more specifically!",
-      edit: pendingEdit,
-    });
+    const jobId = job.id as string;
+    const finish = (patch: Record<string, unknown>) =>
+      admin
+        .from("deck_coach_jobs")
+        .update({ ...patch, updated_at: new Date().toISOString() })
+        .eq("id", jobId);
+
+    // Detached on purpose: the response goes back now, and the work outlives
+    // the request that started it.
+    void runCoach(supabase, user.id, body)
+      .then((result) => finish({ status: "done", result }))
+      .catch((err) => {
+        console.error("coach job failed", err);
+        return finish({
+          status: "error",
+          error: err instanceof Error ? err.message : "The coach failed",
+        });
+      });
+
+    return NextResponse.json({ jobId, migrated: true });
   } catch (err) {
-    if (err instanceof AuthError) {
-      return NextResponse.json({ error: err.message }, { status: err.status });
-    }
-    console.error("coach error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Coach failed" },
-      { status: 500 }
-    );
+    return errorResponse(err);
   }
+}
+
+function errorResponse(err: unknown) {
+  if (err instanceof AuthError) {
+    return NextResponse.json({ error: err.message }, { status: err.status });
+  }
+  console.error("coach error", err);
+  return NextResponse.json(
+    { error: err instanceof Error ? err.message : "Coach failed" },
+    { status: 500 }
+  );
 }
