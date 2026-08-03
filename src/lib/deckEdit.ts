@@ -40,6 +40,10 @@ export interface DeckEditProposal {
   deckId: string;
   deckName: string;
   changes: DeckEditChange[];
+  /** Cards the resulting deck lists more of than the collection holds. Shown
+   *  with the proposal so approving it is an informed choice — never a
+   *  reason to withhold the proposal. */
+  missing?: MissingCopies[];
 }
 
 export interface AppliedChange extends DeckEditChange {
@@ -113,14 +117,26 @@ export interface EditValidation {
   warnings: string[];
 }
 
-/** Would this edit produce a deck the player can legally play, from cards
- *  the player actually owns?
+/** Would this edit produce a deck that breaks the RULES of the game?
  *
  *  Deliberately REFUSES rather than repairing. The builder repairs, because
  *  there the model wrote a whole deck and the player never saw the illegal
  *  version. Here the player is approving a specific, itemised change: fixing
  *  it silently would mean applying something other than what they agreed to.
- */
+ *
+ *  Not owning the cards is NOT a reason to refuse.
+ *
+ *  It used to be, and that was a misreading of what a saved deck is for.
+ *  These are records of decks somebody built, liked, or wants to try — a
+ *  place to come back to and learn from. Nobody has every saved deck sleeved
+ *  up at once, and a list is not a claim to have one physically assembled.
+ *  Blocking an edit because the shelf doesn't currently hold four Night
+ *  Stretcher turns a reference library into an inventory system nobody asked
+ *  for.
+ *
+ *  So a shortfall is REPORTED and never blocks. The player still finds out
+ *  what they'd need to sleeve the deck up — which is the useful half of the
+ *  old behaviour, and the only half worth keeping. */
 export function validateEdit(
   cards: DeckEntry[],
   ownedByName: Map<string, number>
@@ -137,24 +153,44 @@ export function validateEdit(
     else errors.push(violation.message);
   }
 
-  // Owned copies. Basic energy is exempt by the same app rule the builder
-  // uses: players rarely scan energy, so the app assumes an endless supply.
-  const wanted = new Map<string, number>();
-  for (const c of cards) {
-    const key = c.name.trim().toLowerCase();
-    wanted.set(key, (wanted.get(key) ?? 0) + c.quantity);
-  }
-  for (const [key, need] of wanted) {
-    if (isBasicEnergy(key)) continue;
-    const owned = ownedByName.get(key) ?? 0;
-    if (owned < need) {
-      errors.push(
-        `The deck would need ${need} ${titleCase(key)} but you own ${owned}.`
-      );
-    }
+  for (const short of missingCopies(cards, ownedByName)) {
+    warnings.push(
+      `You own ${short.owned} of the ${short.need} ${short.name} this deck lists` +
+        ` — saved either way, you'd need ${short.need - short.owned} more to sleeve it up.`
+    );
   }
 
   return { ok: errors.length === 0, errors, warnings };
+}
+
+export interface MissingCopies {
+  name: string;
+  need: number;
+  owned: number;
+}
+
+/** Cards the deck lists more of than the collection holds.
+ *
+ *  Basic energy is exempt by the same app rule the builder uses: people
+ *  rarely scan energy, so the app assumes an endless supply of it. */
+export function missingCopies(
+  cards: DeckEntry[],
+  ownedByName: Map<string, number>
+): MissingCopies[] {
+  const wanted = new Map<string, { need: number; name: string }>();
+  for (const c of cards) {
+    const key = c.name.trim().toLowerCase();
+    const seen = wanted.get(key);
+    if (seen) seen.need += c.quantity;
+    else wanted.set(key, { need: c.quantity, name: c.name.trim() });
+  }
+  const out: MissingCopies[] = [];
+  for (const [key, { need, name }] of wanted) {
+    if (isBasicEnergy(key)) continue;
+    const owned = ownedByName.get(key) ?? 0;
+    if (owned < need) out.push({ name: name || titleCase(key), need, owned });
+  }
+  return out;
 }
 
 function titleCase(s: string): string {

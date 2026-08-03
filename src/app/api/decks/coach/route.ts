@@ -255,6 +255,13 @@ async function runCoach(
 const JOBS_MIGRATION_MSG =
   "The deck coach needs a one-time database update — run supabase/migrations/049_deck_coach_jobs.sql.";
 
+/** How long a job may sit at 'running' before it is treated as dead.
+ *
+ *  Comfortably past the slowest real answer (three model rounds), because
+ *  calling a live job dead is worse than waiting a little longer for a dead
+ *  one. */
+const STALE_JOB_MS = 6 * 60 * 1000;
+
 function isMissingJobsTable(message: string): boolean {
   return (
     /deck_coach_jobs/.test(message) &&
@@ -286,6 +293,25 @@ export async function GET(req: Request) {
     }
     // A job the caller can't see reads as absent, which is the right answer:
     // "not yours" and "not there" should be indistinguishable from outside.
+    //
+    // A job still marked running long after it started is not running. The
+    // work lives in a detached promise inside a server process, so a deploy,
+    // a crash or a restart mid-answer leaves the row at 'running' with
+    // nothing left alive to finish it — and a client polling that row waits
+    // for ever. Nothing can revive it, so the honest answer is that it died.
+    if (data && data.status === "running") {
+      const startedAt = Date.parse(data.created_at as string);
+      if (Number.isFinite(startedAt) && Date.now() - startedAt > STALE_JOB_MS) {
+        return NextResponse.json({
+          job: {
+            ...data,
+            status: "error",
+            error:
+              "That answer was interrupted before it finished — most likely the server restarted. Ask again.",
+          },
+        });
+      }
+    }
     return NextResponse.json({ job: data ?? null });
   } catch (err) {
     return errorResponse(err);

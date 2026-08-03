@@ -15,10 +15,16 @@ export const maxDuration = 60;
  *  a message; a human presses Apply; this validates and writes.
  *
  *  Everything is re-checked here even though the proposal was approved.
- *  Approval means "I want this change", not "I have verified it is legal
- *  and that I own the cards" — and the proposal arrived through a browser,
- *  so it is input like any other. Trusting it because a model authored it
- *  would be trusting the least accountable party in the exchange.
+ *  Approval means "I want this change", not "I have verified it is legal" —
+ *  and the proposal arrived through a browser, so it is input like any
+ *  other. Trusting it because a model authored it would be trusting the
+ *  least accountable party in the exchange.
+ *
+ *  What is checked is the RULES OF THE GAME, and not whether the collection
+ *  currently holds the cards. A saved deck is a record of a deck somebody
+ *  built or wants to try, kept so they can come back to it — nobody has
+ *  every saved deck sleeved up at once. Owning too few is reported and
+ *  saved anyway.
  */
 export async function POST(req: Request) {
   try {
@@ -84,7 +90,7 @@ export async function POST(req: Request) {
     if (!check.ok) {
       return NextResponse.json(
         {
-          error: "That change would leave the deck unplayable, so nothing was saved.",
+          error: "That change would break a deck-building rule, so nothing was saved.",
           reasons: check.errors,
         },
         { status: 400 }
