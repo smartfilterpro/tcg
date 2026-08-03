@@ -712,9 +712,26 @@ export async function runPriceSync(
           if (!ambiguous.has(key) && state.addsPaused == null) {
             const row = rowFromTheirs(theirs, set);
             if (row) {
+              // Nulls are stripped before the upsert.
+              //
+              // This branch adds a card we don't hold, so a conflict on the
+              // tcgp- id is unusual — but it happens when one TCGplayer id
+              // reaches us under two different name/number keys, and then
+              // ON CONFLICT assigns every column given, blanking a price or
+              // picture the earlier pass had found. Omitting the empty
+              // fields makes the second write a gap-fill instead. The same
+              // mistake in the catalogue import was erasing prices across
+              // the whole table.
+              // The NOT NULL columns are never stripped — an insert missing
+              // one fails outright rather than gap-filling, and a null there
+              // is a bug worth seeing rather than hiding.
+              const required = new Set(["id", "name", "number", "set_id", "set_name"]);
+              const insertable = Object.fromEntries(
+                Object.entries(row).filter(([k, v]) => v != null || required.has(k))
+              );
               const { error: insErr } = await admin
                 .from("cards")
-                .upsert(row, { onConflict: "id" });
+                .upsert(insertable, { onConflict: "id" });
               if (!insErr) {
                 state.cardsAdded += 1;
                 // Into the index, so the same card met again this run (a
