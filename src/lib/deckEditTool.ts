@@ -12,7 +12,12 @@
 // writes. Nothing here touches the database.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { applyChanges, validateEdit, type DeckEditProposal } from "@/lib/deckEdit";
+import {
+  applyChanges,
+  validateEdit,
+  missingCopies,
+  type DeckEditProposal,
+} from "@/lib/deckEdit";
 import type { DeckEntry } from "@/lib/deckLegality";
 import { fetchAllRows } from "@/lib/fetchAll";
 
@@ -23,9 +28,13 @@ export const DECK_EDIT_TOOL = {
     "the change and approves it before anything is saved — you are never " +
     "writing directly, so propose freely when they ask you to change, fix " +
     "or improve a deck. Give FINAL quantities, not differences: to go from " +
-    "2 to 3 copies, send to=3. Send to=0 to remove a card. Only name cards " +
-    "the player owns (basic energy excepted) and keep the result legal: 60 " +
-    "cards, at most 4 of a name, at most 1 ACE SPEC.",
+    "2 to 3 copies, send to=3. Send to=0 to remove a card. Keep the result " +
+    "LEGAL: 60 cards, at most 4 of a name, at most 1 ACE SPEC — those are " +
+    "the only grounds on which a proposal is refused. Prefer cards the " +
+    "player owns, but a saved deck is a RECORD of a deck they like rather " +
+    "than a claim to have it sleeved up, so proposing a card they don't own " +
+    "yet is fine as long as you say so. A card is never unavailable because " +
+    "another of their decks lists it; decks don't reserve anything.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -114,39 +123,44 @@ export async function runDeckEditProposal(
 
   const check = validateEdit(after, ownedByName);
   if (!check.ok) {
-    // The reason is stated, and so is the reason it ISN'T.
-    //
-    // Told only "you own 0", the model reached for an explanation and
-    // invented one — that copies in the player's other decks were being held
-    // back — then told the player so with some confidence. Nothing in this
-    // app reserves cards: a deck is a list of names, building one takes
-    // nothing out of the collection, and the same card may appear in every
-    // deck at once. Ruling that out here is cheaper than letting a plausible
-    // story about the player's own data reach them as fact.
+    // Only the rules of the game get here now. Not owning the cards does
+    // not, and the model is told so explicitly — because when it was told
+    // only "you own 0" it reached for an explanation, invented one (that
+    // copies in the player's other decks were being held back), and passed
+    // it on as fact. Nothing in this app reserves cards.
     return {
       forModel:
-        `That edit is not valid, so it was NOT offered to the player. Fix it and propose ` +
-        `again, or explain the problem instead: ${check.errors.join(" ")}\n` +
-        `FOR YOUR EXPLANATION: these counts are the player's WHOLE collection. Decks do ` +
-        `not reserve or consume cards — a card in five other decks is still fully ` +
-        `available here — so never tell the player a card is unavailable because another ` +
-        `deck uses it. If a count looks wrong to you, say the count looks wrong; do not ` +
-        `invent a rule to explain it.`,
+        `That edit breaks a rule of the game, so it was NOT offered to the player. Fix ` +
+        `it and propose again, or explain the problem instead: ${check.errors.join(" ")}`,
       proposal: null,
     };
   }
 
   const total = after.reduce((n, c) => n + c.quantity, 0);
+  const short = missingCopies(after, ownedByName);
   return {
     forModel:
       `Proposed and shown to the player for approval — do NOT claim it is done. ` +
       `${applied.map((a) => `${a.name} ${a.from}→${a.to}`).join(", ")}. ` +
       `Deck would be ${total} cards.` +
-      (check.warnings.length ? ` Note: ${check.warnings.join(" ")}` : ""),
+      (check.warnings.length ? ` Note: ${check.warnings.join(" ")}` : "") +
+      // Said every time, because this is the fact the model got wrong when
+      // left to work it out: a saved deck is a record, not an inventory
+      // claim, and nothing here consumes a collection.
+      `\nON OWNERSHIP: saved decks are records of decks the player likes — they do not ` +
+      `all exist physically at once, and a card is never unavailable because another ` +
+      `deck lists it. You may freely propose cards the player doesn't own yet; just say ` +
+      `so plainly.` +
+      (short.length
+        ? ` They currently own fewer than this deck lists of: ${short
+            .map((s) => `${s.name} (${s.owned}/${s.need})`)
+            .join(", ")}.`
+        : ""),
     proposal: {
       deckId: deck.id as string,
       deckName: deck.name as string,
       changes: applied,
+      missing: short,
     },
   };
 }

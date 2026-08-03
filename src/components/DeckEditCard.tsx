@@ -9,10 +9,18 @@ export interface DeckEditChange {
   reason?: string | null;
 }
 
+export interface MissingCopies {
+  name: string;
+  need: number;
+  owned: number;
+}
+
 export interface DeckEditProposal {
   deckId: string;
   deckName: string;
   changes: DeckEditChange[];
+  /** Cards the resulting deck lists more of than the collection holds. */
+  missing?: MissingCopies[];
 }
 
 /** The approval card for a proposed deck edit.
@@ -91,6 +99,24 @@ export default function DeckEditCard({
           </div>
         ))}
       </div>
+
+      {/* Told, not blocked.
+          A saved deck is a record of a deck you like, not a claim to have it
+          sleeved up — so a shortfall never stops the edit. It is still worth
+          knowing before you tap Apply, because it is the difference between a
+          deck you can play tonight and a shopping list. */}
+      {proposal.missing && proposal.missing.length > 0 && (
+        <p className="m-0 mt-2 text-[11.5px] leading-snug text-brand-ink4">
+          You&apos;d need more copies to build this for real:{" "}
+          {proposal.missing.map((m, i) => (
+            <span key={m.name}>
+              {i > 0 ? ", " : ""}
+              <span className="font-medium">{m.name}</span> {m.owned}/{m.need}
+            </span>
+          ))}
+          . Saving it is fine either way.
+        </p>
+      )}
 
       {state === "done" ? (
         <p className="m-0 mt-2.5 text-[12px] text-brand-positive">✓ {note}</p>
