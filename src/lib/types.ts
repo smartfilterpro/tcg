@@ -22,6 +22,13 @@ export interface CardSummary {
   /** Per-finish USD prices from TCGplayer, e.g. { normal, holofoil, reverseHolofoil }.
    *  The keys double as the list of finishes that exist for this card. */
   prices: Record<string, number | null> | null;
+  /** Attacks, abilities, rules text, weakness, resistance, retreat and
+   *  format legality — everything about how the card PLAYS.
+   *
+   *  Optional because not every source carries it and not every caller
+   *  builds one. Present means keep it; absent means this source had none,
+   *  never that the card has none. */
+  battleData?: unknown;
 }
 
 /** What Claude vision extracts from a photo for each card it sees. */
@@ -93,6 +100,8 @@ export interface CardSummaryRow {
   market_price: number | null;
   prices: Record<string, number | null> | null;
   price_updated_at: string | null;
+  /** How the card plays. Only after migration 019. */
+  battle_data?: unknown;
 }
 
 // ===== Variant (finish) helpers =====
@@ -373,5 +382,9 @@ export function summaryToRow(c: CardSummary): Omit<CardSummaryRow, "price_update
     market_price: c.marketPrice,
     prices: c.prices,
     price_updated_at: new Date().toISOString(),
+    // Kept whenever the source supplied it. Stripped again by gapFill when
+    // it is null, so a source with no text can never blank text another
+    // source found.
+    ...(c.battleData ? { battle_data: c.battleData } : {}),
   };
 }

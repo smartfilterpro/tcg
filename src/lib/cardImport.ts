@@ -297,7 +297,21 @@ async function importOnePage(
   for (const batch of groups.values()) {
     if (batch.length === 0) continue;
     const { error } = await admin.from("cards").upsert(batch, { onConflict: "id" });
-    if (error) throw error;
+    if (!error) continue;
+    // battle_data only exists after migration 019, and the import now writes
+    // it — so on a database without that column the whole page would fail
+    // over a field that is a bonus. Drop it and write everything else: the
+    // card's name and price matter more than its attacks, and the migration
+    // can be run whenever.
+    if (/battle_data/.test(error.message)) {
+      const withoutText = batch.map(({ battle_data: _drop, ...rest }) => rest);
+      const { error: retryErr } = await admin
+        .from("cards")
+        .upsert(withoutText, { onConflict: "id" });
+      if (retryErr) throw retryErr;
+      continue;
+    }
+    throw error;
   }
 
   // Fold any tcgp- twins of this page's cards into the real rows.

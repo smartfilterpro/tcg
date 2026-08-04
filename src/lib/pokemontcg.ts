@@ -258,6 +258,18 @@ export function toSummary(card: RawCard): CardSummary {
     imageLarge: card.images?.large ?? null,
     marketPrice: extractPrice(card),
     prices: extractPriceMap(card),
+    // WHAT THE CARD DOES, kept from the same response that carried its name.
+    //
+    // This was dropped. Every card record from this API already contains its
+    // attacks, abilities, rules text, weakness, resistance, retreat cost and
+    // format legality, and toBattleData below has always known how to read
+    // them — but only getBattleDataById called it, one card at a time. So the
+    // bulk import walked twenty thousand full records, kept six fields from
+    // each, and threw the text away; then the nightly warmer re-fetched the
+    // same cards individually, thirty a night, to recover what the import had
+    // already been handed. Years of that to cover a catalogue one sweep could
+    // have filled.
+    battleData: toBattleData(card),
   };
 }
 
