@@ -211,7 +211,24 @@ export async function GET(req: Request) {
         // Set with no card named: ask for the set itself, generously. This
         // is somebody about to enter a bundle card by card, so a short page
         // is the wrong shape of answer.
+        //
+        // Exact phrase first. The loose form — every word as its own prefix
+        // term — only runs if the phrase found nothing, because a term like
+        // "or*" is close to matching everything and a set listing full of
+        // unrelated cards is worse than a short one.
         cards = await safeSearch({ setName: parsed.setName, pageSize: 250 });
+        if (cards.length === 0) {
+          cards = await safeSearch({
+            setName: parsed.setName,
+            looseSetName: true,
+            pageSize: 250,
+          });
+          // Whatever the engine did with those terms, the answer has to
+          // actually be from a set the person named. Checked here rather
+          // than trusted, since the loose query is the one that can wander.
+          const wanted = parsed.setName.trim().toLowerCase();
+          cards = cards.filter((c) => (c.setName ?? "").toLowerCase().includes(wanted));
+        }
       } else {
         cards = await safeSearch({ ...parsed, pageSize: 30 });
       }
