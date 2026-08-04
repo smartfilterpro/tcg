@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import type Anthropic from "@anthropic-ai/sdk";
 import { anthropic, MODEL } from "@/lib/anthropic";
+import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
+import { getTcgdexBattleDataById } from "@/lib/tcgdex";
+import { readCardTextOnce } from "@/lib/cardText";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
@@ -104,9 +107,14 @@ const CARD_LOOKUP_TOOL = {
   description:
     "Search the app's full Pokémon card catalogue (every card the app knows, " +
     "not just the player's collection). Use for set checklists, card rarity, " +
-    "collector numbers, prices, and whether a card exists. The catalogue may " +
-    "be incompletely imported: an empty result means the database doesn't " +
-    "list the card yet, NOT that the card doesn't exist.",
+    "collector numbers, prices, WHAT A CARD DOES — its attacks, abilities, " +
+    "rules text, weakness, resistance and retreat — and whether a card " +
+    "exists at all. Printed text comes back when the search narrows to a " +
+    "handful of cards, so name the card rather than the whole set when you " +
+    "need to know how it plays. NEVER describe a card's attacks from memory: " +
+    "look it up, and if the text isn't on file say so. The catalogue may be " +
+    "incompletely imported: an empty result means the database doesn't list " +
+    "the card yet, NOT that the card doesn't exist.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -237,14 +245,18 @@ async function runSetCompletion(
 
 async function runCardLookup(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  input: { name?: string; set_name?: string }
+  input: { name?: string; set_name?: string },
+  /** Whose credits a vision read is billed to. */
+  userId: string | null = null
 ): Promise<string> {
   const name = (input.name ?? "").trim();
   const set = (input.set_name ?? "").trim();
   if (!name && !set) return "Provide a card name, a set name, or both.";
   let q = supabase
     .from("cards")
-    .select("name, number, set_name, rarity, supertype, market_price", { count: "exact" });
+    // select("*") — battle_data only exists after migration 019, and naming
+    // it would fail the whole lookup on a database without it.
+    .select("*", { count: "exact" });
   if (name) q = q.ilike("name", `%${name}%`);
   if (set) q = q.ilike("set_name", `%${set}%`);
   const { data, count, error } = await q.order("set_name").order("number").limit(50);
@@ -256,20 +268,111 @@ async function runCardLookup(
       "that the card doesn't exist."
     );
   }
-  const lines = data.map((c) =>
-    [
-      c.name,
-      `#${c.number}`,
-      c.set_name ?? "unknown set",
-      c.rarity ?? "",
-      c.supertype ?? "",
-      c.market_price != null ? `$${c.market_price}` : "",
+
+  // WHAT THE CARD DOES, not just what it is called.
+  //
+  // This returned a name, a number, a rarity and a price, so the assistant
+  // answered "I can't tell you what Mega Darkrai ex's attacks do — I'd be
+  // guessing", which was honest and unnecessary: the app HAS the text. It
+  // sits in cards.battle_data, warmed by the nightly refresh, and the
+  // battle referee has been reading it all along. The lookup simply never
+  // asked for it.
+  //
+  // Fetched on demand for the few cards the warmer hasn't reached — free,
+  // from the card's own database — and written back, so the next question
+  // about that card is instant. Only for a SHORT result list: a fifty-card
+  // answer is a browse, and fifty round trips to fill in text nobody asked
+  // about would turn one question into a minute of waiting.
+  const rows = data as Array<Record<string, unknown>>;
+  const detailed = rows.length <= 6;
+  // Vision reads are the most expensive thing this tool can do, and they are
+  // permanent — the result is written back, so the cost is once per card
+  // rather than once per question. Two per lookup keeps a broad question
+  // from turning into a bill.
+  const MAX_VISION_READS = 2;
+  let visionReads = 0;
+  if (detailed) {
+    for (const row of rows) {
+      if (!("battle_data" in row) || row.battle_data != null) continue;
+      const id = row.id as string;
+      if (id.startsWith("custom-")) continue;
+      try {
+        // Free sources first, then the card's own picture.
+        //
+        // Neither free database catalogues everything — promo bundles and
+        // brand-new sets arrive with a name, a price and a photograph and
+        // nothing about what the card does. For those the picture IS the
+        // source, and transcribing it is not the same kind of act as
+        // recalling a card from training data: it is reading what is
+        // printed, from the image a person would read it from.
+        let bd = id.startsWith("tcgdex-")
+          ? await getTcgdexBattleDataById(id)
+          : await getBattleDataById(id);
+
+        if (!bd && visionReads < MAX_VISION_READS) {
+          visionReads += 1;
+          // Reads once and remembers the outcome — including a failure, so
+          // an unreadable card is not re-read and re-charged on every
+          // question about it. Writes battle_data itself on success.
+          bd = await readCardTextOnce(
+            createAdminClient(),
+            row as unknown as Parameters<typeof readCardTextOnce>[1],
+            userId
+          );
+          if (bd) row.battle_data = bd;
+        } else if (bd) {
+          row.battle_data = bd;
+          await createAdminClient().from("cards").update({ battle_data: bd }).eq("id", id);
+        }
+      } catch {
+        // The card still answers with everything else it knows.
+      }
+    }
+  }
+
+  const describe = (row: Record<string, unknown>): string => {
+    const head = [
+      row.name as string,
+      `#${row.number}`,
+      (row.set_name as string) ?? "unknown set",
+      (row.rarity as string) ?? "",
+      (row.supertype as string) ?? "",
+      row.hp ? `HP ${row.hp}` : "",
+      row.market_price != null ? `$${row.market_price}` : "",
     ]
       .filter(Boolean)
-      .join(" | ")
+      .join(" | ");
+    const bd = row.battle_data as CardBattleData | null | undefined;
+    if (!detailed || !bd) return head;
+
+    const parts: string[] = [];
+    for (const a of bd.abilities ?? []) {
+      parts.push(`    Ability — ${a.name}: ${a.text}`);
+    }
+    for (const a of bd.attacks ?? []) {
+      const cost = a.cost?.length ? `[${a.cost.join("")}] ` : "";
+      const dmg = a.damage ? ` ${a.damage}` : "";
+      parts.push(`    ${cost}${a.name}${dmg}${a.text ? ` — ${a.text}` : ""}`);
+    }
+    for (const r of bd.rules ?? []) parts.push(`    ${r}`);
+    if (bd.weak) parts.push(`    Weakness: ${bd.weak.type} ${bd.weak.value}`);
+    if (bd.resist) parts.push(`    Resistance: ${bd.resist.type} ${bd.resist.value}`);
+    if (bd.retreat != null) parts.push(`    Retreat: ${bd.retreat}`);
+    return parts.length ? `${head}\n${parts.join("\n")}` : head;
+  };
+
+  const lines = rows.map(describe);
+  const total = count ?? rows.length;
+  const noText =
+    detailed && rows.some((r) => "battle_data" in r && r.battle_data == null)
+      ? "\n\nSome of these have no printed text on file yet — say so rather than " +
+        "describing what they do from memory."
+      : "";
+  return (
+    `${total} match${total === 1 ? "" : "es"}${total > 50 ? " (first 50 shown)" : ""}` +
+    (detailed ? " (with printed text where the app has it)" : " (names only — narrow the search for attack text)") +
+    `:\n${lines.join("\n")}${noText}`
   );
-  const total = count ?? data.length;
-  return `${total} match${total === 1 ? "" : "es"}${total > 50 ? " (first 50 shown)" : ""}:\n${lines.join("\n")}`;
 }
 
 /** The model call, detached from the request that started it. Saves both
@@ -374,7 +477,7 @@ async function runChat(opts: {
       }
       const lookup =
         b.name === "search_card_database"
-          ? await runCardLookup(supabase, args)
+          ? await runCardLookup(supabase, args, userId)
           : b.name === "set_completion"
             ? await runSetCompletion(supabase, userId, args)
             : `Unknown tool: ${b.name}`;
