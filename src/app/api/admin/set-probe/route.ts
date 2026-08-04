@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { setNameClause } from "@/lib/pokemontcg";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { priceTrackerEnabled, effectiveRemaining } from "@/lib/priceTracker";
+import { readSyncState, trackerSetCards } from "@/lib/priceTrackerSync";
 
 export const maxDuration = 120;
 
@@ -184,6 +187,40 @@ export async function GET(req: Request) {
       dexError = err instanceof Error ? err.message : "failed";
     }
 
+    // 7b. The PAID source, which for a promo bundle is usually the ONLY
+    //     source. Everything above can be a flat zero and the set still be
+    //     perfectly well catalogued — at TCGplayer, behind the key.
+    //
+    //     Two halves, deliberately. The free half always runs: is the key
+    //     set, how many credits are left today, and does their stored set
+    //     list contain a set by this name. That answers "would we even ask?"
+    //     for nothing. The billed half — actually fetching the cards, 200
+    //     credits a set — runs only with &paid=1, because a diagnostic that
+    //     quietly spends a fifth of the day's allowance every time it is
+    //     opened is its own bug.
+    const paidWanted = url.searchParams.get("paid") === "1";
+    const admin = createAdminClient();
+    const paid: Record<string, unknown> = {
+      configured: priceTrackerEnabled(),
+      creditsRemaining: effectiveRemaining(),
+      fetched: false,
+    };
+    if (priceTrackerEnabled()) {
+      const state = await readSyncState(admin);
+      const known = state?.sets ?? [];
+      const wanted = setName.toLowerCase();
+      const matching = known.filter((s) => s.name.toLowerCase().includes(wanted));
+      paid.knownSets = known.length;
+      paid.matchingSets = matching.slice(0, 8);
+      if (paidWanted) {
+        const got = await trackerSetCards(admin, setName);
+        paid.fetched = true;
+        paid.count = got.cards.length;
+        paid.log = got.log;
+        paid.sample = got.cards.slice(0, 40).map((r) => `${r.number} ${r.name} [${r.set_name}]`);
+      }
+    }
+
     // 8. And what WE hold, so "upstream has it" can be told apart from "we
     //    imported it".
     const supabase = await createClient();
@@ -221,6 +258,27 @@ export async function GET(req: Request) {
         `${card} exists upstream but not under this set name — so either it isn't in this set, or the set is named differently there.`
       );
     }
+    // The reading that matters for a promo bundle: both free databases at
+    // zero means the listing is only ever as complete as the paid source was
+    // allowed to be, and the paid source stops at 300 credits.
+    const freeSourcesBlank = (exact.count ?? 0) === 0 && dexSets.length === 0;
+    if (freeSourcesBlank && !priceTrackerEnabled()) {
+      notes.push(
+        `Neither free database has this set and the paid source has no key configured, so this set can only ever list the ${ours.length} cards already in our catalogue.`
+      );
+    } else if (freeSourcesBlank && (paid.creditsRemaining as number) < 300) {
+      notes.push(
+        `Neither free database has this set, and the paid source — the only one that does — has ${paid.creditsRemaining} credits left today, below the 300 it needs. THIS is why the set looks short: it is being listed from our own ${ours.length} rows alone. It will fill in when the allowance resets.`
+      );
+    } else if (freeSourcesBlank && (paid.knownSets as number | undefined) && (paid.matchingSets as unknown[]).length === 0) {
+      notes.push(
+        `Neither free database has this set, and none of the paid source's ${paid.knownSets} stored set names contains "${setName}" either. Try the spelling they use, or re-run the price sync to refresh their set list.`
+      );
+    } else if (freeSourcesBlank && !paidWanted) {
+      notes.push(
+        `Neither free database has this set. The paid source has ${(paid.matchingSets as unknown[]).length} set(s) by this name and ${paid.creditsRemaining} credits are available — add &paid=1 to actually fetch them (costs 200 credits per set).`
+      );
+    }
     if (ours.length > 0 && (exact.count ?? 0) > ours.length) {
       notes.push(
         `Our catalogue holds ${ours.length} cards from this set; upstream reports ${exact.count}. The import hasn't finished this set, which is why a search of our own rows alone comes up short.`
@@ -234,6 +292,7 @@ export async function GET(req: Request) {
       setsError,
       attempts: [exact, oldBroken, loose, ...cardChecks],
       tcgdex: { sets: dexSets, cards: dexCards.slice(0, 200), error: dexError },
+      paid,
       ourCatalogue: {
         count: ours.length,
         setNames: [...new Set(ours.map((r) => r.set_name))],
