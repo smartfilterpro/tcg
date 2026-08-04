@@ -36,6 +36,7 @@ import { cleanCardName, numberKey } from "@/lib/pokemontcg";
 import { budgetState, effectiveRemaining, priceTrackerEnabled, ptFetch } from "@/lib/priceTracker";
 import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
 import { gapFill, CARD_COMPANIONS } from "@/lib/cardWrite";
+import type { CardSummaryRow } from "@/lib/types";
 
 export const SYNC_STATE_KEY = "price_tracker_sync";
 
@@ -842,4 +843,71 @@ export async function runPriceSync(
   state.updatedAt = new Date().toISOString();
   await writeSyncState(admin, state);
   return state;
+}
+
+/* --------------------------------------------------- on-demand set lookup */
+
+/** One hour. A set's card list does not change; this only exists so that
+ *  typing in a search box can't spend the day's credits a keystroke at a
+ *  time. */
+const SET_CARDS_TTL = 60 * 60 * 1000;
+const setCardsCache = new Map<string, { at: number; cards: CardSummaryRow[] }>();
+
+/** Every card in a set, from the PAID source, on demand.
+ *
+ *  The reason this exists is a set the free sources have never heard of.
+ *  "Trick or Trade BOOster Bundle 2024" returns zero sets from pokemontcg.io
+ *  and zero from TCGdex — the probe says so plainly — while our catalogue
+ *  holds eighteen of its cards, because this sync created them as it walked.
+ *  So the only source that knows the set is the one search never asked, and
+ *  a listing came back looking like the set is eighteen cards long.
+ *
+ *  The set id is resolved from the list the sync has ALREADY paid for and
+ *  stored in app_state — matching by name costs nothing that way, where
+ *  re-fetching /sets would cost a hundred credits a page. Only the card
+ *  fetch is billed, at the requested limit, which is the same 200 the sync
+ *  spends per set. Cached for an hour so a search box cannot repeat it. */
+export async function trackerSetCards(
+  admin: SupabaseClient,
+  setName: string
+): Promise<CardSummaryRow[]> {
+  const wanted = setName.trim().toLowerCase();
+  if (!wanted || !priceTrackerEnabled()) return [];
+
+  const hit = setCardsCache.get(wanted);
+  if (hit && Date.now() - hit.at < SET_CARDS_TTL) return hit.cards;
+
+  // Their set list, as the sync last saw it. Free.
+  const state = await readSyncState(admin);
+  const known = state?.sets ?? [];
+  if (known.length === 0) return [];
+
+  const matches = known.filter((s) => s.name.toLowerCase().includes(wanted)).slice(0, 2);
+  if (matches.length === 0) return [];
+
+  // Guard the allowance the same way the sync does: this is a paid call
+  // triggered by a text box, so it stops rather than digging into a reserve
+  // somebody else's run is relying on.
+  if (effectiveRemaining() < 500) return [];
+
+  const out: CardSummaryRow[] = [];
+  for (const set of matches) {
+    try {
+      const json = (await ptFetch("/cards", {
+        setId: set.id,
+        fetchAllInSet: "true",
+        limit: "200",
+      })) as { data?: TheirCard[] | TheirCard };
+      const list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
+      for (const theirs of list) {
+        const row = rowFromTheirs(theirs, set);
+        if (row) out.push(row as unknown as CardSummaryRow);
+      }
+    } catch {
+      // A rate limit or a bad set id costs this one set, not the search.
+    }
+  }
+
+  setCardsCache.set(wanted, { at: Date.now(), cards: out });
+  return out;
 }
