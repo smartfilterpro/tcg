@@ -3740,6 +3740,9 @@ function ServerLogPanel() {
  *  over days by editing code and looking again. Runs the real search. */
 function SearchProbePanel() {
   const [q, setQ] = useState("Haunter");
+  /** Trace the picker's escalation rather than a plain search. Off by
+   *  default because it spends paid credits. */
+  const [deep, setDeep] = useState(false);
   const [busy, setBusy] = useState(false);
   const [out, setOut] = useState<{
     source?: string;
@@ -3761,7 +3764,9 @@ function SearchProbePanel() {
     setBusy(true);
     setOut(null);
     try {
-      const res = await fetch(`/api/admin/search-probe?q=${encodeURIComponent(q)}`);
+      const res = await fetch(
+        `/api/admin/search-probe?q=${encodeURIComponent(q)}${deep ? "&deep=1" : ""}`
+      );
       const json = await res.json();
       setOut(res.ok ? json : { error: json.error || "Probe failed" });
     } catch (e) {
@@ -3788,6 +3793,10 @@ function SearchProbePanel() {
         <button className="btn-secondary shrink-0 text-xs" disabled={busy} onClick={run}>
           {busy ? "Tracing…" : "Trace it"}
         </button>
+        <label className="flex items-center gap-1 text-[11px] text-brand-ink4">
+          <input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} />
+          every source (spends credits)
+        </label>
       </div>
 
       {out?.error && <p className="m-0 text-xs text-brand-negative">{out.error}</p>}
