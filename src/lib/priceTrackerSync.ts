@@ -888,7 +888,9 @@ export async function trackerSetCards(
   // Guard the allowance the same way the sync does: this is a paid call
   // triggered by a text box, so it stops rather than digging into a reserve
   // somebody else's run is relying on.
-  if (effectiveRemaining() < 500) return [];
+  // Interactive, but 200 credits a set is not a small ask — enough of a
+  // floor that one listing cannot empty the day.
+  if (effectiveRemaining() < 300) return [];
 
   const out: CardSummaryRow[] = [];
   for (const set of matches) {
@@ -941,7 +943,10 @@ export async function trackerSearchCards(
   if (!priceTrackerEnabled()) return { cards: [], log: "no API key configured" };
   if (!wanted) return { cards: [], log: "no card name to search by" };
   const budget = effectiveRemaining();
-  if (budget < 500) return { cards: [], log: `only ${budget} credits left, below the 500 reserve` };
+  // A person is waiting on this one, so it may use the reserve the
+  // background jobs are kept out of. It stops just short of zero so a spent
+  // day fails as a clear message rather than as an upstream rejection.
+  if (budget < 20) return { cards: [], log: `only ${budget} credits left today — the daily allowance is spent` };
 
   const plain = (n: string | null | undefined) =>
     (n ?? "").split("/")[0].trim().toLowerCase().replace(/^0+(?=\d)/, "");
