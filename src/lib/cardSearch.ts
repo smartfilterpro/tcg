@@ -402,18 +402,43 @@ export async function runCardSearch(
       // The paid source, by name, only when asked for. Its parenthetical
       // product names are the whole point: they are what separates a Friend
       // Ball printing from the plain one, and no free database carries them.
-      if (opts?.deep && parsed.name) {
-        const before = cards.length;
-        try {
-          const paid = await trackerSearchCards(parsed.name, parsed.number ?? null, createAdminClient());
-          cards.push(...paid.map((r) => rowToSummary(r)));
-          note(
-            "price tracker (paid)",
-            "Asked by name because this was a deep search. Separate products per printing — the ball patterns live here.",
-            cards.slice(before)
-          );
-        } catch {
-          note("price tracker (paid)", "Unavailable — no key, no budget, or the call failed.");
+      if (opts?.deep) {
+        // A NAME is required to ask them anything useful, and "55/217" has
+        // none.
+        //
+        // Their search spans a name and a number together; a bare number
+        // matches half the game and fifteen results of noise is worse than
+        // none. But a number-only query is not nameless in practice — the
+        // catalogue has just told us what card 55/217 is. So the names come
+        // from what we found locally, which is exactly the card whose other
+        // printings are being asked about.
+        //
+        // Two names at most. One number can be several cards across sets,
+        // and this is billed per call.
+        const names = parsed.name
+          ? [parsed.name]
+          : [...new Set([...local, ...cards].map((c) => c.name))].slice(0, 2);
+
+        if (names.length === 0) {
+          note("price tracker (paid)", "Nothing to ask by: no card name in the query and none found locally.");
+        }
+        for (const name of names) {
+          const before = cards.length;
+          try {
+            const paid = await trackerSearchCards(
+              name,
+              parsed.number ?? null,
+              createAdminClient()
+            );
+            cards.push(...paid.map((r) => rowToSummary(r)));
+            note(
+              `price tracker (paid) — ${name}`,
+              "Separate products per printing. The ball patterns, the stamped versions and anything else they name apart live here, each with its own price.",
+              cards.slice(before)
+            );
+          } catch {
+            note("price tracker (paid)", "Unavailable — no key, no budget, or the call failed.");
+          }
         }
       }
 
