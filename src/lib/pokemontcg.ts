@@ -286,13 +286,25 @@ function esc(v: string): string {
  *  matches any set carrying all of the words — which is what somebody typing
  *  part of a set name means — and it still works for the one-word promo codes
  *  ("SVP") this was originally written for. */
-export function setNameClause(setName: string): string {
-  const tokens = esc(setName)
+export function setNameClause(setName: string, loose = false): string {
+  const clean = esc(setName).trim();
+  const tokens = clean
     .toLowerCase()
     .split(/[^a-z0-9é]+/i)
     .filter((t) => t.length > 0);
-  if (tokens.length === 0) return `set.name:${esc(setName)}*`;
-  return tokens.map((t) => `set.name:${t}*`).join(" ");
+  if (tokens.length === 0) return `set.name:*`;
+  // One word: a prefix wildcard, which is what the promo codes want.
+  if (tokens.length === 1) return `set.name:${tokens[0]}*`;
+  // Several words, loose: every word as its own prefix term. Kept only as a
+  // FALLBACK, because whether the engine ANDs or ORs these is not something
+  // this code can know, and under OR a term like "or*" matches half the
+  // catalogue — which is how a set listing filled up with unrelated cards.
+  if (loose) return tokens.map((t) => `set.name:${t}*`).join(" ");
+  // The default: an exact phrase, no wildcard. A phrase query matches a
+  // contiguous run of words inside a longer field, so "trick or trade" finds
+  // "Trick or Trade BOOster Bundle 2024" without matching anything that
+  // merely shares a word with it.
+  return `set.name:"${clean}"`;
 }
 
 /** Punctuation-heavy names, keyed by their punctuation-stripped lowercase
@@ -432,6 +444,10 @@ export async function searchCards(opts: {
   numberExact?: string;
   printedTotal?: string;
   setName?: string;
+  /** Match the set on any word rather than the exact phrase. A last
+   *  resort: it is far broader, and under an OR default it is far too
+   *  broad. */
+  looseSetName?: boolean;
   pageSize?: number;
 }): Promise<CardSummary[]> {
   const clauses: string[] = [];
@@ -456,7 +472,7 @@ export async function searchCards(opts: {
   }
   if (opts.printedTotal)
     clauses.push(`set.printedTotal:${esc(opts.printedTotal).replace(/^0+(?=\d)/, "")}`);
-  if (opts.setName) clauses.push(setNameClause(opts.setName));
+  if (opts.setName) clauses.push(setNameClause(opts.setName, opts.looseSetName));
   if (clauses.length === 0) return [];
   const cards = await apiGet("/cards", {
     q: clauses.join(" "),
