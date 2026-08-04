@@ -8,7 +8,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { DeckCardEntry } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { legalityBriefing } from "@/lib/deckLegality";
-import { completeWithRoom, answerText } from "@/lib/aiAnswer";
+import { completeWithRoom, answerText, noAnswerReply } from "@/lib/aiAnswer";
 import { DECK_EDIT_TOOL, runDeckEditProposal } from "@/lib/deckEditTool";
 import type { DeckEditProposal } from "@/lib/deckEdit";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -243,9 +243,7 @@ async function runCoach(
   }
   const text = answerText(response);
   return {
-    answer:
-      text ||
-      "I thought about that one too long and ran out of room — try asking again, maybe a bit more specifically!",
+    answer: text || noAnswerReply(response, "the deck coach"),
     edit: pendingEdit,
   };
 }

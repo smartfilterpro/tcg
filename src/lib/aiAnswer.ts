@@ -51,6 +51,53 @@ export function ranOutOfRoom(response: Anthropic.Message): boolean {
   return response.stop_reason === "max_tokens" && answerText(response) === "";
 }
 
+/** Came back with nothing to show the player, for ANY reason.
+ *
+ *  Running out of room is the common cause and the one this module was built
+ *  for, but it is not the only one — a turn can end with a thinking block
+ *  and no text on an ordinary `end_turn` too, and that case was falling
+ *  straight past the retry into the apology. From where the player sits the
+ *  two are identical: they asked a question and got a shrug.
+ *
+ *  A tool call is NOT a missing answer. The model is mid-task and the caller
+ *  is expected to run the tool and come back, so retrying here would throw
+ *  away a perfectly good turn. */
+export function producedNoAnswer(response: Anthropic.Message): boolean {
+  if (answerText(response) !== "") return false;
+  return !response.content.some((b) => b.type === "tool_use");
+}
+
+/** What happened, in one line, for the server log. A bare "no answer" says
+ *  nothing about which of several very different failures occurred. */
+export function answerDiagnosis(response: Anthropic.Message): string {
+  const kinds = response.content.map((b) => b.type);
+  return (
+    `stop_reason=${response.stop_reason ?? "?"} ` +
+    `blocks=[${kinds.join(", ") || "none"}] ` +
+    `out=${response.usage?.output_tokens ?? "?"} in=${response.usage?.input_tokens ?? "?"}`
+  );
+}
+
+/** What to show when there is genuinely nothing to show — and a log line
+ *  saying why.
+ *
+ *  Every chat surface had its own wording for this, and all of them asserted
+ *  the same cause: "I thought about that one too long and ran out of room."
+ *  That is one specific failure, and it was being used for all of them. When
+ *  a turn comes back empty on an ordinary end_turn, telling the player it
+ *  was too much thinking is a guess dressed as an explanation — and it sends
+ *  them off rewording a question that was never the problem.
+ *
+ *  @param where names the surface, so a log line can be traced to a screen.
+ */
+export function noAnswerReply(response: Anthropic.Message, where: string): string {
+  console.error(`ai: empty answer shown to a player in ${where} — ${answerDiagnosis(response)}`);
+  if (response.stop_reason === "max_tokens") {
+    return "I spent my whole budget working that out and never got to the answer — ask me again, and narrower if you can?";
+  }
+  return "That came back empty on my side — nothing to do with your question. Ask me again?";
+}
+
 const BRIEF_NUDGE = `
 
 BUDGET NOTE: your previous attempt at this exact request used its entire
@@ -82,13 +129,12 @@ export async function completeWithRoom(
 ): Promise<Anthropic.Message> {
   const first = await client.messages.stream(params).finalMessage();
   await onResponse?.(first);
-  if (!ranOutOfRoom(first)) return first;
+  if (!producedNoAnswer(first)) return first;
 
-  console.warn("ai: hit max_tokens with no answer, retrying", {
-    model: params.model,
-    max_tokens: params.max_tokens,
-    output_tokens: first.usage?.output_tokens,
-  });
+  console.warn(
+    `ai: no answer from ${params.model}, retrying — ${answerDiagnosis(first)} ` +
+      `max_tokens=${params.max_tokens}`
+  );
 
   try {
     const second = await client.messages
@@ -104,7 +150,15 @@ export async function completeWithRoom(
       })
       .finalMessage();
     await onResponse?.(second);
-    return answerText(second) ? second : first;
+    if (answerText(second)) return second;
+    // Both attempts silent. Said loudly, because this is the state that
+    // reaches the player as an apology and there is otherwise no trace of
+    // why — and "it did it twice" is itself the useful fact.
+    console.error(
+      `ai: STILL no answer from ${params.model} after retry — first: ${answerDiagnosis(first)} · ` +
+        `second: ${answerDiagnosis(second)}`
+    );
+    return first;
   } catch (err) {
     // A retry that fails leaves us exactly where we already were, which is
     // survivable. Throwing from here would turn a wordy answer into a 500.
