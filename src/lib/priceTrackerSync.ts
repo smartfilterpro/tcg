@@ -911,3 +911,42 @@ export async function trackerSetCards(
   setCardsCache.set(wanted, { at: Date.now(), cards: out });
   return out;
 }
+
+/** Search the PAID source by card name, keeping every printing it returns.
+ *
+ *  TCGplayer treats a ball-pattern reverse holo as its own product —
+ *  "Pikachu (Friend Ball)" beside plain "Pikachu" — and that parenthetical
+ *  survives rowFromTheirs intact, so each comes back as a distinct card
+ *  rather than being folded into one. The free databases hold a single entry
+ *  for the whole family, which is why a search that only reaches them shows
+ *  one result for something that is visibly several cards.
+ *
+ *  Billed at the requested limit, so fifteen credits a call. Deliberately
+ *  NOT part of an ordinary search: it runs when somebody asks for it, having
+ *  looked at a short list and judged it wrong. */
+export async function trackerSearchCards(
+  name: string,
+  number?: string | null
+): Promise<CardSummaryRow[]> {
+  const wanted = name.trim();
+  if (!wanted || !priceTrackerEnabled()) return [];
+  if (effectiveRemaining() < 500) return [];
+
+  try {
+    const json = (await ptFetch("/cards", {
+      search: [wanted, number ?? ""].filter(Boolean).join(" "),
+      limit: "15",
+    })) as { data?: TheirCard[] | TheirCard };
+    const list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
+    const out: CardSummaryRow[] = [];
+    for (const theirs of list) {
+      // The set is theirs to name; we have no id for it here and inventing
+      // one would mint a row the sync could never reconcile.
+      const row = rowFromTheirs(theirs, { id: "search", name: theirs.setName ?? "" });
+      if (row) out.push(row as unknown as CardSummaryRow);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}

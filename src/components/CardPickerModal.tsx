@@ -169,24 +169,46 @@ export default function CardPickerModal({
   const [results, setResults] = useState<CardSummary[]>(candidates);
   const [loading, setLoading] = useState(false);
   const [manualMode, setManualMode] = useState(false);
+  /** A deep search is running or has run for the CURRENT query. Reset on
+   *  every keystroke, so the offer comes back for the next thing typed. */
+  const [deep, setDeep] = useState(false);
+  const [deepDone, setDeepDone] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  async function runSearch(text: string, everySource = false) {
+    const term = text.trim();
+    if (!term) return;
+    if (everySource) {
+      setDeep(true);
+      setDeepDone(false);
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `/api/cards/search?q=${encodeURIComponent(term)}${everySource ? "&deep=1" : ""}`
+      );
+      const json = await res.json();
+      if (res.ok) setResults(json.cards);
+      if (everySource) setDeepDone(true);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (!query.trim() || query === initialQuery) return;
+    setDeep(false);
+    setDeepDone(false);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const res = await fetch(`/api/cards/search?q=${encodeURIComponent(query.trim())}`);
-        const json = await res.json();
-        if (res.ok) setResults(json.cards);
-      } finally {
-        setLoading(false);
-      }
+    timer.current = setTimeout(() => {
+      void runSearch(query);
     }, 400);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
+    // runSearch is stable enough for this: it closes over nothing that
+    // changes between keystrokes except the text it is passed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, initialQuery]);
 
   return (
@@ -269,13 +291,33 @@ export default function CardPickerModal({
             </p>
           )}
         </div>
-        <div className="mt-3 border-t border-slate-100 pt-2 text-center">
+        <div className="mt-3 space-y-1 border-t border-slate-100 pt-2 text-center">
+          {/* The escalation, offered before the giving-up option.
+              An ordinary search stops once our catalogue has answered, which
+              is right almost always and wrong for the case that keeps coming
+              up: a printing we haven't imported. TCGplayer splits ball-pattern
+              reverse holos into separate products and names them apart —
+              "Pikachu (Friend Ball)" — and it is the only source that does.
+              Billed, so it waits to be asked. */}
           <button
-            className="text-xs text-poke-blue hover:underline"
-            onClick={() => setManualMode(true)}
+            className="text-xs text-poke-blue hover:underline disabled:opacity-50"
+            disabled={deep || loading || !query.trim()}
+            onClick={() => runSearch(query, true)}
           >
-            Card not in the database (new set / promo)? Add it manually →
+            {deep
+              ? deepDone
+                ? "✓ Searched every source, including the paid one"
+                : "Searching every source…"
+              : "Missing a printing? Search every source →"}
           </button>
+          <div>
+            <button
+              className="text-xs text-poke-blue hover:underline"
+              onClick={() => setManualMode(true)}
+            >
+              Card not in the database (new set / promo)? Add it manually →
+            </button>
+          </div>
         </div>
           </>
         )}
