@@ -47,6 +47,12 @@ export async function GET(req: Request) {
     if (!trace.parsed.name && !trace.parsed.number && !trace.parsed.setName) {
       notes.push("The query parsed to nothing recognisable, so every source was asked a blank question.");
     }
+    const paidStage = trace.stages.find((s) => s.stage === "paid source");
+    if (paidStage && /NOT configured/.test(paidStage.detail)) {
+      notes.push(
+        "The paid source is not configured, so no amount of searching will surface printings only it carries."
+      );
+    }
     if (trace.parsed.setName && !trace.listingSet) {
       notes.push(
         "A set was named AND a card name or number was given, so this is a filtered card search rather than a set listing — different limit, different order."
