@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getCardById } from "@/lib/pokemontcg";
-import { getTcgdexPriceById, findTcgdexImage } from "@/lib/tcgdex";
+import { getTcgdexPricesById, findTcgdexImage } from "@/lib/tcgdex";
 import { poketraceEnabled, searchPoketraceCard, getPoketracePrices } from "@/lib/poketrace";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { getBattleDataById } from "@/lib/pokemontcg";
@@ -230,7 +230,9 @@ export async function refreshStalePrices(
           let nextMarket: number | null = null;
           let nextPrices: Record<string, number | null> | null = null;
           if ((card.id as string).startsWith("tcgdex-")) {
-            nextMarket = await getTcgdexPriceById(card.id as string);
+            const fresh = await getTcgdexPricesById(card.id as string);
+            nextMarket = fresh.market;
+            nextPrices = fresh.prices;
           } else if (!(card.id as string).startsWith("custom-")) {
             const fresh = await getCardById(card.id as string);
             nextMarket = fresh?.marketPrice ?? null;

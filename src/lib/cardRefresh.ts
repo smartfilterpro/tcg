@@ -18,7 +18,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getCardById } from "@/lib/pokemontcg";
-import { getTcgdexPriceById, findTcgdexImage } from "@/lib/tcgdex";
+import { getTcgdexPricesById, findTcgdexImage } from "@/lib/tcgdex";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { variantKeyFor } from "@/lib/priceTrackerSync";
 import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
@@ -101,7 +101,12 @@ export async function refreshCard(
   // 1. The card's own database.
   let market: number | null = null;
   if (id.startsWith("tcgdex-")) {
-    market = await getTcgdexPriceById(id);
+    // The per-finish map comes back too. It is in the same request either
+    // way, and dropping it was why a TCGdex-sourced card showed one price
+    // against every finish it is owned in.
+    const fresh = await getTcgdexPricesById(id);
+    market = fresh.market;
+    if (fresh.prices) patch.prices = fresh.prices;
   } else if (!id.startsWith("custom-")) {
     const fresh = await getCardById(id);
     if (fresh?.marketPrice != null) market = fresh.marketPrice;
