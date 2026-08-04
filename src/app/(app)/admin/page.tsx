@@ -1340,6 +1340,10 @@ export default function AdminPage() {
             <SetProbePanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🔬 Trace a search</h2>
+            <SearchProbePanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🪵 Server log</h2>
             <ServerLogPanel />
           </div>
@@ -3722,6 +3726,134 @@ function ServerLogPanel() {
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** What our own search did with a query.
+ *
+ *  set-probe asks what the SOURCES hold; this asks what our pipeline made of
+ *  it. Between them, "the card is missing" lands in one of four places — the
+ *  query parsed wrong, the catalogue lacks it, the external call was skipped,
+ *  or the merge or the cap threw it away — rather than being narrowed down
+ *  over days by editing code and looking again. Runs the real search. */
+function SearchProbePanel() {
+  const [q, setQ] = useState("Haunter");
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<{
+    source?: string;
+    resultCount?: number;
+    results?: string[];
+    notes?: string[];
+    trace?: {
+      parsed: Record<string, unknown>;
+      listingSet: boolean;
+      needExternal: boolean;
+      stages: Array<{ stage: string; detail: string; count?: number; sample?: string[] }>;
+      foldedAway: string[];
+      cutByLimit: string[];
+    };
+    error?: string;
+  } | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setOut(null);
+    try {
+      const res = await fetch(`/api/admin/search-probe?q=${encodeURIComponent(q)}`);
+      const json = await res.json();
+      setOut(res.ok ? json : { error: json.error || "Probe failed" });
+    } catch (e) {
+      setOut({ error: e instanceof Error ? e.message : "Probe failed" });
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="m-0 text-xs text-brand-ink4">
+        Runs the real card search and reports every stage — what the query parsed to, what our
+        catalogue answered, whether the outside sources were asked and why, and what the merge
+        and the result cap threw away.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <input
+          className="input w-full text-xs sm:w-72"
+          placeholder='Anything you would type in Add card — "Haunter", "set:trick or trade"'
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && run()}
+        />
+        <button className="btn-secondary shrink-0 text-xs" disabled={busy} onClick={run}>
+          {busy ? "Tracing…" : "Trace it"}
+        </button>
+      </div>
+
+      {out?.error && <p className="m-0 text-xs text-brand-negative">{out.error}</p>}
+
+      {(out?.notes?.length ?? 0) > 0 && (
+        <div className="rounded border border-amber-200 bg-amber-50 p-2 text-[11.5px] leading-snug text-amber-900">
+          {out!.notes!.map((n, i) => (
+            <p key={i} className="m-0 mb-1 last:mb-0">
+              {n}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {out?.trace && (
+        <>
+          <div className="text-[11px] text-brand-ink4">
+            <span className="font-semibold text-brand-ink3">Parsed as:</span>{" "}
+            <span className="font-mono">{JSON.stringify(out.trace.parsed)}</span>
+            {out.trace.listingSet && " · set listing"}
+          </div>
+          <div className="text-[11px] text-brand-ink4">
+            <span className="font-semibold text-brand-ink3">Result:</span> {out.resultCount} cards
+            from {out.source}
+          </div>
+          {out.trace.stages.map((st, i) => (
+            <details key={i} className="text-[11px] text-brand-ink4">
+              <summary className="cursor-pointer">
+                <span className="font-semibold text-brand-ink3">{st.stage}</span>
+                {st.count != null && <> — {st.count}</>}
+              </summary>
+              <p className="m-0 mt-1">{st.detail}</p>
+              {(st.sample?.length ?? 0) > 0 && (
+                <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-brand-sunken p-2">
+                  {st.sample!.join("\n")}
+                </pre>
+              )}
+            </details>
+          ))}
+          {out.trace.foldedAway.length > 0 && (
+            <details className="text-[11px] text-brand-ink4">
+              <summary className="cursor-pointer text-brand-negative">
+                Folded away as duplicates — {out.trace.foldedAway.length}
+              </summary>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-brand-sunken p-2">
+                {out.trace.foldedAway.join("\n")}
+              </pre>
+            </details>
+          )}
+          {out.trace.cutByLimit.length > 0 && (
+            <details className="text-[11px] text-brand-ink4">
+              <summary className="cursor-pointer text-brand-negative">
+                Cut by the result limit — {out.trace.cutByLimit.length}
+              </summary>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-brand-sunken p-2">
+                {out.trace.cutByLimit.join("\n")}
+              </pre>
+            </details>
+          )}
+          <details className="text-[11px] text-brand-ink4">
+            <summary className="cursor-pointer">What the search returned</summary>
+            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-brand-sunken p-2">
+              {(out.results ?? []).join("\n")}
+            </pre>
+          </details>
+        </>
       )}
     </div>
   );
