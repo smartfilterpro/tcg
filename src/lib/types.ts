@@ -157,9 +157,19 @@ export const MANUAL_VARIANTS = [...STAMP_VARIANTS, ...PATTERN_VARIANTS] as const
  *  invites a copy filed as a pattern of a pattern, which is both wrong and
  *  worth less than what it actually is. */
 export function isSpecificPrinting(name: string): boolean {
-  return /\((?:friend|master|pok[eé]|great|ultra|premier|luxury|heal|dive|dusk|quick|timer|net|nest|repeat)\s*ball|\(pok[eé]mon center|\(prerelease|\(staff\b/i.test(
-    name
-  );
+  // ANY parenthetical, not a list of the ones I could think of.
+  //
+  // The first version enumerated ball types plus Pokémon Center, prerelease
+  // and staff — which is a list that is wrong the day a new one ships, and
+  // they ship every set. Poké Ball and Master Ball arrived with Scarlet &
+  // Violet, Friend Ball with Mega Evolution, and there is no reason to
+  // believe that stopped.
+  //
+  // The general signal is the shape itself: card names do not contain
+  // parentheses, and the paid source uses them for exactly one purpose —
+  // naming which printing a product is. Reading the shape rather than
+  // matching a vocabulary means the next one works without a code change.
+  return /\(.+\)/.test(name);
 }
 
 /** The finishes worth offering for this card. */
