@@ -56,11 +56,37 @@ async function searchCatalogue(
 ): Promise<CardSummary[]> {
   const name = parsed.name ? cleanCardName(parsed.name) : "";
   const variants = parsed.number ? storedNumberVariants(parsed.number) : [];
+  const set = parsed.setName?.trim();
+
+  // "set:Trick or Trade" with nothing else — list the set.
+  //
+  // Not a search that happens to return a lot, but the actual request: show
+  // me what is in this set so I can pick the one I'm holding. Ordered by
+  // collector number the way the cards are ordered in the binder, which is
+  // the order somebody entering a bundle will be going through them.
+  if (set && !name && variants.length === 0) {
+    const { data } = await supabase
+      .from("cards")
+      .select(SUMMARY_COLS)
+      .ilike("set_name", `%${set}%`)
+      .limit(400);
+    const rows = (data ?? []) as unknown as CardSummaryRow[];
+    return rows
+      .sort((a, b) => {
+        const n = (v: string) => {
+          const d = (v ?? "").replace(/\D/g, "");
+          return d ? parseInt(d, 10) : Number.MAX_SAFE_INTEGER;
+        };
+        return n(a.number) - n(b.number) || a.number.localeCompare(b.number);
+      })
+      .map((r) => rowToSummary(r));
+  }
 
   const run = async (withTotal: boolean, withName: boolean) => {
     let q = supabase.from("cards").select(SUMMARY_COLS).limit(200);
     if (variants.length > 0) q = q.in("number", variants);
     if (withName && name) q = q.ilike("name", `%${name}%`);
+    if (set) q = q.ilike("set_name", `%${set}%`);
     if (withTotal && parsed.printedTotal) {
       q = q.eq("set_printed_total", Number(parsed.printedTotal));
     }
@@ -123,7 +149,16 @@ export async function GET(req: Request) {
     // when the catalogue couldn't fully answer: the requested number wasn't
     // found locally, or a name-only search came back thin (the catalogue is
     // still importing, so absence local isn't absence).
-    const needExternal = wantedKey ? !hasWantedNumber(local) : local.length < 8;
+    // A set search that found nothing locally has to go outside: the whole
+    // reason to search a set by name is usually that it is new, and new is
+    // exactly what the catalogue import hasn't reached. A set that DID
+    // answer locally is left alone — 200 cards from our own rows is a
+    // complete answer and carries our mirrored artwork.
+    const needExternal = parsed.setName
+      ? local.length === 0
+      : wantedKey
+        ? !hasWantedNumber(local)
+        : local.length < 8;
 
     let cards: CardSummary[] = [];
     let source = local.length > 0 ? "catalogue" : "pokemontcg.io";
@@ -156,6 +191,11 @@ export async function GET(req: Request) {
             cards.push(c);
           }
         }
+      } else if (parsed.setName && !parsed.number) {
+        // Set with no card named: ask for the set itself, generously. This
+        // is somebody about to enter a bundle card by card, so a short page
+        // is the wrong shape of answer.
+        cards = await safeSearch({ setName: parsed.setName, pageSize: 250 });
       } else {
         cards = await safeSearch({ ...parsed, pageSize: 30 });
       }

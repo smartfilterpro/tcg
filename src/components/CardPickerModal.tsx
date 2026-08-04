@@ -201,7 +201,7 @@ export default function CardPickerModal({
             autoFocus
             type="search"
             className="input w-full sm:w-auto sm:flex-1"
-            placeholder='🔍 Search by name or number — e.g. "Charizard", "101/190"'
+            placeholder='🔍 Name, number, or set: — e.g. "Charizard", "101/190", "set:Trick or Trade"'
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -212,6 +212,14 @@ export default function CardPickerModal({
             </button>
           </div>
         </div>
+        {/* Said out loud, because nobody guesses a prefix. Entering a bundle
+            or a blister is the case this exists for: list the set once, then
+            tap down it, instead of typing a name per card. */}
+        <p className="-mt-1 mb-2 text-[11px] leading-snug text-brand-ink4">
+          Tip: type <code className="font-mono">set:</code> and the set&apos;s name to list the
+          whole set — <code className="font-mono">set:Trick or Trade BOOster Bundle 2024</code> —
+          or put a card name in front of it to narrow to one card in that set.
+        </p>
         {toast && (
           <div className="mb-2 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">
             {toast}

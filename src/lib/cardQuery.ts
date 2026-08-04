@@ -19,7 +19,30 @@ export interface ParsedCardQuery {
  *    "Charizard"           → name only
  */
 export function parseCardQuery(raw: string): ParsedCardQuery {
-  const q = raw.trim();
+  let q = raw.trim();
+
+  // "set:" — an explicit set filter, anywhere in the query.
+  //
+  // Set names are the one thing this parser could never be taught to guess.
+  // "Trick or Trade BOOster Bundle 2024" is four words of ordinary English
+  // and a year; nothing about it says "set" rather than "card called Trick
+  // or Trade". So the query says so, and everything before and after the
+  // marker is still parsed as normal — "Pikachu set:Trick or Trade" narrows
+  // a name to a set, and "set:Trick or Trade" alone lists the set.
+  //
+  // The set name runs to the end of the query rather than to the next space,
+  // because set names have spaces in them and quoting is a thing nobody
+  // should have to do on a phone keyboard.
+  const setMarker = q.match(/(^|\s)set\s*:\s*(.+)$/i);
+  let setName: string | undefined;
+  if (setMarker) {
+    setName = setMarker[2].trim() || undefined;
+    q = q.slice(0, setMarker.index).trim();
+    // Nothing left but the set: list it.
+    if (!q) return { setName };
+  }
+  const withSet = (parsed: ParsedCardQuery): ParsedCardQuery =>
+    setName ? { ...parsed, setName } : parsed;
 
   // "number/total" — optionally preceded by a name, e.g. "Charizard 4/102".
   // The part after the slash is either a set size ("190") or a promo-set
@@ -29,23 +52,25 @@ export function parseCardQuery(raw: string): ParsedCardQuery {
     const name = slash[1].trim();
     const after = slash[3];
     const digitsInAfter = after.replace(/\D/g, "");
-    return {
+    return withSet({
       name: name || undefined,
       number: slash[2],
       printedTotal: digitsInAfter ? digitsInAfter : undefined,
-      setName: digitsInAfter ? undefined : after, // "SVP" → search promo sets by name
-    };
+      // "SVP" → search promo sets by name. An explicit set: wins over it,
+      // since the person typed that one out.
+      ...(digitsInAfter ? {} : { setName: after }),
+    });
   }
 
   // "#101" — explicit number, any set
   const hash = q.match(/^#\s*([A-Za-z]{0,4}\d{1,4}[a-z]?)$/);
-  if (hash) return { number: hash[1] };
+  if (hash) return withSet({ number: hash[1] });
 
   // Bare number (or promo codes like "TG12", "SWSH095") — nothing else it could be
   const bare = q.match(/^#?\s*([A-Za-z]{0,4}\d{1,4}[a-z]?)$/);
   if (bare && /\d/.test(q) && !/^[A-Za-z]+\d$/.test(q)) {
     // exclude names ending in a digit like "Porygon2" (letters+single digit)
-    return { number: bare[1] };
+    return withSet({ number: bare[1] });
   }
 
   // "name number" WITHOUT a slash — e.g. "Gengar 073", "Pikachu SWSH061",
@@ -57,9 +82,9 @@ export function parseCardQuery(raw: string): ParsedCardQuery {
     const looksLikeNumber =
       /\d{2,}/.test(numTok) || /^[A-Za-z]+\d+/.test(numTok) || q.includes("#");
     if (looksLikeNumber && /\d/.test(numTok)) {
-      return { name: trailing[1].trim(), number: numTok };
+      return withSet({ name: trailing[1].trim(), number: numTok });
     }
   }
 
-  return { name: q };
+  return withSet({ name: q });
 }
