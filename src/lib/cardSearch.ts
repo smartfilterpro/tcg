@@ -18,6 +18,7 @@ import { searchCards, numberKey, cleanCardName, numberVariants } from "@/lib/pok
 import { searchTcgdex, tcgdexSetCards } from "@/lib/tcgdex";
 import { parseCardQuery, type ParsedCardQuery } from "@/lib/cardQuery";
 import { normalizeForSearch } from "@/lib/text";
+import { setsAgree } from "@/lib/setName";
 import { rowToSummary, type CardSummary, type CardSummaryRow } from "@/lib/types";
 import { trackerSetCards, trackerSearchCards } from "@/lib/priceTrackerSync";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -176,6 +177,12 @@ export interface SearchTrace {
 export interface SearchOutcome {
   cards: CardSummary[];
   source: string;
+  /** A short, plain sentence for the person searching, when the result is
+   *  known to be incomplete for a reason they can't see. A set listed from
+   *  our own rows because the day's paid allowance is spent LOOKS exactly
+   *  like a set that is genuinely that short — and being told the set has
+   *  eighteen cards when it has ninety is worse than being told nothing. */
+  notice?: string;
   trace: SearchTrace;
 }
 
@@ -259,6 +266,7 @@ export async function runCardSearch(
 
     let cards: CardSummary[] = [];
     let source = local.length > 0 ? "catalogue" : "pokemontcg.io";
+    let notice: string | undefined;
     if (needExternal) {
       // A single query shape can't cover how people type. A prefix match
       // misses "Surfing Pikachu" when you search "pikachu"; a contains match
@@ -383,10 +391,30 @@ export async function runCardSearch(
         // and caches the cards for an hour.
         try {
           const paid = await trackerSetCards(createAdminClient(), parsed.setName);
-          cards.push(...paid.map((r) => rowToSummary(r)));
-          note("price tracker (paid)", "Set listing — the source of last resort.", cards.slice(afterDex));
-        } catch {
-          note("price tracker (paid)", "Unavailable — no key, no budget, or the call failed.");
+          cards.push(...paid.cards.map((r) => rowToSummary(r)));
+          // Their account of it, verbatim, for the same reason the by-name
+          // search carries one: a zero here can mean no key, no set list, no
+          // matching set, a spent allowance or a refused request, and those
+          // are five different problems wearing the same number. When this
+          // source declines, a set nothing else catalogues is listed from
+          // our own rows alone — which is what "the set looks short" is.
+          note(
+            "price tracker (paid)",
+            `Set listing — the source of last resort. ${paid.log}.`,
+            cards.slice(afterDex)
+          );
+          // Say it on the screen too, not only in the admin trace, when the
+          // decline is the whole difference between a full set and a stub.
+          if (paid.cards.length === 0 && paid.log.startsWith("NOT asked") && afterDex === 0) {
+            notice = paid.log.includes("credits left today")
+              ? "The paid price service is out of credits for today, and it's the only source that carries this set — so this list is only the cards we've already saved. It fills back in when the allowance resets."
+              : "Only the cards we've already saved are listed here: no card database we can reach carries this set right now.";
+          }
+        } catch (err) {
+          note(
+            "price tracker (paid)",
+            `Threw: ${err instanceof Error ? err.message : String(err)}`
+          );
         }
       }
 
@@ -483,24 +511,58 @@ export async function runCardSearch(
     // sources under different ids AND different zero-paddings.
     const seen = new Set<string>();
     // Set name is part of the twin key normally — the same card in two sets
-    // is two cards — but NOT when a single set is being listed. The three
-    // sources spell a promo bundle differently ("Trick or Trade BOOster
-    // Bundle 2024" against TCGdex's shorter name), so including it there
-    // would fold nothing and show every card two or three times.
+    // is two cards. Listing a set is the awkward case: the three sources
+    // spell one product differently ("Trick or Trade BOOster Bundle 2024"
+    // against TCGdex's shorter name), so an exact set name in the key folds
+    // nothing and every card appears two or three times.
+    //
+    // Dropping the set name entirely was the fix, and it was too big a
+    // hammer. `ilike %trick or trade%` matches the 2023 bundle and the 2024
+    // one, and those bundles reprint the same cards at the same collector
+    // numbers — so a name-and-number key merged two years of a product into
+    // one listing that looked short. Same mistake as the import merge made,
+    // one layer up: name plus number is an identity WITHIN a set, never
+    // across sets.
+    //
+    // So the key stays name-and-number, and agreement on the set name is
+    // checked separately and loosely — by the same rule the import uses.
+    // Buckets are small (a handful of printings share a name and number), so
+    // scanning one is cheaper than getting the key exactly right.
     const twin = (c: CardSummary) =>
       listingSet
         ? `${normalizeForSearch(c.name)}|${numberKey(c.number)}`
         : `${normalizeForSearch(c.name)}|${numberKey(c.number)}|${(c.setName ?? "").toLowerCase()}`;
+    const keptSets = new Map<string, string[]>();
     const merged: CardSummary[] = [];
     const foldedAway: string[] = [];
     for (const c of [...local, ...cards]) {
       const t = twin(c);
-      if (seen.has(c.id) || seen.has(t)) {
+      if (seen.has(c.id)) {
         foldedAway.push(label(c));
         continue;
       }
+      if (listingSet) {
+        const already = keptSets.get(t);
+        if (already) {
+          // A set name we can't place is not evidence of a duplicate — keep
+          // the card and let it be seen. Cheaper to show one card twice than
+          // to hide one that is really there.
+          if (already.some((s) => setsAgree(s, c.setName))) {
+            foldedAway.push(`${label(c)} — same name and number as a card already kept from this set`);
+            continue;
+          }
+          already.push(c.setName ?? "");
+        } else {
+          keptSets.set(t, [c.setName ?? ""]);
+        }
+      } else {
+        if (seen.has(t)) {
+          foldedAway.push(label(c));
+          continue;
+        }
+        seen.add(t);
+      }
       seen.add(c.id);
-      seen.add(t);
       merged.push(c);
     }
     note("merge", `${local.length} local + ${cards.length} external, duplicates folded.`, merged);
@@ -548,6 +610,7 @@ export async function runCardSearch(
       return {
         cards: kept,
         source,
+        ...(notice ? { notice } : {}),
         trace: {
           query: q,
           parsed: { ...parsed },
@@ -569,6 +632,7 @@ export async function runCardSearch(
     return {
       cards: kept,
       source,
+      ...(notice ? { notice } : {}),
       trace: {
         query: q,
         parsed: { ...parsed },

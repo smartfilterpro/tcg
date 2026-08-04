@@ -3893,17 +3893,28 @@ function SetProbePanel() {
       error?: string;
     }>;
     tcgdex?: { sets: Array<{ id: string; name: string; cards: number }>; cards: string[]; error?: string | null };
+    paid?: {
+      configured: boolean;
+      creditsRemaining: number;
+      fetched: boolean;
+      knownSets?: number;
+      matchingSets?: Array<{ id: string; name: string }>;
+      count?: number;
+      log?: string;
+      sample?: string[];
+    };
     ourCatalogue?: { count: number; setNames: string[]; sample: string[]; hasCard: boolean | null };
     notes?: string[];
     error?: string;
   } | null>(null);
 
-  async function run() {
+  async function run(spend = false) {
     setBusy(true);
     setOut(null);
     try {
       const res = await fetch(
-        `/api/admin/set-probe?set=${encodeURIComponent(setName)}&card=${encodeURIComponent(card)}`
+        `/api/admin/set-probe?set=${encodeURIComponent(setName)}&card=${encodeURIComponent(card)}` +
+          (spend ? "&paid=1" : "")
       );
       const json = await res.json();
       setOut(res.ok ? json : { error: json.error || "Probe failed" });
@@ -3933,8 +3944,16 @@ function SetProbePanel() {
           value={card}
           onChange={(e) => setCard(e.target.value)}
         />
-        <button className="btn-secondary shrink-0 text-xs" disabled={busy} onClick={run}>
+        <button className="btn-secondary shrink-0 text-xs" disabled={busy} onClick={() => run(false)}>
           {busy ? "Asking…" : "Run the check"}
+        </button>
+        <button
+          className="btn-secondary shrink-0 text-xs"
+          disabled={busy}
+          onClick={() => run(true)}
+          title="Also fetches the set from the paid source — 200 credits per matching set"
+        >
+          {busy ? "Asking…" : "…and buy the set list (200 credits)"}
         </button>
       </div>
 
@@ -3983,6 +4002,34 @@ function SetProbePanel() {
               {s.name} · {s.cards} cards
             </div>
           ))}
+        </div>
+      )}
+
+      {out?.paid && (
+        <div className="text-[11px] text-brand-ink4">
+          <span className="font-semibold text-brand-ink3">Paid source:</span>{" "}
+          {!out.paid.configured
+            ? "no key configured — skipped entirely"
+            : `${out.paid.creditsRemaining} credits left today` +
+              (out.paid.knownSets != null ? ` · ${out.paid.knownSets} sets known` : "") +
+              (out.paid.matchingSets ? ` · ${out.paid.matchingSets.length} matching this name` : "")}
+          {out.paid.matchingSets?.map((s) => (
+            <div key={s.id} className="font-mono">
+              {s.name} · {s.id}
+            </div>
+          ))}
+          {out.paid.fetched && (
+            <>
+              <div className="mt-1">
+                Fetched {out.paid.count} cards. {out.paid.log}
+              </div>
+              {(out.paid.sample?.length ?? 0) > 0 && (
+                <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-brand-sunken p-2">
+                  {out.paid.sample!.join("\n")}
+                </pre>
+              )}
+            </>
+          )}
         </div>
       )}
 

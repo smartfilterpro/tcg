@@ -851,7 +851,7 @@ export async function runPriceSync(
  *  typing in a search box can't spend the day's credits a keystroke at a
  *  time. */
 const SET_CARDS_TTL = 60 * 60 * 1000;
-const setCardsCache = new Map<string, { at: number; cards: CardSummaryRow[] }>();
+const setCardsCache = new Map<string, { at: number; cards: CardSummaryRow[]; log: string }>();
 
 /** Every card in a set, from the PAID source, on demand.
  *
@@ -866,33 +866,65 @@ const setCardsCache = new Map<string, { at: number; cards: CardSummaryRow[] }>()
  *  stored in app_state — matching by name costs nothing that way, where
  *  re-fetching /sets would cost a hundred credits a page. Only the card
  *  fetch is billed, at the requested limit, which is the same 200 the sync
- *  spends per set. Cached for an hour so a search box cannot repeat it. */
+ *  spends per set. Cached for an hour so a search box cannot repeat it.
+ *
+ *  Returns its own account of the exchange alongside the cards. Every way
+ *  this can decline — no key, no stored set list, no set by that name, not
+ *  enough credits left, a refused request — used to look identical from
+ *  outside: an empty array. So "the set is short" and "we never asked" were
+ *  the same observation, which is precisely the question that kept coming
+ *  back unanswered. */
 export async function trackerSetCards(
   admin: SupabaseClient,
   setName: string
-): Promise<CardSummaryRow[]> {
+): Promise<{ cards: CardSummaryRow[]; log: string }> {
   const wanted = setName.trim().toLowerCase();
-  if (!wanted || !priceTrackerEnabled()) return [];
+  if (!wanted) return { cards: [], log: "no set name given" };
+  if (!priceTrackerEnabled()) {
+    return { cards: [], log: "NOT asked — POKEMONPRICETRACKER_API_KEY is unset" };
+  }
 
   const hit = setCardsCache.get(wanted);
-  if (hit && Date.now() - hit.at < SET_CARDS_TTL) return hit.cards;
+  if (hit && Date.now() - hit.at < SET_CARDS_TTL) {
+    const mins = Math.round((Date.now() - hit.at) / 60000);
+    return { cards: hit.cards, log: `${hit.log} (cached ${mins} min ago, not re-fetched)` };
+  }
 
   // Their set list, as the sync last saw it. Free.
   const state = await readSyncState(admin);
   const known = state?.sets ?? [];
-  if (known.length === 0) return [];
+  if (known.length === 0) {
+    return {
+      cards: [],
+      log: "NOT asked — we hold no set list from them yet, so there is no set id to ask for. Run the price sync once.",
+    };
+  }
 
   const matches = known.filter((s) => s.name.toLowerCase().includes(wanted)).slice(0, 2);
-  if (matches.length === 0) return [];
+  if (matches.length === 0) {
+    return {
+      cards: [],
+      log: `NOT asked — none of their ${known.length} sets has a name containing "${setName.trim()}"`,
+    };
+  }
 
   // Guard the allowance the same way the sync does: this is a paid call
   // triggered by a text box, so it stops rather than digging into a reserve
   // somebody else's run is relying on.
   // Interactive, but 200 credits a set is not a small ask — enough of a
   // floor that one listing cannot empty the day.
-  if (effectiveRemaining() < 300) return [];
+  const budget = effectiveRemaining();
+  if (budget < 300) {
+    return {
+      cards: [],
+      log:
+        `NOT asked — only ${budget} credits left today and a set costs 200, so the 300 floor stopped it. ` +
+        `This set is listed from our own catalogue alone until the allowance resets.`,
+    };
+  }
 
   const out: CardSummaryRow[] = [];
+  const notes: string[] = [];
   for (const set of matches) {
     try {
       const json = (await ptFetch("/cards", {
@@ -901,12 +933,21 @@ export async function trackerSetCards(
         limit: "200",
       })) as { data?: TheirCard[] | TheirCard };
       const list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
+      let kept = 0;
       for (const theirs of list) {
         const row = rowFromTheirs(theirs, set);
-        if (row) out.push(row as unknown as CardSummaryRow);
+        if (row) {
+          out.push(row as unknown as CardSummaryRow);
+          kept++;
+        }
       }
-    } catch {
+      notes.push(
+        `"${set.name}" (${set.id}): ${list.length} returned, ${kept} usable` +
+          (list.length >= 200 ? " — at the 200 page size, so there may be more" : "")
+      );
+    } catch (err) {
       // A rate limit or a bad set id costs this one set, not the search.
+      notes.push(`"${set.name}" (${set.id}): request failed — ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -914,8 +955,9 @@ export async function trackerSetCards(
   // either way, and a set nobody else can supply should only be bought once.
   await rememberTrackerCards(admin, out);
 
-  setCardsCache.set(wanted, { at: Date.now(), cards: out });
-  return out;
+  const log = `asked with ${budget} credits in hand. ${notes.join("; ")}`;
+  setCardsCache.set(wanted, { at: Date.now(), cards: out, log });
+  return { cards: out, log };
 }
 
 /** Search the PAID source by card name, keeping every printing it returns.

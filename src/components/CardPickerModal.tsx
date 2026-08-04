@@ -169,6 +169,11 @@ export default function CardPickerModal({
   const [results, setResults] = useState<CardSummary[]>(candidates);
   const [loading, setLoading] = useState(false);
   const [manualMode, setManualMode] = useState(false);
+  /** Set when the search KNOWS its answer is short — see SearchOutcome.notice.
+   *  A set listed from our own rows because the day's paid allowance is spent
+   *  is indistinguishable, on screen, from a set that is genuinely that
+   *  small. */
+  const [notice, setNotice] = useState<string | null>(null);
   /** A deep search is running or has run for the CURRENT query. Reset on
    *  every keystroke, so the offer comes back for the next thing typed. */
   const [deep, setDeep] = useState(false);
@@ -188,7 +193,10 @@ export default function CardPickerModal({
         `/api/cards/search?q=${encodeURIComponent(term)}${everySource ? "&deep=1" : ""}`
       );
       const json = await res.json();
-      if (res.ok) setResults(json.cards);
+      if (res.ok) {
+        setResults(json.cards);
+        setNotice(json.notice ?? null);
+      }
       if (everySource) setDeepDone(true);
     } finally {
       setLoading(false);
@@ -199,6 +207,7 @@ export default function CardPickerModal({
     if (!query.trim() || query === initialQuery) return;
     setDeep(false);
     setDeepDone(false);
+    setNotice(null);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       void runSearch(query);
@@ -245,6 +254,11 @@ export default function CardPickerModal({
         {toast && (
           <div className="mb-2 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">
             {toast}
+          </div>
+        )}
+        {notice && (
+          <div className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-[12.5px] leading-snug text-amber-900">
+            {notice}
           </div>
         )}
         {manualMode ? (

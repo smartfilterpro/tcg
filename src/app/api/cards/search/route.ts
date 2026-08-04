@@ -19,11 +19,12 @@ export async function GET(req: Request) {
     // would spend them a keystroke at a time.
     const deep = new URL(req.url).searchParams.get("deep") === "1";
     const supabase = await createClient();
-    const { cards, source } = await runCardSearch(supabase, q, { deep });
+    const { cards, source, notice } = await runCardSearch(supabase, q, { deep });
     // The trace is deliberately dropped here. It is a few kilobytes of
     // explanation on every keystroke of a debounced search box, and the
-    // picker has no use for it.
-    return NextResponse.json({ cards, source });
+    // picker has no use for it. The notice is one sentence and only appears
+    // when the answer is knowably incomplete — that one the picker shows.
+    return NextResponse.json({ cards, source, ...(notice ? { notice } : {}) });
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });

@@ -17,6 +17,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { searchAllCardsPage } from "@/lib/pokemontcg";
 import { summaryToRow } from "@/lib/types";
 import { emptyColumns, CARD_COMPANIONS } from "@/lib/cardWrite";
+import { setsAgree } from "@/lib/setName";
 
 export const IMPORT_STATE_KEY = "card_import";
 
@@ -177,14 +178,8 @@ async function mergeTcgpDuplicates(
   // side has no set name at all the merge is REFUSED rather than assumed:
   // a duplicate row costs storage and is fixable by hand, and a wrong
   // deletion costs somebody's card.
-  const setKey = (n: string | null | undefined) =>
-    (n ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const setsAgree = (a: string | null | undefined, b: string | null | undefined) => {
-    const x = setKey(a);
-    const y = setKey(b);
-    if (!x || !y) return false;
-    return x === y || x.includes(y) || y.includes(x);
-  };
+  // (setsAgree lives in setName.ts — the search merge has to make exactly
+  // the same judgement, and two copies of this rule would drift.)
 
   const realByKey = new Map(
     pageRows.map((r) => [`${nameKey(r.name)}|${numKey(r.number)}`, r])
