@@ -35,7 +35,8 @@ import { fetchAllRows } from "@/lib/fetchAll";
 import { cleanCardName, numberKey } from "@/lib/pokemontcg";
 import { budgetState, effectiveRemaining, priceTrackerEnabled, ptFetch } from "@/lib/priceTracker";
 import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
-import { gapFill, CARD_COMPANIONS } from "@/lib/cardWrite";
+import { gapFill, CARD_COMPANIONS, keepsItsImage, mergePrices } from "@/lib/cardWrite";
+import { setsAgree } from "@/lib/setName";
 import type { CardSummaryRow } from "@/lib/types";
 
 export const SYNC_STATE_KEY = "price_tracker_sync";
@@ -77,6 +78,20 @@ export interface SyncState {
    *  buying more than a price. */
   detailsFilled: number;
   skippedAmbiguous: number;
+  /** Matches on name and number that came from a DIFFERENT set, and were
+   *  therefore not written.
+   *
+   *  The index is keyed on name and collector number without the set, on
+   *  purpose — the two catalogues spell set names differently often enough
+   *  that keying on them would drop most of the table. But a promo bundle
+   *  reprints a card at its ORIGINAL number, so their bundle Haunter
+   *  (103/162) matches our Temporal Forces Haunter (103/162) perfectly, and
+   *  writing that patch puts a bundle's price and printing details on a
+   *  different card. Counted because a number climbing here is how a
+   *  set-naming difference makes itself visible. */
+  skippedSetMismatch?: number;
+  /** A few of those, verbatim, so the difference can be read. */
+  setMismatchSamples?: Array<{ theirs: string; ours: string; card: string }>;
   /** How many of OUR cards were loaded into the match index. Zero here with
    *  a rising cardsSeen is the signature of a broken index, which is
    *  otherwise invisible: every card is "seen" and none can ever match. */
@@ -118,6 +133,8 @@ export function freshSyncState(): SyncState {
     idsFilled: 0,
     detailsFilled: 0,
     skippedAmbiguous: 0,
+    skippedSetMismatch: 0,
+    setMismatchSamples: [],
     indexedCards: 0,
     rateLimited: false,
     budgetPaused: null,
@@ -681,6 +698,36 @@ export async function runPriceSync(
           mine = byKey.get(k);
           if (mine) break;
         }
+
+        // THE SET HAS TO AGREE BEFORE ANYTHING IS WRITTEN.
+        //
+        // The index is name-plus-number with no set in it, deliberately —
+        // their set names come from TCGplayer and ours from pokemontcg.io,
+        // and keying on them would drop most of the catalogue. The cost of
+        // that choice is this: a Trick or Trade bundle reprints a card at
+        // its ORIGINAL collector number, so their bundle Haunter (103/162)
+        // is a perfect match for our Temporal Forces Haunter (103/162), and
+        // this loop would then write the bundle's price, rarity and set size
+        // onto a card that is none of those things. Every run. Silently.
+        //
+        // Skipped rather than added: names that merely disagree in spelling
+        // would otherwise mint a duplicate row for a card we already hold,
+        // and the on-demand search already creates the genuinely-missing
+        // ones. Counted and sampled, because a number climbing here is a
+        // set-naming difference asking to be looked at.
+        if (mine && !setsAgree(mine.set_name, theirs.setName ?? set.name)) {
+          state.skippedSetMismatch = (state.skippedSetMismatch ?? 0) + 1;
+          state.setMismatchSamples ??= [];
+          if (state.setMismatchSamples.length < 25) {
+            state.setMismatchSamples.push({
+              theirs: theirs.setName ?? set.name,
+              ours: mine.set_name ?? "(none)",
+              card: `${theirs.name ?? "?"} #${theirs.cardNumber ?? "?"}`,
+            });
+          }
+          continue;
+        }
+
         if (mine) state.matched += 1;
         if (!mine) {
           // A card we don't hold at all: add it rather than skip it. The
@@ -1071,10 +1118,19 @@ export async function trackerSearchCards(
  *  same rows eventually; this just stops the collection waiting for the sweep
  *  to come round.
  *
- *  Written through gapFill, so it can only ever ADD to what is stored. The
- *  ids are tcgp-<tcgPlayerId> — deterministic, so re-seeing a card updates
- *  its row instead of multiplying it, and distinct from every pokemontcg.io
- *  id, so a real card can never be overwritten by one of these.
+ *  The ids are tcgp-<tcgPlayerId> — deterministic, so re-seeing a card
+ *  updates its row instead of multiplying it, and distinct from every
+ *  pokemontcg.io id, so a card from another source can never be overwritten
+ *  by one of these.
+ *
+ *  Three rules, all of them about not undoing something on the way past.
+ *  gapFill means a field they have nothing for is left alone. Artwork a
+ *  human chose — a locked image, a member's photograph, our mirrored copy —
+ *  is never replaced by their stock URL; this wrote it blind until now,
+ *  which is a member's own photo of their card being swapped for a CDN
+ *  thumbnail by a search they didn't run. And their price map carries the
+ *  ONE printing they priced, so it merges into whatever finishes the row
+ *  already knows instead of becoming the whole map.
  *
  *  Best-effort throughout: this is a bonus on the way past, and a write
  *  failure must not cost the search its results. */
@@ -1083,12 +1139,58 @@ export async function rememberTrackerCards(
   rows: CardSummaryRow[]
 ): Promise<number> {
   if (rows.length === 0) return 0;
+
+  // What we already hold for these ids. One read for the batch — this runs
+  // behind an interactive search, so it can afford a select and cannot
+  // afford a round trip per card.
+  const existing = new Map<string, { image_small: string | null; image_locked: boolean | null; prices: unknown }>();
+  let readOk = false;
+  try {
+    const { data, error } = await admin
+      .from("cards")
+      .select("id, image_small, image_locked, prices")
+      .in("id", rows.map((r) => r.id));
+    readOk = !error;
+    for (const r of (data ?? []) as Array<{
+      id: string;
+      image_small: string | null;
+      image_locked: boolean | null;
+      prices: unknown;
+    }>) {
+      existing.set(r.id, r);
+    }
+  } catch {
+    // No read means no way to know what is protected. Handled below by
+    // refusing to write artwork at all — see the comment there.
+  }
+  // NOT "we found nothing" — a set we've never seen legitimately returns
+  // nothing, and treating that as a failure would mean brand-new cards were
+  // stored without their pictures. Only a failed read is a failed read.
+  const readFailed = !readOk;
+
   let kept = 0;
   for (const row of rows) {
     try {
-      const insertable = gapFill(row as unknown as Record<string, unknown>, {
-        companions: CARD_COMPANIONS,
-      });
+      const held = existing.get(row.id);
+      const record = { ...(row as unknown as Record<string, unknown>) };
+
+      // A row we've never seen takes their picture gladly. A row we hold
+      // keeps its own if a person put it there. And if the read above failed
+      // outright, EVERY existing row is treated as protected — we can't tell
+      // which ones aren't, and the cost of guessing wrong is somebody's
+      // photograph.
+      if (held ? keepsItsImage(held) : readFailed) {
+        delete record.image_small;
+        delete record.image_large;
+      }
+
+      if (held) {
+        const merged = mergePrices(held.prices, record.prices);
+        if (merged) record.prices = merged;
+        else delete record.prices;
+      }
+
+      const insertable = gapFill(record, { companions: CARD_COMPANIONS });
       const { error } = await admin.from("cards").upsert(insertable, { onConflict: "id" });
       if (!error) kept += 1;
     } catch {

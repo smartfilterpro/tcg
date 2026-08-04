@@ -7,6 +7,7 @@ import { priceTrackerEnabled, priceTrackerCard, backgroundBudgetOk } from "@/lib
 import { getBattleDataById } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { mergePrices } from "@/lib/cardWrite";
 
 /** Background price refresher.
  *
@@ -345,7 +346,16 @@ export async function refreshStalePrices(
             price_updated_at: new Date().toISOString(),
           };
           if (nextMarket != null) patch.market_price = nextMarket;
-          if (nextPrices) patch.prices = nextPrices;
+          // MERGED into what the card already holds. Whichever source
+          // answered here lists only the finishes IT knows, and assigning
+          // the map wholesale deletes the rest — so a card priced tonight by
+          // a source that carries Normal alone loses the Reverse Holo price
+          // another source found, and every Reverse Holo in somebody's
+          // collection quietly falls back to the Normal's number.
+          if (nextPrices) {
+            const merged = mergePrices(card.prices, nextPrices);
+            if (merged) patch.prices = merged;
+          }
           const { error } = await admin.from("cards").update(patch).eq("id", card.id);
           if (!error) summary.updated += 1;
         } catch {
