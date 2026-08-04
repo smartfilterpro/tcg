@@ -14,6 +14,7 @@ import {
   canonicalRarity,
   defaultVariantFor,
   itemPrice,
+  variantPrice,
   variantLabel,
   STAMP_VARIANTS,
   type CardSummary,
@@ -309,6 +310,16 @@ export default function CollectionPage({
   }, [filtered]);
 
   /** Every finish of the open card, for the breakdown in the detail view. */
+  /** A collection row's price, and whether it is really THAT finish's.
+   *
+   *  A member's own override is exact by definition — they typed it for this
+   *  row. Otherwise it is the catalogue's per-finish figure when there is
+   *  one, and the card's headline price when there isn't. */
+  const finishPrice = (item: CollectionItem): { value: number | null; exact: boolean } => {
+    if (item.price_override != null) return { value: item.price_override, exact: true };
+    return variantPrice(item.card, item.variant ?? "normal");
+  };
+
   const selectedFinishes = useMemo(() => {
     if (!selected) return [];
     return (items ?? [])
@@ -901,7 +912,7 @@ export default function CollectionPage({
                       <div className="flex flex-wrap gap-1">
                         {selectedFinishes.map((f) => {
                           const on = f.id === selected.id;
-                          const p = itemPrice(f);
+                          const p = finishPrice(f);
                           return (
                             <button
                               key={f.id}
@@ -911,12 +922,23 @@ export default function CollectionPage({
                                   : "bg-white text-slate-600 hover:bg-slate-100"
                               }`}
                               onClick={() => openDetail(f)}
+                              title={
+                                p.value == null || p.exact
+                                  ? undefined
+                                  : "No separate price for this finish yet — showing the card's overall market price."
+                              }
                             >
                               {variantLabel(f.variant ?? "normal")} ×{f.quantity}
-                              {p != null && (
+                              {p.value != null && (
                                 <span className={on ? "opacity-80" : "text-slate-400"}>
                                   {" "}
-                                  ${p.toFixed(2)}
+                                  {/* A tilde where the number is the card's
+                                      overall price rather than this finish's.
+                                      Without it two chips show the identical
+                                      figure and it reads as measured — and a
+                                      reverse holo can trade at several times
+                                      a normal, so that is not a small lie. */}
+                                  {p.exact ? "" : "~"}${p.value.toFixed(2)}
                                 </span>
                               )}
                             </button>
@@ -948,9 +970,16 @@ export default function CollectionPage({
                   {itemPrice(selected) != null ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold text-green-700">
-                        {selected.price_override != null ? "Your value" : "Market"} (
-                        {variantLabel(selected.variant ?? "normal")}): $
-                        {itemPrice(selected)!.toFixed(2)} each
+                        {selected.price_override != null
+                          ? `Your value (${variantLabel(selected.variant ?? "normal")})`
+                          : finishPrice(selected).exact
+                            ? `Market (${variantLabel(selected.variant ?? "normal")})`
+                            : // Naming the finish here stated a measurement the
+                              // app doesn't have: the number is the card's
+                              // headline price, shown because it is the best
+                              // estimate, not because anyone priced this finish.
+                              "Market (all finishes)"}
+                        : ${itemPrice(selected)!.toFixed(2)} each
                       </span>
                       {selected.price_override == null && (
                         <button

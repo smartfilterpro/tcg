@@ -20,6 +20,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getCardById } from "@/lib/pokemontcg";
 import { getTcgdexPriceById, findTcgdexImage } from "@/lib/tcgdex";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
+import { variantKeyFor } from "@/lib/priceTrackerSync";
 import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
 
 /** How long a card must wait between refreshes.
@@ -131,7 +132,24 @@ export async function refreshCard(
       setName: (card.set_name as string | null) ?? null,
       number: (card.number as string | null) ?? null,
     });
-    if (market == null && found.market != null) market = found.market;
+    if (market == null && found.market != null) {
+      market = found.market;
+      // File it under the FINISH it belongs to, merged into whatever map the
+      // card already has.
+      //
+      // Their response carries one price and the printing it describes, and
+      // only the price was being kept. So a card priced by this source ended
+      // up with a headline number and no per-finish map at all — and
+      // priceForVariant falls back to the headline for any finish it can't
+      // find, which is how a Reverse Holo came to display a Normal's price
+      // as though it were its own. One key is not a full map, but a key that
+      // is right beats a fallback that looks right.
+      const key = variantKeyFor(found.printing);
+      if (key) {
+        const existing = (card.prices as Record<string, number | null> | null) ?? {};
+        patch.prices = { ...existing, [key]: found.market };
+      }
+    }
     if (stillNeedsArt && found.image) {
       patch.image_small = found.image;
       patch.image_large = found.image;
