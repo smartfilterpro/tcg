@@ -293,6 +293,71 @@ export async function searchTcgdex(opts: {
     .map(toSummary);
 }
 
+/** Every card in a set, found by (part of) the set's name.
+ *
+ *  The reason this exists: TCGdex carries promo products — Trick or Trade
+ *  bundles, blisters, tins — months before pokemontcg.io catalogues them,
+ *  and those are exactly the sets somebody types a set name to enter. The
+ *  card search here can only filter by name and number, so a set listing had
+ *  no way to reach TCGdex at all and fell back on whichever sources happened
+ *  to have imported the set already.
+ *
+ *  Two requests: find the set, then fetch it whole. The set endpoint returns
+ *  its full card list, so there is no paging to get wrong. */
+export async function tcgdexSetCards(setName: string): Promise<CardSummary[]> {
+  const wanted = setName.trim().toLowerCase();
+  if (!wanted) return [];
+
+  const sets = await get<Array<{ id: string; name?: string }>>(`${BASE}/sets`);
+  if (!Array.isArray(sets)) return [];
+  // Every set whose name contains what was typed. More than one is normal —
+  // "trick or trade" matches the 2022, 2023 and 2024 bundles — and showing
+  // all of them beats guessing which year somebody meant.
+  const matches = sets
+    .filter((s) => (s.name ?? "").toLowerCase().includes(wanted))
+    .slice(0, 4);
+  if (matches.length === 0) return [];
+
+  const detailed = await Promise.all(
+    matches.map((s) =>
+      get<{ cards?: TcgdexBrief[]; name?: string }>(`${BASE}/sets/${encodeURIComponent(s.id)}`)
+    )
+  );
+
+  // The set endpoint's card list is brief — id, localId, name, image — which
+  // is everything a picker row needs. Fetching full detail for a 90-card set
+  // would be 90 requests against a free service for data nobody has asked to
+  // see yet, so the brief is mapped directly and the detail arrives when the
+  // card is actually added.
+  const out: CardSummary[] = [];
+  for (let i = 0; i < detailed.length; i++) {
+    const set = detailed[i];
+    if (!set?.cards) continue;
+    for (const c of set.cards) {
+      out.push({
+        id: `tcgdex-${c.id}`,
+        name: c.name,
+        supertype: null,
+        subtypes: [],
+        types: [],
+        hp: null,
+        number: String(c.localId ?? ""),
+        rarity: null,
+        setId: `tcgdex-${matches[i].id}`,
+        setName: set.name ?? matches[i].name ?? setName,
+        setSeries: null,
+        setPrintedTotal: null,
+        releaseDate: null,
+        imageSmall: c.image ? `${c.image}/low.webp` : null,
+        imageLarge: c.image ? `${c.image}/high.webp` : null,
+        marketPrice: null,
+        prices: null,
+      });
+    }
+  }
+  return out;
+}
+
 /** Artwork for a card we know by name and number rather than by TCGdex id.
  *
  *  The by-id lookup only helps cards that CAME from TCGdex. Most imageless
