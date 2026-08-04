@@ -1085,10 +1085,10 @@ export default function CollectionPage({
               <div className="flex items-center gap-1">
                 <button
                   className="btn text-sm text-slate-600 hover:bg-slate-100"
-                  title="Matched to the wrong card? Search and swap the identification — quantity and notes are kept."
+                  title="Wrong card, or the wrong printing? Search and swap the identification — quantity and notes are kept. Use 'Search every source' in there to find printings the free databases don't list, like the ball-pattern reverse holos."
                   onClick={() => setChangingCard(true)}
                 >
-                  🔁 Change card
+                  🔁 Change card or printing
                 </button>
                 <button
                   className="btn text-sm text-red-600 hover:bg-red-50"

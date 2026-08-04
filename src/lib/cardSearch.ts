@@ -405,7 +405,7 @@ export async function runCardSearch(
       if (opts?.deep && parsed.name) {
         const before = cards.length;
         try {
-          const paid = await trackerSearchCards(parsed.name, parsed.number ?? null);
+          const paid = await trackerSearchCards(parsed.name, parsed.number ?? null, createAdminClient());
           cards.push(...paid.map((r) => rowToSummary(r)));
           note(
             "price tracker (paid)",
