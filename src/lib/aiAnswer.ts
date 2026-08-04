@@ -106,6 +106,40 @@ player saw nothing at all. Keep the deliberation short this time and write
 the reply. A brief, concrete, partial answer is far more useful than a
 perfect one that never gets written.`;
 
+/** What to say on the round where the tools are closed.
+ *
+ *  The loops forbid tool use on their last round so the turn can't end on a
+ *  call nothing will run. Forbidding is not the same as redirecting: a model
+ *  whose plan was "propose the deck edit" and whose only move has just been
+ *  taken away can spend the round thinking about a dead end and stop without
+ *  writing anything — an empty turn, on an ordinary end_turn, which is
+ *  exactly what a player was shown twice in a row. Telling it what to do
+ *  INSTEAD costs one short message and gives the plan somewhere to go. */
+export const FINAL_ROUND_NOTE =
+  "This is the last step of this turn — no more lookups or tools are available, " +
+  "and anything you don't say now the player never sees. Write your answer in " +
+  "plain text using what you already have. If you were about to propose a deck " +
+  "change, describe it in words instead: name the cards in and out and why.";
+
+/** Add the final-round note to a message list, in place.
+ *
+ *  Merged into the trailing user turn rather than appended as a new one. The
+ *  last message before this round is a user turn carrying tool results, and
+ *  two user messages in a row is a shape worth not betting a working chat
+ *  on — a 400 here would break every conversation to fix an empty one. */
+export function addFinalRoundNote(messages: Anthropic.MessageParam[]): void {
+  const last = messages[messages.length - 1];
+  const note = { type: "text" as const, text: FINAL_ROUND_NOTE };
+  if (!last || last.role !== "user") {
+    messages.push({ role: "user", content: [note] });
+    return;
+  }
+  const content = Array.isArray(last.content)
+    ? [...last.content, note]
+    : [{ type: "text" as const, text: String(last.content) }, note];
+  messages[messages.length - 1] = { role: "user", content };
+}
+
 /** Append the nudge to whatever shape the system prompt is in. */
 function withNudge(system: Anthropic.MessageStreamParams["system"]) {
   if (typeof system === "string") return system + BRIEF_NUDGE;
@@ -151,13 +185,33 @@ export async function completeWithRoom(
       .finalMessage();
     await onResponse?.(second);
     if (answerText(second)) return second;
-    // Both attempts silent. Said loudly, because this is the state that
-    // reaches the player as an apology and there is otherwise no trace of
-    // why — and "it did it twice" is itself the useful fact.
+
+    // Third and last: no thinking at all.
+    //
+    // Two silent turns means the deliberation is not merely long, it is
+    // where the whole turn is going — the model reasons, decides, and never
+    // writes. Bounding the effort didn't stop it, so this removes the option
+    // entirely: with thinking disabled the only thing the model can emit is
+    // the answer. It is a worse answer than the one that never arrived, and
+    // an enormously better one than an apology.
+    //
+    // Tools are dropped for the same reason — a tool call here would be
+    // another turn with nothing in it for the player.
     console.error(
-      `ai: STILL no answer from ${params.model} after retry — first: ${answerDiagnosis(first)} · ` +
-        `second: ${answerDiagnosis(second)}`
+      `ai: no answer from ${params.model} twice — first: ${answerDiagnosis(first)} · ` +
+        `second: ${answerDiagnosis(second)}. Trying once more with thinking off.`
     );
+    const { output_config: _dropped, tools: _noTools, tool_choice: _noChoice, ...rest } = params;
+    const third = await client.messages
+      .stream({
+        ...rest,
+        thinking: { type: "disabled" as const },
+        system: withNudge(params.system),
+      })
+      .finalMessage();
+    await onResponse?.(third);
+    if (answerText(third)) return third;
+    console.error(`ai: STILL no answer with thinking off — ${answerDiagnosis(third)}`);
     return first;
   } catch (err) {
     // A retry that fails leaves us exactly where we already were, which is

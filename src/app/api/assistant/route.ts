@@ -13,7 +13,7 @@ import type { DeckEditProposal } from "@/lib/deckEdit";
 import { DECK_EDIT_TOOL, runDeckEditProposal } from "@/lib/deckEditTool";
 import { buildContext } from "@/lib/assistantContext";
 import { ASSISTANT_SYSTEM, OFF_TOPIC_REPLY, isClearlyOffTopic } from "@/lib/assistantScope";
-import { completeWithRoom, answerText, noAnswerReply } from "@/lib/aiAnswer";
+import { completeWithRoom, answerText, noAnswerReply, addFinalRoundNote } from "@/lib/aiAnswer";
 
 export const maxDuration = 120;
 
@@ -435,6 +435,11 @@ async function runChat(opts: {
   // the client can offer it for approval. Nothing has been written.
   let pendingEdit: DeckEditProposal | null = null;
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const finalRound = round === MAX_TOOL_ROUNDS - 1;
+    // Said out loud on the round where the tools close. See FINAL_ROUND_NOTE:
+    // taking the model's next move away without offering another is how a
+    // deck-building question ends in an empty turn.
+    if (finalRound) addFinalRoundNote(messages);
     response = await completeWithRoom(
       client,
       {
@@ -456,7 +461,7 @@ async function runChat(opts: {
         // the one most able to spend the whole budget reasoning and return
         // an empty turn — which reaches the player as an apology for a
         // question that was never the problem.
-        ...(round === MAX_TOOL_ROUNDS - 1
+        ...(finalRound
           ? {
               tool_choice: { type: "none" as const },
               output_config: { effort: "medium" as const },
