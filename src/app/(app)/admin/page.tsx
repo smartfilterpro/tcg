@@ -1336,6 +1336,10 @@ export default function AdminPage() {
             <SealedProbePanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🔎 Why is this set short?</h2>
+            <SetProbePanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🪵 Server log</h2>
             <ServerLogPanel />
           </div>
@@ -3719,6 +3723,148 @@ function ServerLogPanel() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Why a set search returns what it returns.
+ *
+ *  The same checks as scripts/probe-set-search.sh, run from the server. The
+ *  script needs a terminal, curl and jq; this needs a thumb — which matters,
+ *  because the person who needs the answer is usually holding a phone and a
+ *  stack of cards. Asks the sources directly rather than through our own
+ *  search, so the answer is what upstream holds rather than what our code
+ *  made of it. Read-only, free requests. */
+function SetProbePanel() {
+  const [setName, setSetName] = useState("trick or trade");
+  const [card, setCard] = useState("Haunter");
+  const [busy, setBusy] = useState(false);
+  const [out, setOut] = useState<{
+    upstreamSets?: Array<{ id: string; name: string; total?: number; releaseDate?: string }>;
+    setsError?: string | null;
+    attempts?: Array<{
+      query: string;
+      asks: string;
+      ok: boolean;
+      count: number | null;
+      sets?: string[];
+      sample?: string[];
+      error?: string;
+    }>;
+    tcgdex?: { sets: Array<{ id: string; name: string; cards: number }>; cards: string[]; error?: string | null };
+    ourCatalogue?: { count: number; setNames: string[]; sample: string[]; hasCard: boolean | null };
+    notes?: string[];
+    error?: string;
+  } | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setOut(null);
+    try {
+      const res = await fetch(
+        `/api/admin/set-probe?set=${encodeURIComponent(setName)}&card=${encodeURIComponent(card)}`
+      );
+      const json = await res.json();
+      setOut(res.ok ? json : { error: json.error || "Probe failed" });
+    } catch (e) {
+      setOut({ error: e instanceof Error ? e.message : "Probe failed" });
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="m-0 text-xs text-brand-ink4">
+        Asks pokemontcg.io and TCGdex directly what they hold for a set, and compares it with
+        our own catalogue — so &ldquo;the card is missing&rdquo; can be pinned on the right
+        one. Changes nothing.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <input
+          className="input w-full text-xs sm:w-56"
+          placeholder="Set name, or part of it"
+          value={setName}
+          onChange={(e) => setSetName(e.target.value)}
+        />
+        <input
+          className="input w-full text-xs sm:w-36"
+          placeholder="A card that should be in it"
+          value={card}
+          onChange={(e) => setCard(e.target.value)}
+        />
+        <button className="btn-secondary shrink-0 text-xs" disabled={busy} onClick={run}>
+          {busy ? "Asking…" : "Run the check"}
+        </button>
+      </div>
+
+      {out?.error && <p className="m-0 text-xs text-brand-negative">{out.error}</p>}
+
+      {(out?.notes?.length ?? 0) > 0 && (
+        <div className="rounded border border-amber-200 bg-amber-50 p-2 text-[11.5px] leading-snug text-amber-900">
+          {out!.notes!.map((n, i) => (
+            <p key={i} className="m-0 mb-1 last:mb-0">
+              {n}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {out?.upstreamSets && (
+        <div className="text-[11px] text-brand-ink4">
+          <div className="font-semibold text-brand-ink3">
+            pokemontcg.io sets matching &ldquo;{setName}&rdquo;: {out.upstreamSets.length}
+          </div>
+          {out.upstreamSets.map((s) => (
+            <div key={s.id} className="font-mono">
+              {s.name} · {s.total ?? "?"} cards · {s.releaseDate ?? "?"}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {out?.ourCatalogue && (
+        <div className="text-[11px] text-brand-ink4">
+          <span className="font-semibold text-brand-ink3">Our catalogue:</span>{" "}
+          {out.ourCatalogue.count} cards
+          {out.ourCatalogue.hasCard != null &&
+            ` · ${card}: ${out.ourCatalogue.hasCard ? "present" : "MISSING"}`}
+        </div>
+      )}
+
+      {out?.tcgdex && (
+        <div className="text-[11px] text-brand-ink4">
+          <span className="font-semibold text-brand-ink3">TCGdex:</span>{" "}
+          {out.tcgdex.error
+            ? out.tcgdex.error
+            : `${out.tcgdex.sets.length} matching set(s), ${out.tcgdex.cards.length} cards`}
+          {out.tcgdex.sets.map((s) => (
+            <div key={s.id} className="font-mono">
+              {s.name} · {s.cards} cards
+            </div>
+          ))}
+        </div>
+      )}
+
+      {out?.attempts?.map((a, i) => (
+        <details key={i} className="text-[11px] text-brand-ink4">
+          <summary className="cursor-pointer">
+            <span className={a.ok && (a.count ?? 0) > 0 ? "text-brand-positive" : "text-brand-negative"}>
+              {a.ok ? (a.count ?? 0) : "error"}
+            </span>{" "}
+            — <span className="font-mono">{a.query}</span>
+          </summary>
+          <p className="m-0 mt-1">{a.asks}</p>
+          {a.error && <p className="m-0 text-brand-negative">{a.error}</p>}
+          {(a.sets?.length ?? 0) > 0 && (
+            <p className="m-0 mt-1">Sets returned: {a.sets!.join(", ")}</p>
+          )}
+          {(a.sample?.length ?? 0) > 0 && (
+            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-brand-sunken p-2">
+              {a.sample!.join("\n")}
+            </pre>
+          )}
+        </details>
+      ))}
     </div>
   );
 }
