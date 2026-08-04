@@ -18,14 +18,30 @@ export const maxDuration = 120;
 export async function GET(req: Request) {
   try {
     await requireAdmin();
-    const q = new URL(req.url).searchParams.get("q")?.trim();
+    const url = new URL(req.url);
+    const q = url.searchParams.get("q")?.trim();
     if (!q) return NextResponse.json({ error: "Type a search to trace." }, { status: 400 });
 
+    // The probe could only ever trace an ORDINARY search, which meant it
+    // could not trace the one thing being debugged. Asked about 55/217 it
+    // reported "the catalogue already has that collector number — no
+    // external call" and stopped, correctly describing a code path nobody
+    // was asking about: the picker's escalation passes deep=1, and without
+    // it the paid source is never reached, so the stage that would explain
+    // it never appeared.
+    const deep = url.searchParams.get("deep") === "1";
+
     const supabase = await createClient();
-    const { cards, source, trace } = await runCardSearch(supabase, q);
+    const { cards, source, trace } = await runCardSearch(supabase, q, { deep });
 
     // The readings that are easy to miss in a wall of stages.
     const notes: string[] = [];
+    if (!deep) {
+      notes.push(
+        "This traced an ORDINARY search. The paid source is only reached by the picker's " +
+          "\u201cSearch every source\u201d button — tick 'every source' above to trace that instead."
+      );
+    }
     if (!trace.needExternal && !trace.listingSet) {
       notes.push(
         "The external sources were NOT consulted — the catalogue answered on its own. " +
@@ -60,6 +76,7 @@ export async function GET(req: Request) {
     }
 
     return NextResponse.json({
+      deep,
       source,
       resultCount: cards.length,
       results: cards.slice(0, 60).map((c) => `${c.number} ${c.name} [${c.setName ?? "?"}]`),
