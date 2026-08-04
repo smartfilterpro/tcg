@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { DeckCardEntry } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { legalityBriefing } from "@/lib/deckLegality";
-import { completeWithRoom, answerText } from "@/lib/aiAnswer";
+import { completeWithRoom, answerText, noAnswerReply } from "@/lib/aiAnswer";
 
 export const maxDuration = 120;
 
@@ -122,7 +122,7 @@ export async function POST(req: Request) {
     }
     const text = answerText(response);
     return NextResponse.json({
-      answer: text || "I ran out of room thinking about that — try asking again!",
+      answer: text || noAnswerReply(response, "the deck review"),
     });
   } catch (err) {
     if (err instanceof AuthError) {

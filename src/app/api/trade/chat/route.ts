@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 import { itemPrice, variantLabel, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { tradingOff, TRADING_OFF_ERROR } from "@/lib/tradeBoard";
-import { completeWithRoom, answerText } from "@/lib/aiAnswer";
+import { completeWithRoom, answerText, noAnswerReply } from "@/lib/aiAnswer";
 
 export const maxDuration = 120;
 
@@ -197,8 +197,7 @@ export async function POST(req: Request) {
     }
     const text = answerText(response);
     return NextResponse.json({
-      answer:
-        text || "I thought about that one too long and ran out of room — try asking again!",
+      answer: text || noAnswerReply(response, "the trade chat"),
     });
   } catch (err) {
     if (err instanceof AuthError) {

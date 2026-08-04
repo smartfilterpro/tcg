@@ -13,7 +13,7 @@ import type { DeckEditProposal } from "@/lib/deckEdit";
 import { DECK_EDIT_TOOL, runDeckEditProposal } from "@/lib/deckEditTool";
 import { buildContext } from "@/lib/assistantContext";
 import { ASSISTANT_SYSTEM, OFF_TOPIC_REPLY, isClearlyOffTopic } from "@/lib/assistantScope";
-import { completeWithRoom, answerText } from "@/lib/aiAnswer";
+import { completeWithRoom, answerText, noAnswerReply } from "@/lib/aiAnswer";
 
 export const maxDuration = 120;
 
@@ -448,7 +448,20 @@ async function runChat(opts: {
         // The last permitted round forbids another lookup, so the model
         // answers with what it has instead of ending mid-thought on a tool
         // call nothing will ever run.
-        ...(round === MAX_TOOL_ROUNDS - 1 ? { tool_choice: { type: "none" as const } } : {}),
+        //
+        // …and bounds the deliberation, because this is the round that MUST
+        // produce words. By here the lookups are done and the thinking that
+        // mattered has happened; what is left is writing it down. Left
+        // unbounded, the round with the most context in front of it is also
+        // the one most able to spend the whole budget reasoning and return
+        // an empty turn — which reaches the player as an apology for a
+        // question that was never the problem.
+        ...(round === MAX_TOOL_ROUNDS - 1
+          ? {
+              tool_choice: { type: "none" as const },
+              output_config: { effort: "medium" as const },
+            }
+          : {}),
         messages,
       },
       (r) => logAiUsage(supabase, userId, "chat", MODEL, r.usage)
@@ -489,7 +502,7 @@ async function runChat(opts: {
   const refused = response.stop_reason === "refusal";
   const answer = refused
     ? OFF_TOPIC_REPLY
-    : answerText(response) || "I lost my thread there — ask me again?";
+    : answerText(response) || noAnswerReply(response, "the assistant chat");
 
   await save("assistant", answer, refused, pendingEdit ? { deckEdit: pendingEdit } : null);
   return { answer, refused, pendingEdit };
