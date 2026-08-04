@@ -107,12 +107,41 @@ export const VARIANT_LABELS: Record<string, string> = {
   pcStamp: "Pokémon Center Stamp",
   prereleaseStamp: "Prerelease Stamp",
   staffStamp: "Staff Stamp",
+  pokeBall: "Poké Ball pattern",
+  masterBall: "Master Ball pattern",
+  friendBall: "Friend Ball pattern",
 };
 
 /** Stamped versions exist physically but not as separate database entries —
  *  the databases key on set+number, and a stamp doesn't change the number.
  *  We track them as finishes; prices fall back to the unstamped market value. */
 export const STAMP_VARIANTS = ["pcStamp", "prereleaseStamp", "staffStamp"] as const;
+
+/** Reverse holos whose foil carries a repeating ball pattern.
+ *
+ *  Physically a different card and priced as one — a Master Ball Pikachu can
+ *  be worth many times the plain reverse holo — but the collector number is
+ *  identical, so the card databases we read hold ONE entry for all of them.
+ *  TCGplayer splits them into separate products ("Pikachu (Friend Ball)"),
+ *  which is why a search here returns a single result for something that is
+ *  visibly several different cards on their site.
+ *
+ *  Same treatment as the stamps, for the same reason: the databases key on
+ *  set and number, the pattern doesn't change either, so it is recorded as a
+ *  finish on the copy somebody owns. The price falls back to the plain
+ *  printing and is shown as an estimate rather than a measurement — see
+ *  variantPrice — because a fallback dressed as a fact is worse than an
+ *  honest approximation.
+ *
+ *  The list grows: Poké Ball and Master Ball came with Scarlet & Violet,
+ *  Friend Ball with Mega Evolution. Adding one is a line here and a label
+ *  above. */
+export const PATTERN_VARIANTS = ["pokeBall", "masterBall", "friendBall"] as const;
+
+/** Every finish a member can record that no database will ever list for
+ *  them. Offered in the pickers on top of whatever the card's price map
+ *  knows about. */
+export const MANUAL_VARIANTS = [...STAMP_VARIANTS, ...PATTERN_VARIANTS] as const;
 
 export function variantLabel(variant: string): string {
   return (

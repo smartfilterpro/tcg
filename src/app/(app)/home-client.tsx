@@ -16,7 +16,8 @@ import {
   itemPrice,
   variantPrice,
   variantLabel,
-  STAMP_VARIANTS,
+  MANUAL_VARIANTS,
+  PATTERN_VARIANTS,
   type CardSummary,
   type CollectionItem,
 } from "@/lib/types";
@@ -594,6 +595,18 @@ export default function CollectionPage({
                   <option value="prereleaseStamp">Prerelease Stamp</option>
                   <option value="staffStamp">Staff Stamp</option>
                 </optgroup>
+                {/* Ball-pattern reverse holos. The card databases hold ONE
+                    entry for the whole family because the collector number
+                    is the same on all of them, so a search returns a single
+                    result for what TCGplayer splits into several products.
+                    Which one you are holding is a thing only you can see. */}
+                <optgroup label="Ball-pattern reverse holo">
+                  {PATTERN_VARIANTS.map((v) => (
+                    <option key={v} value={v}>
+                      {variantLabel(v)}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             }
           />
@@ -957,7 +970,7 @@ export default function CollectionPage({
                       {[
                         ...new Set([
                           ...availableVariants(selected.card),
-                          ...STAMP_VARIANTS,
+                          ...MANUAL_VARIANTS,
                           selected.variant ?? "normal",
                         ]),
                       ].map((v) => (
