@@ -21,6 +21,7 @@ import { normalizeForSearch } from "@/lib/text";
 import { rowToSummary, type CardSummary, type CardSummaryRow } from "@/lib/types";
 import { trackerSetCards, trackerSearchCards } from "@/lib/priceTrackerSync";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { priceTrackerEnabled, effectiveRemaining } from "@/lib/priceTracker";
 
 /** The primary API has been flaky — an error there must not kill the search,
  *  because our catalogue and the TCGdex fallback can still answer. */
@@ -427,6 +428,24 @@ export async function runCardSearch(
             if (!seed.has(c.name)) seed.set(c.name, c.setName ?? null);
           }
         }
+
+        // Say whether the paid source is even reachable BEFORE reporting
+        // what it returned.
+        //
+        // trackerSearchCards swallows a missing key, an exhausted budget and
+        // a failed request alike, all as an empty list — so "returned
+        // nothing" and "was never asked" looked identical in the trace, and
+        // the question "are we actually pulling from the paid source?" had
+        // no answer anywhere in the app.
+        const budget = effectiveRemaining();
+        note(
+          "paid source",
+          priceTrackerEnabled()
+            ? budget < 500
+              ? `Configured, but only ${budget} credits remain — below the 500 reserve, so it was NOT asked.`
+              : `Configured and asked. ${budget} credits remaining before this search.`
+            : "NOT configured — POKEMONPRICETRACKER_API_KEY is unset, so this source is skipped entirely."
+        );
 
         if (seed.size === 0) {
           note("price tracker (paid)", "Nothing to ask by: no card name in the query and none found locally.");

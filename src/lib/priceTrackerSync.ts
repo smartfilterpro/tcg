@@ -955,12 +955,33 @@ export async function trackerSearchCards(
     // because the local result that prompted the escalation names it. With
     // the set pinned, the fifteen slots hold that set's printings of the
     // card rather than the whole game's near-misses.
-    const json = (await ptFetch("/cards", {
+    const params = {
       search: [wanted, number ?? ""].filter(Boolean).join(" "),
-      ...(setName?.trim() ? { set: setName.trim() } : {}),
       limit: "15",
+    };
+    let json = (await ptFetch("/cards", {
+      ...params,
+      ...(setName?.trim() ? { set: setName.trim() } : {}),
     })) as { data?: TheirCard[] | TheirCard };
-    const list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
+    let list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
+
+    // The set filter is THEIR set name, and ours is somebody else's.
+    //
+    // Pinning the search to a set is the right instinct and it is also how
+    // findCard used to lose cards: `set` is an exact filter on the name
+    // TCGplayer uses, while the name being passed came from our catalogue,
+    // which got it from pokemontcg.io. "Ascended Heroes" against their "ME:
+    // Ascended Heroes" excludes the very card being asked about, and the
+    // answer looks identical to the card not existing.
+    //
+    // So: narrow first, and if that finds nothing, ask again unpinned. The
+    // number check below is what makes the wider question safe — it was the
+    // absence of any check that made a loose search unusable, not the
+    // looseness itself.
+    if (list.length === 0 && setName?.trim()) {
+      json = (await ptFetch("/cards", params)) as { data?: TheirCard[] | TheirCard };
+      list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
+    }
     const out: CardSummaryRow[] = [];
     for (const theirs of list) {
       // A search response names the set but doesn't identify it, so the id
