@@ -92,3 +92,64 @@ export const CARD_COMPANIONS: Record<string, string[]> = {
   market_price: ["price_updated_at"],
   prices: ["price_updated_at"],
 };
+
+/** Is this card's picture one that a source must never replace?
+ *
+ *  Three kinds qualify, and all three exist BECAUSE the stock image was
+ *  wrong, missing, or not the copy we want served:
+ *
+ *    - image_locked: somebody decided, by hand, that this is the picture.
+ *    - /card-photos/: a member photographed their own card.
+ *    - /card-art/: our mirror's copy (migration 037). Overwriting it with the
+ *      source URL silently un-mirrors the card on every re-import.
+ *
+ *  The catalogue import has honoured this from the start. Nothing else did —
+ *  which is the whole reason it lives here now rather than in that one file.
+ *  Any writer that can set image_small has to ask this first. */
+export function keepsItsImage(row: {
+  image_locked?: boolean | null;
+  image_small?: string | null;
+}): boolean {
+  if (row.image_locked === true) return true;
+  const url = row.image_small ?? "";
+  return url.includes("/card-photos/") || url.includes("/card-art/");
+}
+
+/** The per-finish price map to store, given what we hold and what a source
+ *  just said.
+ *
+ *  MERGED, never replaced. The finishes are what make the map worth having —
+ *  a Reverse Holo is not worth what the Normal is — and the sources carry
+ *  different subsets of them: the paid lookup answers with the ONE printing
+ *  it priced, TCGdex with whatever TCGplayer publishes for that card, our
+ *  own dump with something else again. A writer that assigns the map
+ *  wholesale therefore doesn't update the price, it throws away every finish
+ *  the newest source happened not to mention — and the card goes back to
+ *  showing one number against every variant somebody owns, which is the
+ *  complaint this map was added to answer.
+ *
+ *  A null or empty incoming map changes nothing. A null value INSIDE an
+ *  incoming map is "I don't price this finish", not "this finish is
+ *  worthless", so it doesn't overwrite a number we already have.
+ *
+ *  Returns null when there is nothing to write, so callers can skip the
+ *  column entirely rather than writing what is already stored. */
+export function mergePrices(
+  stored: unknown,
+  incoming: unknown
+): Record<string, number | null> | null {
+  const asMap = (v: unknown): Record<string, number | null> =>
+    v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, number | null>) : {};
+  const have = asMap(stored);
+  const next = asMap(incoming);
+  const out: Record<string, number | null> = { ...have };
+  let changed = false;
+  for (const [key, value] of Object.entries(next)) {
+    if (value == null) continue;
+    if (out[key] === value) continue;
+    out[key] = value;
+    changed = true;
+  }
+  if (!changed) return null;
+  return out;
+}

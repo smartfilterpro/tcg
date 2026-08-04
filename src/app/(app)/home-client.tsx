@@ -1104,7 +1104,14 @@ export default function CollectionPage({
 
       {selected && changingCard && (
         <CardPickerModal
-          initialQuery={`${selected.card.name} ${selected.card.number}`}
+          // The NAME only. The collector number was in here too, which is
+          // the one part of the query somebody pressing "Change card" is
+          // most likely to be changing — they are looking at a card filed
+          // under the wrong printing, so pinning the search to that
+          // printing's number narrows it to the very thing they are trying
+          // to get away from. It has to be deleted before the box is usable,
+          // which is a box that arrives broken.
+          initialQuery={selected.card.name}
           candidates={[]}
           onClose={() => setChangingCard(false)}
           onPick={(card) => changeCard(selected, card)}

@@ -3,6 +3,7 @@
 // promos months before pokemontcg.io, so we consult it whenever the primary
 // database returns nothing. Pricing data is spottier, so prices may be null.
 import type { CardSummary } from "./types";
+import { setsAgree } from "./setName";
 
 const BASE = "https://api.tcgdex.net/v2/en";
 
@@ -395,12 +396,14 @@ export async function tcgdexSetCards(setName: string): Promise<CardSummary[]> {
 export async function findTcgdexImage(query: {
   name: string;
   number?: string | null;
+  /** The set OUR card is in. Required in practice — see below. */
+  setName?: string | null;
 }): Promise<string | null> {
   try {
     const hits = await searchTcgdex({
       name: query.name,
       number: query.number ?? undefined,
-      pageSize: 5,
+      pageSize: 8,
     });
     // Prefer a hit whose number matches; a name-only match on a card with
     // dozens of printings is a coin flip, and the wrong art is worse than
@@ -408,8 +411,43 @@ export async function findTcgdexImage(query: {
     const key = (n: string | null | undefined) =>
       (n ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
     const wanted = key(query.number);
-    const exact = wanted ? hits.find((c) => key(c.number) === wanted) : null;
-    const pick = exact ?? (wanted ? null : hits[0]);
+    const byNumber = wanted ? hits.filter((c) => key(c.number) === wanted) : [];
+
+    // AND THE SET, because a name and a number are not a card.
+    //
+    // A promo bundle reprints a card at its ORIGINAL collector number, so
+    // "Haunter #103" is a Temporal Forces card AND a Trick or Trade card,
+    // and this function's answer is written straight into image_small. It
+    // picked whichever the search ranked first. The result is a card in your
+    // binder showing a picture of a different printing — which then looks
+    // like a scanning bug, or a wrong card, and is neither.
+    //
+    // With no set to check against there is nothing to verify a widened
+    // match with, so the number match stands alone exactly as before; every
+    // caller in the app passes one.
+    const wantedSet = query.setName?.trim();
+    // With a number, only cards carrying it are candidates; without one,
+    // everything is, and the set is then the only thing doing the work.
+    const pool = wanted ? byNumber : hits;
+    const pick = wantedSet
+      ? pool.find((c) => setsAgree(c.setName, wantedSet))
+      : (wanted ? byNumber[0] : hits[0]);
+
+    // Said out loud when the set is the ONLY reason a picture was refused.
+    //
+    // This guard trades coverage for correctness, and the coverage it costs
+    // is otherwise invisible: a card simply stays without art and looks like
+    // a card TCGdex doesn't carry. If these lines start naming sets that are
+    // plainly the same set written two ways, the rule needs widening rather
+    // than the cards needing pictures.
+    if (!pick && wantedSet && pool.length > 0) {
+      console.log(
+        `tcgdex art: "${query.name}" #${query.number ?? "?"} — ${pool.length} number match(es), ` +
+          `none from "${wantedSet}" (theirs: ${[...new Set(pool.map((c) => c.setName ?? "?"))]
+            .slice(0, 4)
+            .join(", ")}). No picture taken.`
+      );
+    }
     return pick?.imageLarge ?? pick?.imageSmall ?? null;
   } catch {
     return null;

@@ -2298,6 +2298,8 @@ function PriceSyncPanel() {
       idsFilled: number;
       detailsFilled?: number;
       skippedAmbiguous: number;
+      skippedSetMismatch?: number;
+      setMismatchSamples?: Array<{ theirs: string; ours: string; card: string }>;
       indexedCards: number;
       rateLimited: boolean;
       cardsAdded?: number;
@@ -2423,9 +2425,29 @@ function PriceSyncPanel() {
               </>
             )}
             {(st.skippedAmbiguous ?? 0) > 0 && ` · ${st.skippedAmbiguous} skipped as ambiguous`}
+            {(st.skippedSetMismatch ?? 0) > 0 &&
+              ` · ${(st.skippedSetMismatch ?? 0).toLocaleString()} skipped: same name and number, different set`}
             {(st.idConflicts ?? 0) > 0 &&
               ` · ${st.idConflicts} already claimed by a duplicate row (merge them below)`}
           </p>
+          {/* The guard that stops a promo bundle's price landing on the card
+              it reprints. A handful is the guard working; thousands means
+              the two catalogues name sets differently enough that real
+              updates are being refused. */}
+          {(st.setMismatchSamples?.length ?? 0) > 0 && (
+            <details className="mb-1 text-xs text-brand-ink4">
+              <summary className="cursor-pointer">
+                Matched on name and number but not on set — not written
+              </summary>
+              <div className="mt-1 space-y-0.5 font-mono text-[11px]">
+                {st.setMismatchSamples!.map((s, i) => (
+                  <div key={i}>
+                    {s.card}: theirs &ldquo;{s.theirs}&rdquo; vs ours &ldquo;{s.ours}&rdquo;
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
           {/* Zero matches with cards streaming past is the signature of a
               broken index, and looks identical to "their data is missing"
               unless the index size is on screen. */}

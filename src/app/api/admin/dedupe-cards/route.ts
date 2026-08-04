@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { mergePrices } from "@/lib/cardWrite";
 
 export const maxDuration = 300;
 
@@ -228,7 +229,11 @@ export async function POST(req: Request) {
           if (!survivor.tcgplayer_id && twin.tcgplayer_id) patch.tcgplayer_id = twin.tcgplayer_id;
           if (survivor.market_price == null && twin.market_price != null) {
             patch.market_price = twin.market_price;
-            patch.prices = twin.prices;
+            // Merged: the survivor can hold per-finish prices without a
+            // headline number, and assigning the twin's map over them would
+            // lose finishes on the way to gaining a price.
+            const merged = mergePrices(survivor.prices, twin.prices);
+            if (merged) patch.prices = merged;
           }
           if (!survivor.image_small && !survivor.image_locked && twin.image_small) {
             patch.image_small = twin.image_small;

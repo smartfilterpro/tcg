@@ -16,7 +16,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { searchAllCardsPage } from "@/lib/pokemontcg";
 import { summaryToRow } from "@/lib/types";
-import { emptyColumns, CARD_COMPANIONS } from "@/lib/cardWrite";
+import { emptyColumns, CARD_COMPANIONS, keepsItsImage, mergePrices } from "@/lib/cardWrite";
 import { setsAgree } from "@/lib/setName";
 
 export const IMPORT_STATE_KEY = "card_import";
@@ -102,14 +102,10 @@ async function writeImportState(admin: SupabaseClient, state: CardImportState): 
  *  silently replace every member's photo with the stock image, and the photos
  *  exist precisely because the stock image was missing or wrong. Uploads live
  *  in the card-photos storage bucket, which is what makes them recognisable. */
-function keepsItsImage(row: { image_locked?: boolean | null; image_small?: string | null }): boolean {
-  if (row.image_locked === true) return true;
-  const url = row.image_small ?? "";
-  // card-photos: a member's upload. card-art: the mirror's copy (037) —
-  // overwriting it with the source's URL would silently un-mirror the card
-  // on every re-import.
-  return url.includes("/card-photos/") || url.includes("/card-art/");
-}
+// keepsItsImage moved to cardWrite.ts. It was written here, honoured here,
+// and honoured NOWHERE else — the paid lookup's own writer would happily
+// upsert a stock URL over a member's photograph. A rule that lives inside
+// one writer protects one writer.
 
 /** Fold tcgp- duplicate rows into the real cards just imported.
  *
@@ -196,7 +192,7 @@ async function mergeTcgpDuplicates(
     // 1. Anything the twin knows that the real row doesn't.
     const { data: real } = await admin
       .from("cards")
-      .select("tcgplayer_id, market_price, image_small, image_locked")
+      .select("tcgplayer_id, market_price, prices, image_small, image_locked")
       .eq("id", realId)
       .maybeSingle();
     if (!real) continue;
@@ -204,7 +200,8 @@ async function mergeTcgpDuplicates(
     if (!real.tcgplayer_id && twin.tcgplayer_id) patch.tcgplayer_id = twin.tcgplayer_id;
     if (real.market_price == null && twin.market_price != null) {
       patch.market_price = twin.market_price;
-      patch.prices = twin.prices;
+      const merged = mergePrices(real.prices, twin.prices);
+      if (merged) patch.prices = merged;
     }
     if (!real.image_small && !real.image_locked && twin.image_small) {
       patch.image_small = twin.image_small;
@@ -289,19 +286,23 @@ async function importOnePage(
 
   const rows = cards.map(summaryToRow);
 
-  // Which of these we already hold, and which of those keep their artwork.
+  // Which of these we already hold, which of those keep their artwork, and
+  // what per-finish prices they already carry.
   const { data: existing } = await admin
     .from("cards")
-    .select("id, image_small, image_locked")
+    .select("id, image_small, image_locked, prices")
     .in(
       "id",
       rows.map((r) => r.id)
     );
-  const protectedIds = new Set(
-    ((existing ?? []) as Array<{ id: string; image_small: string | null; image_locked: boolean | null }>)
-      .filter(keepsItsImage)
-      .map((r) => r.id)
-  );
+  const existingRows = (existing ?? []) as Array<{
+    id: string;
+    image_small: string | null;
+    image_locked: boolean | null;
+    prices: unknown;
+  }>;
+  const protectedIds = new Set(existingRows.filter(keepsItsImage).map((r) => r.id));
+  const storedPrices = new Map(existingRows.map((r) => [r.id, r.prices]));
 
   // Upserted in groups, because a single call can't vary its columns per row
   // and PostgREST's ON CONFLICT only assigns the columns it was given.
@@ -323,6 +324,16 @@ async function importOnePage(
   let imagesKept = 0;
   let pricesKept = 0;
   for (const row of rows) {
+    // The price map merges with what the row already holds rather than
+    // replacing it. pokemontcg.io lists the finishes TCGplayer publishes for
+    // that card and no others, so assigning it wholesale drops a finish
+    // TCGdex or the paid lookup found — and a Reverse Holo falls back to the
+    // Normal's price, which is the exact display bug the map exists to stop.
+    if (storedPrices.has(row.id)) {
+      const merged = mergePrices(storedPrices.get(row.id), row.prices);
+      if (merged) (row as unknown as Record<string, unknown>).prices = merged;
+    }
+
     const omit = emptyColumns(row as unknown as Record<string, unknown>, {
       companions: CARD_COMPANIONS,
       force: keepsImage(row) ? ["image_small", "image_large"] : [],

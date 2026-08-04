@@ -24,6 +24,7 @@
 
 import { gunzipSync } from "node:zlib";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { mergePrices } from "@/lib/cardWrite";
 
 export type DumpType = "cards" | "printings" | "sealed" | "ebay" | "population";
 
@@ -263,18 +264,34 @@ export async function applyCardDump(
   }));
   for (let i = 0; i < updates.length; i += 200) {
     const batch = updates.slice(i, i + 200);
+
+    // What these cards already hold, so neither column can be written with
+    // less than it replaces.
+    const stored = new Map<string, unknown>();
+    const { data: held } = await admin
+      .from("cards")
+      .select("id, prices")
+      .in("id", batch.map((u) => u.id));
+    for (const r of (held ?? []) as Array<{ id: string; prices: unknown }>) {
+      stored.set(r.id, r.prices);
+    }
+
     // Per-row updates, not an upsert: an upsert would need every NOT NULL
     // column and would happily insert a half-empty card row for anything
     // whose id drifted.
     for (const u of batch) {
-      const { error } = await admin
-        .from("cards")
-        .update({
-          market_price: u.market_price,
-          prices: u.prices,
-          price_updated_at: u.price_updated_at,
-        })
-        .eq("id", u.id);
+      const patch: Record<string, unknown> = { price_updated_at: u.price_updated_at };
+      // A dump row can qualify on its per-printing prices alone, with no
+      // headline market number — and writing that null would clear a price
+      // another source found. The filter above already refuses rows with
+      // neither; this refuses the HALF that is missing.
+      if (u.market_price != null) patch.market_price = u.market_price;
+      // Their printings, merged over ours. The dump covers what TCGplayer
+      // sells; a finish TCGdex priced and they don't list is still true.
+      const merged = mergePrices(stored.get(u.id), u.prices);
+      if (merged) patch.prices = merged;
+      if (Object.keys(patch).length === 1) continue; // stamp only — nothing learned
+      const { error } = await admin.from("cards").update(patch).eq("id", u.id);
       if (!error) updated += 1;
     }
   }

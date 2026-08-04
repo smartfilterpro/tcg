@@ -179,6 +179,10 @@ export default function CardPickerModal({
   const [deep, setDeep] = useState(false);
   const [deepDone, setDeepDone] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Has a search actually run? "No results" is a claim about a search, and
+   *  before this is true no search has happened — see the mount effect. */
+  const [searched, setSearched] = useState(candidates.length > 0);
+  const openedWith = useRef(false);
 
   async function runSearch(text: string, everySource = false) {
     const term = text.trim();
@@ -199,9 +203,27 @@ export default function CardPickerModal({
       }
       if (everySource) setDeepDone(true);
     } finally {
+      setSearched(true);
       setLoading(false);
     }
   }
+
+  // Search what the picker was OPENED with.
+  //
+  // The debounce below deliberately skips the initial query, so a picker
+  // opened with text in the box and no candidates to show sat there
+  // displaying "No results — try a different name or number" without ever
+  // having asked. Opening "Change card" on a Haunter did exactly that: the
+  // box said "Haunter 103", the panel said no results, and the only way
+  // forward was to edit a query that had never been run. Candidates supplied
+  // by the caller (the scan picker) are already the answer, so those are
+  // left alone.
+  useEffect(() => {
+    if (openedWith.current) return;
+    openedWith.current = true;
+    if (initialQuery.trim() && candidates.length === 0) void runSearch(initialQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!query.trim() || query === initialQuery) return;
@@ -299,7 +321,7 @@ export default function CardPickerModal({
               </div>
             </button>
           ))}
-          {!loading && results.length === 0 && !!query.trim() && (
+          {!loading && searched && results.length === 0 && !!query.trim() && (
             <p className="col-span-full py-6 text-center text-sm text-slate-400">
               No results — try a different name or number.
             </p>

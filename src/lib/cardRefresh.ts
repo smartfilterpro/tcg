@@ -24,6 +24,7 @@ import { readCardTextOnce } from "@/lib/cardText";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { variantKeyFor } from "@/lib/priceTrackerSync";
 import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
+import { mergePrices } from "@/lib/cardWrite";
 
 /** How long a card must wait between refreshes.
  *
@@ -102,17 +103,25 @@ export async function refreshCard(
 
   // 1. The card's own database.
   let market: number | null = null;
+  // Every price map here MERGES with the one the card already carries. A
+  // source lists the finishes it knows about and no others, so assigning the
+  // map wholesale is a delete dressed as an update — the finish another
+  // source found stops existing, and the variant that owned it falls back to
+  // showing the Normal's price.
+  const withStored = (incoming: unknown) => mergePrices(card.prices, incoming);
   if (id.startsWith("tcgdex-")) {
     // The per-finish map comes back too. It is in the same request either
     // way, and dropping it was why a TCGdex-sourced card showed one price
     // against every finish it is owned in.
     const fresh = await getTcgdexPricesById(id);
     market = fresh.market;
-    if (fresh.prices) patch.prices = fresh.prices;
+    const merged = withStored(fresh.prices);
+    if (merged) patch.prices = merged;
   } else if (!id.startsWith("custom-")) {
     const fresh = await getCardById(id);
     if (fresh?.marketPrice != null) market = fresh.marketPrice;
-    if (fresh?.prices) patch.prices = fresh.prices;
+    const merged = withStored(fresh?.prices);
+    if (merged) patch.prices = merged;
   }
 
   // 2. Free art, if the picture is missing. Admin-locked art and member
@@ -124,6 +133,7 @@ export async function refreshCard(
     const free = await findTcgdexImage({
       name: card.name as string,
       number: (card.number as string | null) ?? null,
+      setName: (card.set_name as string | null) ?? null,
     });
     if (free) {
       patch.image_small = free;
@@ -153,8 +163,11 @@ export async function refreshCard(
       // is right beats a fallback that looks right.
       const key = variantKeyFor(found.printing);
       if (key) {
-        const existing = (card.prices as Record<string, number | null> | null) ?? {};
-        patch.prices = { ...existing, [key]: found.market };
+        // Merged against the patch if one was already built this run, so a
+        // free source's map and the paid source's single finish both survive
+        // instead of the second one replacing the first.
+        const merged = mergePrices(patch.prices ?? card.prices, { [key]: found.market });
+        if (merged) patch.prices = merged;
       }
     }
     if (stillNeedsArt && found.image) {
