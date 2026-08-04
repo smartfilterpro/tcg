@@ -936,77 +936,81 @@ export async function trackerSearchCards(
   setName?: string | null,
   /** When given, everything found is KEPT. See rememberTrackerCards. */
   admin?: SupabaseClient
-): Promise<CardSummaryRow[]> {
+): Promise<{ cards: CardSummaryRow[]; log: string }> {
   const wanted = name.trim();
-  if (!wanted || !priceTrackerEnabled()) return [];
-  if (effectiveRemaining() < 500) return [];
+  if (!priceTrackerEnabled()) return { cards: [], log: "no API key configured" };
+  if (!wanted) return { cards: [], log: "no card name to search by" };
+  const budget = effectiveRemaining();
+  if (budget < 500) return { cards: [], log: `only ${budget} credits left, below the 500 reserve` };
 
-  try {
-    // NARROWED by set, and CHECKED by number afterwards.
-    //
-    // Their search spans several fields at once and ranks loosely: asking
-    // for "Pikachu 55" came back with a Blitzle numbered 053 and a Voltorb
-    // from Battle Academy, while the Pikachu printing actually being looked
-    // for — same name, same number, same set — did not appear at all inside
-    // the fifteen results. A loose search plus a small limit means the right
-    // answer can lose its place to noise.
-    //
-    // The set is the strongest constraint available and we usually know it,
-    // because the local result that prompted the escalation names it. With
-    // the set pinned, the fifteen slots hold that set's printings of the
-    // card rather than the whole game's near-misses.
-    const params = {
-      search: [wanted, number ?? ""].filter(Boolean).join(" "),
-      limit: "15",
+  const plain = (n: string | null | undefined) =>
+    (n ?? "").split("/")[0].trim().toLowerCase().replace(/^0+(?=\d)/, "");
+  const target = plain(number);
+
+  const params = {
+    search: [wanted, number ?? ""].filter(Boolean).join(" "),
+    limit: "15",
+  };
+
+  /** One query, mapped and number-checked. */
+  const ask = async (extra: Record<string, string>) => {
+    const json = (await ptFetch("/cards", { ...params, ...extra })) as {
+      data?: TheirCard[] | TheirCard;
     };
-    let json = (await ptFetch("/cards", {
-      ...params,
-      ...(setName?.trim() ? { set: setName.trim() } : {}),
-    })) as { data?: TheirCard[] | TheirCard };
-    let list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
-
-    // The set filter is THEIR set name, and ours is somebody else's.
-    //
-    // Pinning the search to a set is the right instinct and it is also how
-    // findCard used to lose cards: `set` is an exact filter on the name
-    // TCGplayer uses, while the name being passed came from our catalogue,
-    // which got it from pokemontcg.io. "Ascended Heroes" against their "ME:
-    // Ascended Heroes" excludes the very card being asked about, and the
-    // answer looks identical to the card not existing.
-    //
-    // So: narrow first, and if that finds nothing, ask again unpinned. The
-    // number check below is what makes the wider question safe — it was the
-    // absence of any check that made a loose search unusable, not the
-    // looseness itself.
-    if (list.length === 0 && setName?.trim()) {
-      json = (await ptFetch("/cards", params)) as { data?: TheirCard[] | TheirCard };
-      list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
-    }
-    const out: CardSummaryRow[] = [];
+    const list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
+    const rows: CardSummaryRow[] = [];
     for (const theirs of list) {
-      // A search response names the set but doesn't identify it, so the id
-      // is derived from the name. A literal "search" for every card would
-      // file half the catalogue under one imaginary set — these rows are
-      // KEPT now, so the id has to mean something a month from today.
       const theirSetName = theirs.setName ?? "";
       const setId =
         theirSetName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "unknown";
       const row = rowFromTheirs(theirs, { id: setId, name: theirSetName });
-      if (row) out.push(row as unknown as CardSummaryRow);
+      if (row) rows.push(row as unknown as CardSummaryRow);
+    }
+    // Whatever their ranking made of it, a result has to BE the card asked
+    // about. 055/217, 55 and 055 agree; 053 does not.
+    const checked = target ? rows.filter((r) => plain(r.number) === target) : rows;
+    return { raw: list.length, checked };
+  };
+
+  try {
+    const notes: string[] = [];
+    const pinned = setName?.trim();
+
+    // Narrow by set first. It is the strongest constraint available, and
+    // their search ranks loosely enough that fifteen unpinned slots fill
+    // with near-misses before the right card gets one.
+    let result = pinned ? await ask({ set: pinned }) : await ask({});
+    notes.push(
+      pinned
+        ? `set="${pinned}": ${result.raw} returned, ${result.checked.length} matched #${target || "any"}`
+        : `no set filter: ${result.raw} returned, ${result.checked.length} matched #${target || "any"}`
+    );
+
+    // RETRY ON THE CHECKED COUNT, not the raw one.
+    //
+    // The first version retried only when the pinned query returned nothing
+    // at all — so a query that came back full of the right SET but the wrong
+    // cards never fell through, the number check emptied it, and the answer
+    // was a confident zero. And the pin itself is unreliable: `set` is an
+    // exact filter on THEIR set name while ours came from pokemontcg.io, and
+    // "Ascended Heroes" against their "ME: Ascended Heroes" excludes the very
+    // card being asked for.
+    //
+    // The number check is what makes the wider question safe, so ask it.
+    if (pinned && result.checked.length === 0) {
+      result = await ask({});
+      notes.push(
+        `retried without the set filter: ${result.raw} returned, ${result.checked.length} matched #${target || "any"}`
+      );
     }
 
-    // Whatever their ranking made of it, a result has to BE the card that
-    // was asked about. Compared on the part before the slash with leading
-    // zeros dropped, so 055/217, 55 and 055 agree — and 053 does not.
-    const plain = (n: string | null | undefined) =>
-      (n ?? "").split("/")[0].trim().toLowerCase().replace(/^0+(?=\d)/, "");
-    const target = plain(number);
-    const checked = target ? out.filter((r) => plain(r.number) === target) : out;
-
-    if (admin) await rememberTrackerCards(admin, checked);
-    return checked;
-  } catch {
-    return [];
+    if (admin) await rememberTrackerCards(admin, result.checked);
+    return { cards: result.checked, log: notes.join("; ") };
+  } catch (err) {
+    return {
+      cards: [],
+      log: `request failed: ${err instanceof Error ? err.message : "unknown error"}`,
+    };
   }
 }
 

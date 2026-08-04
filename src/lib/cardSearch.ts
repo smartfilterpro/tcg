@@ -459,10 +459,14 @@ export async function runCardSearch(
               setName,
               createAdminClient()
             );
-            cards.push(...paid.map((r) => rowToSummary(r)));
+            cards.push(...paid.cards.map((r) => rowToSummary(r)));
             note(
               `price tracker (paid) — ${name}${setName ? ` in ${setName}` : ""}`,
-              "Separate products per printing. The ball patterns, the stamped versions and anything else they name apart live here, each with its own price.",
+              // Their own account of the exchange, verbatim. A bare zero here
+              // could mean a missing key, a spent budget, a rejected request,
+              // nothing returned, or everything returned and rejected by the
+              // number check — five different problems wearing one number.
+              `${paid.log}. Separate products per printing: the ball patterns, the stamped versions and anything else they name apart live here, each with its own price.`,
               cards.slice(before)
             );
           } catch {
