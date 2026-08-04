@@ -16,7 +16,8 @@ import {
   itemPrice,
   variantPrice,
   variantLabel,
-  STAMP_VARIANTS,
+  manualVariantsFor,
+  PATTERN_VARIANTS,
   type CardSummary,
   type CollectionItem,
 } from "@/lib/types";
@@ -594,6 +595,18 @@ export default function CollectionPage({
                   <option value="prereleaseStamp">Prerelease Stamp</option>
                   <option value="staffStamp">Staff Stamp</option>
                 </optgroup>
+                {/* Ball-pattern reverse holos. The card databases hold ONE
+                    entry for the whole family because the collector number
+                    is the same on all of them, so a search returns a single
+                    result for what TCGplayer splits into several products.
+                    Which one you are holding is a thing only you can see. */}
+                <optgroup label="Ball-pattern reverse holo">
+                  {PATTERN_VARIANTS.map((v) => (
+                    <option key={v} value={v}>
+                      {variantLabel(v)}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             }
           />
@@ -957,7 +970,7 @@ export default function CollectionPage({
                       {[
                         ...new Set([
                           ...availableVariants(selected.card),
-                          ...STAMP_VARIANTS,
+                          ...manualVariantsFor(selected.card),
                           selected.variant ?? "normal",
                         ]),
                       ].map((v) => (
@@ -1072,10 +1085,10 @@ export default function CollectionPage({
               <div className="flex items-center gap-1">
                 <button
                   className="btn text-sm text-slate-600 hover:bg-slate-100"
-                  title="Matched to the wrong card? Search and swap the identification — quantity and notes are kept."
+                  title="Wrong card, or the wrong printing? Search and swap the identification — quantity and notes are kept. Use 'Search every source' in there to find printings the free databases don't list, like the ball-pattern reverse holos."
                   onClick={() => setChangingCard(true)}
                 >
-                  🔁 Change card
+                  🔁 Change card or printing
                 </button>
                 <button
                   className="btn text-sm text-red-600 hover:bg-red-50"

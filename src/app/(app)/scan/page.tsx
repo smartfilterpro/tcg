@@ -12,6 +12,7 @@ import {
   defaultVariantFor,
   variantLabel,
   STAMP_VARIANTS,
+  PATTERN_VARIANTS,
   type CardSummary,
   type ScanMatch,
 } from "@/lib/types";
@@ -638,6 +639,17 @@ export default function ScanPage() {
                         ))}
                         <optgroup label="Stamped versions">
                           {STAMP_VARIANTS.map((v) => (
+                            <option key={v} value={v}>
+                              {variantLabel(v)}
+                            </option>
+                          ))}
+                        </optgroup>
+                        {/* Ball-pattern reverse holos. The databases hold one
+                            entry for the whole family because the collector
+                            number is identical, so they can only be recorded
+                            here — by the one person who can see which it is. */}
+                        <optgroup label="Ball-pattern reverse holo">
+                          {PATTERN_VARIANTS.map((v) => (
                             <option key={v} value={v}>
                               {variantLabel(v)}
                             </option>

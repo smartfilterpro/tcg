@@ -14,8 +14,12 @@ export async function GET(req: Request) {
     const q = new URL(req.url).searchParams.get("q")?.trim();
     if (!q) return NextResponse.json({ cards: [] });
 
+    // deep=1 — the picker's "search every source" escalation. Off by
+    // default because it spends paid credits, and a debounced search box
+    // would spend them a keystroke at a time.
+    const deep = new URL(req.url).searchParams.get("deep") === "1";
     const supabase = await createClient();
-    const { cards, source } = await runCardSearch(supabase, q);
+    const { cards, source } = await runCardSearch(supabase, q, { deep });
     // The trace is deliberately dropped here. It is a few kilobytes of
     // explanation on every keystroke of a debounced search box, and the
     // picker has no use for it.

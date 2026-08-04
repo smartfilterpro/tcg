@@ -19,7 +19,7 @@ import { searchTcgdex, tcgdexSetCards } from "@/lib/tcgdex";
 import { parseCardQuery, type ParsedCardQuery } from "@/lib/cardQuery";
 import { normalizeForSearch } from "@/lib/text";
 import { rowToSummary, type CardSummary, type CardSummaryRow } from "@/lib/types";
-import { trackerSetCards } from "@/lib/priceTrackerSync";
+import { trackerSetCards, trackerSearchCards } from "@/lib/priceTrackerSync";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /** The primary API has been flaky — an error there must not kill the search,
@@ -181,7 +181,20 @@ export interface SearchOutcome {
 /** Search every source for a typed query, and record how it got there. */
 export async function runCardSearch(
   supabase: SupabaseClient,
-  q: string
+  q: string,
+  opts?: {
+    /** Ask EVERY source, including the paid one, whatever the catalogue
+     *  already returned.
+     *
+     *  Normal searches stop at the catalogue once it has answered, which is
+     *  right for the common case and wrong for the one that keeps coming up:
+     *  a printing the catalogue hasn't got. TCGplayer splits ball-pattern
+     *  reverse holos into separate products — "Pikachu (Friend Ball)" — and
+     *  names them distinctly enough that they survive as separate cards, but
+     *  only the paid source knows them. This is billed, so it happens when
+     *  somebody asks rather than on every keystroke. */
+    deep?: boolean;
+  }
 ): Promise<SearchOutcome> {
   const label = (c: CardSummary) => `${c.number} ${c.name} [${c.setName ?? "?"}]`;
   const stages: SearchStage[] = [];
@@ -216,7 +229,9 @@ export async function runCardSearch(
     // contains one. "We hold some of this set" says nothing about whether we
     // hold all of it, and the merge below folds the duplicates anyway.
     const listingSet = !!parsed.setName && !parsed.name && !parsed.number;
-    const needExternal = listingSet
+    const needExternal = opts?.deep
+      ? true
+      : listingSet
       ? true
       : parsed.setName
         ? local.length === 0
@@ -384,6 +399,24 @@ export async function runCardSearch(
         });
         cards.push(...alt);
       }
+      // The paid source, by name, only when asked for. Its parenthetical
+      // product names are the whole point: they are what separates a Friend
+      // Ball printing from the plain one, and no free database carries them.
+      if (opts?.deep && parsed.name) {
+        const before = cards.length;
+        try {
+          const paid = await trackerSearchCards(parsed.name, parsed.number ?? null, createAdminClient());
+          cards.push(...paid.map((r) => rowToSummary(r)));
+          note(
+            "price tracker (paid)",
+            "Asked by name because this was a deep search. Separate products per printing — the ball patterns live here.",
+            cards.slice(before)
+          );
+        } catch {
+          note("price tracker (paid)", "Unavailable — no key, no budget, or the call failed.");
+        }
+      }
+
       if (cards.length > 0) source = local.length > 0 ? "mixed" : "external";
     }
 

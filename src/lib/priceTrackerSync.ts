@@ -908,6 +908,93 @@ export async function trackerSetCards(
     }
   }
 
+  // Kept, for the same reason a searched card is: the credits are spent
+  // either way, and a set nobody else can supply should only be bought once.
+  await rememberTrackerCards(admin, out);
+
   setCardsCache.set(wanted, { at: Date.now(), cards: out });
   return out;
+}
+
+/** Search the PAID source by card name, keeping every printing it returns.
+ *
+ *  TCGplayer treats a ball-pattern reverse holo as its own product —
+ *  "Pikachu (Friend Ball)" beside plain "Pikachu" — and that parenthetical
+ *  survives rowFromTheirs intact, so each comes back as a distinct card
+ *  rather than being folded into one. The free databases hold a single entry
+ *  for the whole family, which is why a search that only reaches them shows
+ *  one result for something that is visibly several cards.
+ *
+ *  Billed at the requested limit, so fifteen credits a call. Deliberately
+ *  NOT part of an ordinary search: it runs when somebody asks for it, having
+ *  looked at a short list and judged it wrong. */
+export async function trackerSearchCards(
+  name: string,
+  number?: string | null,
+  /** When given, everything found is KEPT. See rememberTrackerCards. */
+  admin?: SupabaseClient
+): Promise<CardSummaryRow[]> {
+  const wanted = name.trim();
+  if (!wanted || !priceTrackerEnabled()) return [];
+  if (effectiveRemaining() < 500) return [];
+
+  try {
+    const json = (await ptFetch("/cards", {
+      search: [wanted, number ?? ""].filter(Boolean).join(" "),
+      limit: "15",
+    })) as { data?: TheirCard[] | TheirCard };
+    const list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
+    const out: CardSummaryRow[] = [];
+    for (const theirs of list) {
+      // A search response names the set but doesn't identify it, so the id
+      // is derived from the name. A literal "search" for every card would
+      // file half the catalogue under one imaginary set — these rows are
+      // KEPT now, so the id has to mean something a month from today.
+      const setName = theirs.setName ?? "";
+      const setId = setName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "unknown";
+      const row = rowFromTheirs(theirs, { id: setId, name: setName });
+      if (row) out.push(row as unknown as CardSummaryRow);
+    }
+    if (admin) await rememberTrackerCards(admin, out);
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Keep what a paid lookup found, so nobody pays for it twice.
+ *
+ *  This is what turns one person's escalated search into everybody's ordinary
+ *  one. A printing the free databases don't carry — a Friend Ball reverse
+ *  holo, a Pokémon Center stamp, a promo bundle card — costs credits to
+ *  discover and nothing to keep, and once it is a row in the catalogue every
+ *  later search finds it instantly and for free. The sync would create the
+ *  same rows eventually; this just stops the collection waiting for the sweep
+ *  to come round.
+ *
+ *  Written through gapFill, so it can only ever ADD to what is stored. The
+ *  ids are tcgp-<tcgPlayerId> — deterministic, so re-seeing a card updates
+ *  its row instead of multiplying it, and distinct from every pokemontcg.io
+ *  id, so a real card can never be overwritten by one of these.
+ *
+ *  Best-effort throughout: this is a bonus on the way past, and a write
+ *  failure must not cost the search its results. */
+export async function rememberTrackerCards(
+  admin: SupabaseClient,
+  rows: CardSummaryRow[]
+): Promise<number> {
+  if (rows.length === 0) return 0;
+  let kept = 0;
+  for (const row of rows) {
+    try {
+      const insertable = gapFill(row as unknown as Record<string, unknown>, {
+        companions: CARD_COMPANIONS,
+      });
+      const { error } = await admin.from("cards").upsert(insertable, { onConflict: "id" });
+      if (!error) kept += 1;
+    } catch {
+      // One row that won't store is not a reason to lose the rest.
+    }
+  }
+  return kept;
 }
