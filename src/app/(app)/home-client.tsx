@@ -16,7 +16,7 @@ import {
   itemPrice,
   variantPrice,
   variantLabel,
-  MANUAL_VARIANTS,
+  manualVariantsFor,
   PATTERN_VARIANTS,
   type CardSummary,
   type CollectionItem,
@@ -970,7 +970,7 @@ export default function CollectionPage({
                       {[
                         ...new Set([
                           ...availableVariants(selected.card),
-                          ...MANUAL_VARIANTS,
+                          ...manualVariantsFor(selected.card),
                           selected.variant ?? "normal",
                         ]),
                       ].map((v) => (

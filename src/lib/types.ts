@@ -126,12 +126,13 @@ export const STAMP_VARIANTS = ["pcStamp", "prereleaseStamp", "staffStamp"] as co
  *  which is why a search here returns a single result for something that is
  *  visibly several different cards on their site.
  *
- *  Same treatment as the stamps, for the same reason: the databases key on
- *  set and number, the pattern doesn't change either, so it is recorded as a
- *  finish on the copy somebody owns. The price falls back to the plain
- *  printing and is shown as an estimate rather than a measurement — see
- *  variantPrice — because a fallback dressed as a fact is worse than an
- *  honest approximation.
+ *  THE FALLBACK, not the good path. When the paid source's own row for the
+ *  printing exists — "Pikachu (Friend Ball)", carrying that product's real
+ *  market price — picking THAT is strictly better, and a deep search will
+ *  find and keep it. These finishes are for printings no source lists at
+ *  all: the price falls back to the plain card and is shown as an estimate
+ *  rather than a measurement (see variantPrice), because a fallback dressed
+ *  as a fact is worse than an honest approximation.
  *
  *  The list grows: Poké Ball and Master Ball came with Scarlet & Violet,
  *  Friend Ball with Mega Evolution. Adding one is a line here and a label
@@ -142,6 +143,29 @@ export const PATTERN_VARIANTS = ["pokeBall", "masterBall", "friendBall"] as cons
  *  them. Offered in the pickers on top of whatever the card's price map
  *  knows about. */
 export const MANUAL_VARIANTS = [...STAMP_VARIANTS, ...PATTERN_VARIANTS] as const;
+
+/** Is this card row ALREADY a specific printing in its own right?
+ *
+ *  The paid source sells each one as its own product and names it so —
+ *  "Pikachu (Friend Ball)", "N's Zekrom (Pokémon Center)" — and those rows
+ *  carry that printing's real price rather than the plain card's. When one
+ *  exists, picking it is strictly better than recording a finish against the
+ *  plain card, because the finish has no price of its own.
+ *
+ *  So the manual finishes are hidden on a row that is already one of them.
+ *  Offering "Friend Ball pattern" on a card called "Pikachu (Friend Ball)"
+ *  invites a copy filed as a pattern of a pattern, which is both wrong and
+ *  worth less than what it actually is. */
+export function isSpecificPrinting(name: string): boolean {
+  return /\((?:friend|master|pok[eé]|great|ultra|premier|luxury|heal|dive|dusk|quick|timer|net|nest|repeat)\s*ball|\(pok[eé]mon center|\(prerelease|\(staff\b/i.test(
+    name
+  );
+}
+
+/** The finishes worth offering for this card. */
+export function manualVariantsFor(card: { name: string }): string[] {
+  return isSpecificPrinting(card.name) ? [] : [...MANUAL_VARIANTS];
+}
 
 export function variantLabel(variant: string): string {
   return (
