@@ -19,6 +19,8 @@ import { searchTcgdex, tcgdexSetCards } from "@/lib/tcgdex";
 import { parseCardQuery, type ParsedCardQuery } from "@/lib/cardQuery";
 import { normalizeForSearch } from "@/lib/text";
 import { rowToSummary, type CardSummary, type CardSummaryRow } from "@/lib/types";
+import { trackerSetCards } from "@/lib/priceTrackerSync";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 /** The primary API has been flaky — an error there must not kill the search,
  *  because our catalogue and the TCGdex fallback can still answer. */
@@ -343,10 +345,33 @@ export async function runCardSearch(
       // other two came back empty would miss the common case, which is a set
       // that is PARTLY known to them and complete here.
       if (listingSet && parsed.setName) {
-        const before = cards.length;
+        const afterPt = cards.length;
         note("pokemontcg.io", "Set listing.", cards);
         cards.push(...(await tcgdexSetCards(parsed.setName)));
-        note("tcgdex", "Set listing.", cards.slice(before));
+        const afterDex = cards.length;
+        note("tcgdex", "Set listing.", cards.slice(afterPt));
+
+        // The PAID source, last, and only for a set listing.
+        //
+        // Some sets exist nowhere else. "Trick or Trade BOOster Bundle 2024"
+        // returns zero sets from pokemontcg.io and zero from TCGdex, while
+        // our own catalogue holds eighteen of its cards — because the paid
+        // sync created them as it walked. TCGplayer knows that product;
+        // the two free databases do not catalogue promo bundles at all.
+        // Leaving it out meant a listing that looked like the set is
+        // eighteen cards long.
+        //
+        // Last because it is billed, and only for a listing because that is
+        // the query where a missing card is the whole answer. The lookup
+        // itself resolves the set id from a list the sync already paid for,
+        // and caches the cards for an hour.
+        try {
+          const paid = await trackerSetCards(createAdminClient(), parsed.setName);
+          cards.push(...paid.map((r) => rowToSummary(r)));
+          note("price tracker (paid)", "Set listing — the source of last resort.", cards.slice(afterDex));
+        } catch {
+          note("price tracker (paid)", "Unavailable — no key, no budget, or the call failed.");
+        }
       }
 
       // TCGdex usually has new sets/promos months earlier — consult it when

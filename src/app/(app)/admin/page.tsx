@@ -3981,7 +3981,7 @@ function SetProbePanel() {
         <details key={i} className="text-[11px] text-brand-ink4">
           <summary className="cursor-pointer">
             <span className={a.ok && (a.count ?? 0) > 0 ? "text-brand-positive" : "text-brand-negative"}>
-              {a.ok ? (a.count ?? 0) : "error"}
+              {a.ok ? (a.count ?? 0) : (a.error ?? "error")}
             </span>{" "}
             — <span className="font-mono">{a.query}</span>
           </summary>

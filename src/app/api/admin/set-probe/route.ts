@@ -51,7 +51,17 @@ async function ptCards(query: string, asks: string, pageSize = 250): Promise<Att
       signal: AbortSignal.timeout(25_000),
     });
     if (!res.ok) {
-      return { query, asks, ok: false, count: null, error: `HTTP ${res.status}` };
+      // The body, not just the number. Two of these came back as a bare
+      // "error" in the panel and there was no way to tell a rejected query
+      // from a rate limit — which are opposite problems with opposite fixes.
+      const body = (await res.text().catch(() => "")).trim().slice(0, 200);
+      return {
+        query,
+        asks,
+        ok: false,
+        count: null,
+        error: `HTTP ${res.status}${body ? ` — ${body}` : " (no body)"}`,
+      };
     }
     const json = (await res.json()) as {
       data?: Array<{ name: string; number: string; set?: { name?: string } }>;
