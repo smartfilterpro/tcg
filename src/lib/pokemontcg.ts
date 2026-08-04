@@ -273,6 +273,28 @@ function esc(v: string): string {
   return v.replace(/["\\]/g, "");
 }
 
+/** A set-name clause the search engine will actually expand.
+ *
+ *  This used to be `set.name:"<name>*"` — a quoted phrase with a trailing
+ *  wildcard. Lucene does not expand wildcards inside quotes: the asterisk is
+ *  matched as a literal character, so the clause looked for a set whose name
+ *  ends in "*" and found nothing, every time. A search for "trick or trade"
+ *  therefore never reached "Trick or Trade BOOster Bundle 2024" and the whole
+ *  external half of a set listing silently returned empty.
+ *
+ *  Unquoted, one wildcard term per word, ANDed by the engine's default. That
+ *  matches any set carrying all of the words — which is what somebody typing
+ *  part of a set name means — and it still works for the one-word promo codes
+ *  ("SVP") this was originally written for. */
+export function setNameClause(setName: string): string {
+  const tokens = esc(setName)
+    .toLowerCase()
+    .split(/[^a-z0-9é]+/i)
+    .filter((t) => t.length > 0);
+  if (tokens.length === 0) return `set.name:${esc(setName)}*`;
+  return tokens.map((t) => `set.name:${t}*`).join(" ");
+}
+
 /** Punctuation-heavy names, keyed by their punctuation-stripped lowercase
  *  form → the exact database spelling. */
 const NAME_ALIASES: Record<string, string> = {
@@ -434,7 +456,7 @@ export async function searchCards(opts: {
   }
   if (opts.printedTotal)
     clauses.push(`set.printedTotal:${esc(opts.printedTotal).replace(/^0+(?=\d)/, "")}`);
-  if (opts.setName) clauses.push(`set.name:"${esc(opts.setName)}*"`);
+  if (opts.setName) clauses.push(setNameClause(opts.setName));
   if (clauses.length === 0) return [];
   const cards = await apiGet("/cards", {
     q: clauses.join(" "),

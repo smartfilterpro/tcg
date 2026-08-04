@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { searchCards, numberKey, cleanCardName, numberVariants } from "@/lib/pokemontcg";
-import { searchTcgdex } from "@/lib/tcgdex";
+import { searchTcgdex, tcgdexSetCards } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
 import { parseCardQuery, type ParsedCardQuery } from "@/lib/cardQuery";
 import { normalizeForSearch } from "@/lib/text";
@@ -255,9 +255,20 @@ export async function GET(req: Request) {
         }
       }
 
+      // Listing a set asks TCGdex too, always.
+      //
+      // Promo products — Trick or Trade bundles, blisters, tins — land there
+      // months before pokemontcg.io catalogues them, and they are exactly
+      // the sets somebody types a set name to enter. Asking only when the
+      // other two came back empty would miss the common case, which is a set
+      // that is PARTLY known to them and complete here.
+      if (listingSet && parsed.setName) {
+        cards.push(...(await tcgdexSetCards(parsed.setName)));
+      }
+
       // TCGdex usually has new sets/promos months earlier — consult it when
       // nothing yet carries the number that was searched for.
-      if ((local.length === 0 && cards.length === 0) || !hasWantedNumber([...local, ...cards])) {
+      if (!listingSet && ((local.length === 0 && cards.length === 0) || !hasWantedNumber([...local, ...cards]))) {
         const alt = await searchTcgdex({
           name: parsed.name ? cleanCardName(parsed.name) : undefined,
           number: parsed.number,
@@ -272,8 +283,15 @@ export async function GET(req: Request) {
     // prices), and twins folded: the same physical card can arrive from two
     // sources under different ids AND different zero-paddings.
     const seen = new Set<string>();
+    // Set name is part of the twin key normally — the same card in two sets
+    // is two cards — but NOT when a single set is being listed. The three
+    // sources spell a promo bundle differently ("Trick or Trade BOOster
+    // Bundle 2024" against TCGdex's shorter name), so including it there
+    // would fold nothing and show every card two or three times.
     const twin = (c: CardSummary) =>
-      `${normalizeForSearch(c.name)}|${numberKey(c.number)}|${(c.setName ?? "").toLowerCase()}`;
+      listingSet
+        ? `${normalizeForSearch(c.name)}|${numberKey(c.number)}`
+        : `${normalizeForSearch(c.name)}|${numberKey(c.number)}|${(c.setName ?? "").toLowerCase()}`;
     const merged: CardSummary[] = [];
     for (const c of [...local, ...cards]) {
       const t = twin(c);
