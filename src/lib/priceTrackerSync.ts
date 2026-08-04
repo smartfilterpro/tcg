@@ -931,6 +931,9 @@ export async function trackerSetCards(
 export async function trackerSearchCards(
   name: string,
   number?: string | null,
+  /** The set the card is known to be in. Narrows a search that is otherwise
+   *  far too loose — see below. */
+  setName?: string | null,
   /** When given, everything found is KEPT. See rememberTrackerCards. */
   admin?: SupabaseClient
 ): Promise<CardSummaryRow[]> {
@@ -939,8 +942,22 @@ export async function trackerSearchCards(
   if (effectiveRemaining() < 500) return [];
 
   try {
+    // NARROWED by set, and CHECKED by number afterwards.
+    //
+    // Their search spans several fields at once and ranks loosely: asking
+    // for "Pikachu 55" came back with a Blitzle numbered 053 and a Voltorb
+    // from Battle Academy, while the Pikachu printing actually being looked
+    // for — same name, same number, same set — did not appear at all inside
+    // the fifteen results. A loose search plus a small limit means the right
+    // answer can lose its place to noise.
+    //
+    // The set is the strongest constraint available and we usually know it,
+    // because the local result that prompted the escalation names it. With
+    // the set pinned, the fifteen slots hold that set's printings of the
+    // card rather than the whole game's near-misses.
     const json = (await ptFetch("/cards", {
       search: [wanted, number ?? ""].filter(Boolean).join(" "),
+      ...(setName?.trim() ? { set: setName.trim() } : {}),
       limit: "15",
     })) as { data?: TheirCard[] | TheirCard };
     const list = Array.isArray(json.data) ? json.data : json.data ? [json.data] : [];
@@ -950,13 +967,23 @@ export async function trackerSearchCards(
       // is derived from the name. A literal "search" for every card would
       // file half the catalogue under one imaginary set — these rows are
       // KEPT now, so the id has to mean something a month from today.
-      const setName = theirs.setName ?? "";
-      const setId = setName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "unknown";
-      const row = rowFromTheirs(theirs, { id: setId, name: setName });
+      const theirSetName = theirs.setName ?? "";
+      const setId =
+        theirSetName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "unknown";
+      const row = rowFromTheirs(theirs, { id: setId, name: theirSetName });
       if (row) out.push(row as unknown as CardSummaryRow);
     }
-    if (admin) await rememberTrackerCards(admin, out);
-    return out;
+
+    // Whatever their ranking made of it, a result has to BE the card that
+    // was asked about. Compared on the part before the slash with leading
+    // zeros dropped, so 055/217, 55 and 055 agree — and 053 does not.
+    const plain = (n: string | null | undefined) =>
+      (n ?? "").split("/")[0].trim().toLowerCase().replace(/^0+(?=\d)/, "");
+    const target = plain(number);
+    const checked = target ? out.filter((r) => plain(r.number) === target) : out;
+
+    if (admin) await rememberTrackerCards(admin, checked);
+    return checked;
   } catch {
     return [];
   }

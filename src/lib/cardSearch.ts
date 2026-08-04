@@ -415,24 +415,34 @@ export async function runCardSearch(
         //
         // Two names at most. One number can be several cards across sets,
         // and this is billed per call.
-        const names = parsed.name
-          ? [parsed.name]
-          : [...new Set([...local, ...cards].map((c) => c.name))].slice(0, 2);
+        // The SET comes from the local hit too, and matters as much as the
+        // name. Their search ranks loosely across several fields, so an
+        // unpinned "Pikachu 55" came back with a Blitzle and a Voltorb while
+        // the printing being asked about never made the fifteen results.
+        const seed = new Map<string, string | null>();
+        if (parsed.name) seed.set(parsed.name, parsed.setName ?? null);
+        else {
+          for (const c of [...local, ...cards]) {
+            if (seed.size >= 2) break;
+            if (!seed.has(c.name)) seed.set(c.name, c.setName ?? null);
+          }
+        }
 
-        if (names.length === 0) {
+        if (seed.size === 0) {
           note("price tracker (paid)", "Nothing to ask by: no card name in the query and none found locally.");
         }
-        for (const name of names) {
+        for (const [name, setName] of seed) {
           const before = cards.length;
           try {
             const paid = await trackerSearchCards(
               name,
               parsed.number ?? null,
+              setName,
               createAdminClient()
             );
             cards.push(...paid.map((r) => rowToSummary(r)));
             note(
-              `price tracker (paid) — ${name}`,
+              `price tracker (paid) — ${name}${setName ? ` in ${setName}` : ""}`,
               "Separate products per printing. The ball patterns, the stamped versions and anything else they name apart live here, each with its own price.",
               cards.slice(before)
             );
