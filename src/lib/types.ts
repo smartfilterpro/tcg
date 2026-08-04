@@ -102,6 +102,10 @@ export interface CardSummaryRow {
   price_updated_at: string | null;
   /** How the card plays. Only after migration 019. */
   battle_data?: unknown;
+  /** Failed attempts to read the text off the card's picture, and when the
+   *  last one was. Only after migration 050 — absent means never tried. */
+  text_attempts?: number | null;
+  text_failed_at?: string | null;
 }
 
 // ===== Variant (finish) helpers =====

@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, AuthError } from "@/lib/auth";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
+import { ensureCardText } from "@/lib/cardText";
 
 export const maxDuration = 60;
 
@@ -107,14 +108,9 @@ export async function GET(req: Request) {
       for (const row of missing.slice(0, 10)) {
         const id = row.id as string;
         try {
-          const bd = id.startsWith("tcgdex-")
-            ? await getTcgdexBattleDataById(id)
-            : id.startsWith("custom-")
-              ? null
-              : await getBattleDataById(id);
+          const bd = await ensureCardText(admin, row as Parameters<typeof ensureCardText>[1]);
           if (!bd) continue;
           row.battle_data = bd;
-          await admin.from("cards").update({ battle_data: bd }).eq("id", id).then(() => {});
         } catch {
           // A card database being down costs this card's text, nothing more.
         }
