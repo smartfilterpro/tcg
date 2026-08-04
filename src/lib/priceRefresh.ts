@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getCardById } from "@/lib/pokemontcg";
 import { getTcgdexPricesById, findTcgdexImage } from "@/lib/tcgdex";
 import { poketraceEnabled, searchPoketraceCard, getPoketracePrices } from "@/lib/poketrace";
-import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
+import { priceTrackerEnabled, priceTrackerCard, backgroundBudgetOk } from "@/lib/priceTracker";
 import { getBattleDataById } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { fetchAllRows } from "@/lib/fetchAll";
@@ -273,7 +273,11 @@ export async function refreshStalePrices(
           }
           const stillNeedsArt = needsArt && !freeArt;
 
-          if ((nextMarket == null || stillNeedsArt) && priceTrackerEnabled()) {
+          // The reserve applies here. This is a background sweep of up to
+          // 400 cards an hour, each one a paid lookup — left unchecked it
+          // eats exactly the credits held back so that somebody pressing a
+          // button gets an answer.
+          if ((nextMarket == null || stillNeedsArt) && priceTrackerEnabled() && backgroundBudgetOk()) {
             const found = await priceTrackerCard({
               name: card.name as string,
               setName: (card.set_name as string | null) ?? null,

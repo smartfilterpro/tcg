@@ -110,6 +110,25 @@ export function budgetState(): {
  *  about its own accounting.
  *
  *  Callers should prefer this over `cap - used` for exactly that reason. */
+/** Credits held back from the BACKGROUND jobs for interactive use.
+ *
+ *  The nightly sweep will happily spend a whole day's allowance in one run —
+ *  that is what it is for — and it already stops at this floor. Nothing else
+ *  did. The hourly price refresh calls the paid source once per unpriced
+ *  card with no ceiling at all, so it drained the reserve the sweep had
+ *  carefully left, and by the afternoon a member pressing "search every
+ *  source" got a confident empty answer with no way to tell that credits
+ *  were the reason.
+ *
+ *  Background work stops here. Anything a person is waiting on may spend
+ *  below it: that is the whole point of holding it back. */
+export const BACKGROUND_RESERVE = 2000;
+
+/** May a background job spend a credit right now? */
+export function backgroundBudgetOk(): boolean {
+  return effectiveRemaining() > BACKGROUND_RESERVE;
+}
+
 export function effectiveRemaining(): number {
   const state = budgetState();
   return state.remainingUpstream ?? Math.max(0, state.cap - state.used);
