@@ -11,14 +11,16 @@
 //   1. the card's own database (pokemontcg.io, or TCGdex for tcgdex- ids)
 //   2. TCGdex art, free, for a missing picture
 //   3. the paid tracker, for whatever is still missing after that
+//   4. the card's own picture, read once, for text no database carries
 //
 // It never blanks anything. A source with no answer leaves the existing
 // value alone, because an empty field is worse than a stale one and a member
 // pressing Refresh is not asking to lose data.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getCardById } from "@/lib/pokemontcg";
-import { getTcgdexPricesById, findTcgdexImage } from "@/lib/tcgdex";
+import { getCardById, getBattleDataById } from "@/lib/pokemontcg";
+import { getTcgdexPricesById, findTcgdexImage, getTcgdexBattleDataById } from "@/lib/tcgdex";
+import { readCardTextOnce } from "@/lib/cardText";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { variantKeyFor } from "@/lib/priceTrackerSync";
 import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
@@ -160,6 +162,35 @@ export async function refreshCard(
       patch.image_large = found.image;
     }
     tcgPlayerId = found.tcgPlayerId;
+  }
+
+  // 4. What the card DOES, if we don't already hold it.
+  //
+  // "Refresh" meant price and picture, which is two thirds of what makes a
+  // card usable — the deck builder, the battle referee and the assistant all
+  // read the printed text, and a card with none of it is the one that keeps
+  // being asked about. Same ladder as everything else: the card's own
+  // database first, then its picture, and whatever is found is written once
+  // and kept.
+  if ("battle_data" in card && card.battle_data == null && !id.startsWith("custom-")) {
+    try {
+      const text = id.startsWith("tcgdex-")
+        ? await getTcgdexBattleDataById(id)
+        : await getBattleDataById(id);
+      if (text) patch.battle_data = text;
+      else {
+        const read = await readCardTextOnce(
+          admin,
+          card as unknown as Parameters<typeof readCardTextOnce>[1],
+          null
+        );
+        // readCardTextOnce writes battle_data itself, so this only mirrors
+        // the result into the patch for the read-back below.
+        if (read) patch.battle_data = read;
+      }
+    } catch {
+      // The refresh still did its price and picture job.
+    }
   }
 
   if (market != null) patch.market_price = market;

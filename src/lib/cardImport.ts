@@ -124,13 +124,15 @@ function keepsItsImage(row: { image_locked?: boolean | null; image_small?: strin
  */
 async function mergeTcgpDuplicates(
   admin: SupabaseClient,
-  pageRows: Array<{ id: string; name: string; number: string }>
+  pageRows: Array<{ id: string; name: string; number: string; set_name?: string | null }>
 ): Promise<void> {
   const names = [...new Set(pageRows.map((r) => r.name))];
   if (names.length === 0) return;
   const { data: twins } = await admin
     .from("cards")
-    .select("id, name, number, tcgplayer_id, market_price, prices, image_small")
+    // The whole row: it may be deleted below, and a deletion with no record
+    // of what was deleted is not something that can be undone.
+    .select("*")
     .like("id", "tcgp-%")
     .in("name", names);
   if (!twins || twins.length === 0) return;
@@ -158,15 +160,43 @@ async function mergeTcgpDuplicates(
       .replace(/\s*[-–—]\s*#?\d+\s*(?:\/\s*\w+)?\s*$/, "")
       .trim()
       .toLowerCase();
+  // THE SET HAS TO AGREE, and this function shipped without checking it.
+  //
+  // Name plus number is not a card's identity across sets. A Trick or Trade
+  // bundle is full of reprints that keep the ORIGINAL card's collector
+  // number — its Haunter is printed 103/162, exactly like the Temporal
+  // Forces Haunter it reprints — so the two matched on every field this
+  // looked at, and the bundle card was folded into Temporal Forces and
+  // deleted. Somebody's Haunter changed set, changed price, and the row that
+  // said what they actually owned was gone.
+  //
+  // Compared loosely on purpose. The twin's set name comes from TCGplayer
+  // and the survivor's from pokemontcg.io, and they disagree in wording —
+  // "SV: Paldea Evolved" against "Paldea Evolved" — so containment either
+  // way counts as agreement while two unrelated names do not. When either
+  // side has no set name at all the merge is REFUSED rather than assumed:
+  // a duplicate row costs storage and is fixable by hand, and a wrong
+  // deletion costs somebody's card.
+  const setKey = (n: string | null | undefined) =>
+    (n ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const setsAgree = (a: string | null | undefined, b: string | null | undefined) => {
+    const x = setKey(a);
+    const y = setKey(b);
+    if (!x || !y) return false;
+    return x === y || x.includes(y) || y.includes(x);
+  };
+
   const realByKey = new Map(
-    pageRows.map((r) => [`${nameKey(r.name)}|${numKey(r.number)}`, r.id])
+    pageRows.map((r) => [`${nameKey(r.name)}|${numKey(r.number)}`, r])
   );
 
   for (const twin of twins) {
-    const realId = realByKey.get(
+    const real0 = realByKey.get(
       `${nameKey(twin.name as string)}|${numKey(twin.number as string)}`
     );
-    if (!realId || realId === twin.id) continue;
+    if (!real0 || real0.id === twin.id) continue;
+    if (!setsAgree(twin.set_name as string | null, real0.set_name)) continue;
+    const realId = real0.id;
 
     // 1. Anything the twin knows that the real row doesn't.
     const { data: real } = await admin
@@ -196,12 +226,16 @@ async function mergeTcgpDuplicates(
       .select("id, user_id, variant, quantity")
       .eq("card_id", twin.id);
     let stranded = 0;
+    const moved: Array<Record<string, unknown>> = [];
     for (const item of items ?? []) {
       const { error: moveErr } = await admin
         .from("collection_items")
         .update({ card_id: realId })
         .eq("id", item.id);
-      if (!moveErr) continue;
+      if (!moveErr) {
+        moved.push({ ...item, how: "repointed" });
+        continue;
+      }
       // They own the card under both ids: add the twin's copies to the real
       // row's entry, then drop the twin's entry.
       const { data: existing } = await admin
@@ -217,6 +251,7 @@ async function mergeTcgpDuplicates(
           .update({ quantity: (existing.quantity as number) + (item.quantity as number) })
           .eq("id", existing.id);
         if (!qtyErr) {
+          moved.push({ ...item, how: "folded", intoId: existing.id });
           await admin.from("collection_items").delete().eq("id", item.id).then(() => {});
           continue;
         }
@@ -226,7 +261,23 @@ async function mergeTcgpDuplicates(
 
     // 3. The twin goes only when nothing points at it — card_id cascades on
     // delete, so a premature delete destroys collection entries.
+    //
+    // Recorded before it goes. The admin dedupe tool has written to
+    // card_merges since migration 047 so its merges can be reviewed and
+    // undone; this path deletes rows automatically, on every imported page,
+    // with nobody watching — which is the one that most needed a record and
+    // was the one without it.
     if (stranded === 0) {
+      await admin
+        .from("card_merges")
+        .insert({
+          source: "import",
+          survivor_id: realId,
+          twin_id: twin.id,
+          twin,
+          items: moved,
+        })
+        .then(() => {});
       await admin.from("cards").delete().eq("id", twin.id).then(() => {});
     }
   }

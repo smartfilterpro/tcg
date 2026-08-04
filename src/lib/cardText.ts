@@ -22,7 +22,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { logAiUsage } from "@/lib/usage";
-import type { CardBattleData } from "@/lib/pokemontcg";
+import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
+import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 
 const CARD_READ_SCHEMA = {
   type: "object",
@@ -206,4 +207,91 @@ export async function readCardTextOnce(
   }
 
   return bd;
+}
+
+/** Make sure a card has its printed text, spending as little as possible.
+ *
+ *  ONE ladder, in one place, because six call sites were each climbing their
+ *  own version of it:
+ *
+ *    1. what we already hold — no request at all
+ *    2. the card's own free database (pokemontcg.io, or TCGdex by id)
+ *    3. its picture, read once, only when the caller allows it
+ *
+ *  Step 1 is the point. Every caller already checked battle_data before
+ *  fetching, so a card we hold has never cost a request — but each of them
+ *  re-implemented that check, and only the two newest remembered a FAILURE.
+ *  So a card the free databases don't carry was re-requested on every deck
+ *  build and every card-detail view, for ever, at no charge but no benefit
+ *  either. Recording the miss is what turns a permanent gap into one lookup.
+ *
+ *  `allowVision` is off by default and deliberately so: a deck build warms
+ *  150 cards at once, and a paid read each would be an expensive way to
+ *  discover that a source is thin. Interactive callers, asking about one
+ *  card somebody named, opt in.
+ */
+export async function ensureCardText(
+  admin: SupabaseClient,
+  card: {
+    id: string;
+    battle_data?: unknown;
+    image_large?: string | null;
+    image_small?: string | null;
+    text_attempts?: number | null;
+    text_failed_at?: string | null;
+  },
+  opts?: { allowVision?: boolean; userId?: string | null }
+): Promise<CardBattleData | null> {
+  // 1. Ours.
+  if (card.battle_data) return card.battle_data as CardBattleData;
+
+  const id = card.id;
+  if (id.startsWith("custom-")) {
+    // A photo-scanned card has no database entry anywhere; its picture is
+    // the only source there has ever been.
+    return opts?.allowVision ? readCardTextOnce(admin, card, opts?.userId ?? null) : null;
+  }
+
+  // Nothing to gain from asking again inside the cool-off.
+  const attempts = card.text_attempts ?? 0;
+  if (attempts >= MAX_TEXT_ATTEMPTS) {
+    const failedAt = card.text_failed_at ? Date.parse(card.text_failed_at) : 0;
+    if (Number.isFinite(failedAt) && Date.now() - failedAt < TEXT_COOL_OFF_MS) return null;
+  }
+
+  // 2. The card's own database — free.
+  let bd: CardBattleData | null = null;
+  try {
+    bd = id.startsWith("tcgdex-")
+      ? await getTcgdexBattleDataById(id)
+      : await getBattleDataById(id);
+  } catch {
+    bd = null;
+  }
+
+  if (bd) {
+    try {
+      await admin
+        .from("cards")
+        .update({ battle_data: bd, text_attempts: 0, text_failed_at: null })
+        .eq("id", id);
+    } catch {
+      await admin.from("cards").update({ battle_data: bd }).eq("id", id).then(() => {});
+    }
+    return bd;
+  }
+
+  // 3. The picture, if this caller is one that should pay for it.
+  if (opts?.allowVision) return readCardTextOnce(admin, card, opts?.userId ?? null);
+
+  // Remember the free miss, so the next build doesn't repeat it.
+  try {
+    await admin
+      .from("cards")
+      .update({ text_attempts: attempts + 1, text_failed_at: new Date().toISOString() })
+      .eq("id", id);
+  } catch {
+    // Migration 050 hasn't run — the lookup still works, it just forgets.
+  }
+  return null;
 }

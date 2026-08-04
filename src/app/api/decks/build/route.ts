@@ -6,6 +6,7 @@ import { anthropic, MODEL } from "@/lib/anthropic";
 import { requireUser, AuthError } from "@/lib/auth";
 import { searchCards, getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
+import { ensureCardText } from "@/lib/cardText";
 import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
 import { analyzeDeck, analysisSummary, type DeckMathEntry } from "@/lib/deckMath";
@@ -263,6 +264,8 @@ export async function POST(req: Request) {
         rarity: string | null;
         set: string;
         bd: CardBattleData | null;
+    textAttempts?: number | null;
+    textFailedAt?: string | null;
       }
     >();
     for (const i of items ?? []) {
@@ -283,6 +286,8 @@ export async function POST(req: Request) {
           rarity: c.rarity,
           set: c.set_name,
           bd: c.battle_data ?? null,
+          textAttempts: c.text_attempts ?? null,
+          textFailedAt: c.text_failed_at ?? null,
         });
       }
     }
@@ -342,12 +347,16 @@ export async function POST(req: Request) {
         for (let i = 0; i < needsText.length; i += 6) {
           await Promise.all(
             needsText.slice(i, i + 6).map(async (c) => {
-              c.bd = c.id.startsWith("tcgdex-")
-                ? await getTcgdexBattleDataById(c.id)
-                : await getBattleDataById(c.id);
-              if (c.bd) {
-                await admin.from("cards").update({ battle_data: c.bd }).eq("id", c.id).then(() => {});
-              }
+              // Held text first, then the free database, and the miss is
+              // remembered — a card pokemontcg.io doesn't carry was being
+              // re-requested on every build for ever. No vision here: 150
+              // paid reads is an expensive way to learn a source is thin.
+              c.bd = await ensureCardText(admin, {
+                id: c.id,
+                battle_data: c.bd,
+                text_attempts: c.textAttempts,
+                text_failed_at: c.textFailedAt,
+              });
             })
           );
         }

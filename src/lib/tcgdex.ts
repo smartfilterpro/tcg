@@ -139,7 +139,12 @@ function extractTcgdexPrice(pricing: Record<string, unknown> | undefined): numbe
 }
 
 function toSummary(card: TcgdexCard): CardSummary {
-  const price = extractTcgdexPrice(card.pricing);
+  // The whole pricing block, not just the headline. tcgdexPrices already
+  // maps every finish TCGdex publishes onto the keys the app prices by; this
+  // was calling the headline-only helper and then hard-coding prices: null
+  // beside a comment saying TCGdex has no per-finish data. It does — that
+  // comment predated the extractor and outlived the fact.
+  const { market: price, prices } = tcgdexPrices(card.pricing);
   // Build subtypes from TCGdex's structured fields so Basic/evolution and
   // Supporter/Item/Stadium detection works the same as primary-DB cards.
   const subtypes: string[] = [];
@@ -165,7 +170,13 @@ function toSummary(card: TcgdexCard): CardSummary {
     imageSmall: card.image ? `${card.image}/low.webp` : null,
     imageLarge: card.image ? `${card.image}/high.webp` : null,
     marketPrice: price,
-    prices: null, // TCGdex doesn't give reliable per-finish prices
+    prices,
+    // And what the card DOES, from the record already in hand. Every TCGdex
+    // detail response carries attacks, abilities, effect text, weakness,
+    // resistance, retreat, stage and legality; keeping them here means the
+    // card arrives complete instead of being fetched again later for the
+    // half that was thrown away.
+    battleData: tcgdexBattleData(card),
   };
 }
 
@@ -206,12 +217,19 @@ export async function getTcgdexImageById(
 /** Combat/battle data for a TCGdex-sourced card ("tcgdex-" id prefix) —
  *  same shape the primary database produces, so referee-mode attack
  *  buttons, HP, stages, and card text work for new-set cards too. */
-export async function getTcgdexBattleDataById(
-  prefixedId: string
-): Promise<import("./pokemontcg").CardBattleData | null> {
-  const id = prefixedId.replace(/^tcgdex-/, "");
-  const card = await get<TcgdexCard>(`${BASE}/cards/${encodeURIComponent(id)}`);
-  if (!card || !card.name) return null;
+/** A TCGdex card record, converted to the shape the app stores.
+ *
+ *  Split out of getTcgdexBattleDataById so toSummary can use it on a record
+ *  it ALREADY HOLDS. Every TCGdex card detail carries the card's attacks,
+ *  abilities, effect text, weakness, resistance, retreat, stage and format
+ *  legality — and toSummary was keeping the name, the number and the picture
+ *  and dropping the rest, so anything that wanted the text fetched the same
+ *  card a second time to get what the first response had already delivered.
+ *  Same mistake the pokemontcg.io path was making, in the other client. */
+export function tcgdexBattleData(
+  card: TcgdexCard
+): import("./pokemontcg").CardBattleData | null {
+  if (!card.name) return null;
   const isPokemon = card.category === "Pokemon";
   const rules = [card.effect?.trim()].filter((r): r is string => !!r);
   const hpNum = typeof card.hp === "number" ? card.hp : parseInt(String(card.hp ?? ""), 10);
@@ -244,6 +262,15 @@ export async function getTcgdexBattleDataById(
     trainerType: card.trainerType ?? null,
     ...(card.legal ? { legal: { std: card.legal.standard === true, exp: card.legal.expanded === true } } : {}),
   };
+}
+
+/** The same conversion, for a card we hold only by id. */
+export async function getTcgdexBattleDataById(
+  prefixedId: string
+): Promise<import("./pokemontcg").CardBattleData | null> {
+  const id = prefixedId.replace(/^tcgdex-/, "");
+  const card = await get<TcgdexCard>(`${BASE}/cards/${encodeURIComponent(id)}`);
+  return card ? tcgdexBattleData(card) : null;
 }
 
 /** Search TCGdex by name and/or collector number. */
