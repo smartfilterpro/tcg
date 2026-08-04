@@ -7,128 +7,11 @@ import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { logAiUsage } from "@/lib/usage";
 import type { Deck, Profile } from "@/lib/types";
+import { readCardFromImage } from "@/lib/cardText";
 
 /** AI card reader: for cards NO database knows (photo-scanned customs),
  *  read the card's own picture once and extract its battle data. Cached in
  *  cards.battle_data forever — battles themselves never call AI. */
-const CARD_READ_SCHEMA = {
-  type: "object",
-  properties: {
-    readable: { type: "boolean", description: "False if the image is too blurry/small to read the card's text reliably." },
-    category: { type: "string", enum: ["pokemon", "trainer", "energy", "unknown"] },
-    stage: {
-      type: ["string", "null"],
-      description: "For Pokémon: 'Basic', 'Stage 1', 'Stage 2', or the printed stage. Null otherwise.",
-    },
-    hp: { type: ["integer", "null"] },
-    attacks: {
-      type: "array",
-      maxItems: 4,
-      items: {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          cost_count: { type: "integer", description: "Number of energy symbols in the attack cost." },
-          damage: { type: "string", description: "Printed damage, e.g. '80', '30+', '20×', or '' for none." },
-          text: { type: ["string", "null"] },
-        },
-        required: ["name", "cost_count", "damage", "text"],
-        additionalProperties: false,
-      },
-    },
-    abilities: {
-      type: "array",
-      maxItems: 2,
-      items: {
-        type: "object",
-        properties: { name: { type: "string" }, text: { type: "string" } },
-        required: ["name", "text"],
-        additionalProperties: false,
-      },
-    },
-    rules_text: {
-      type: "array",
-      maxItems: 4,
-      items: { type: "string" },
-      description: "Trainer/Special Energy effect text, exactly as printed.",
-    },
-    retreat: { type: ["integer", "null"] },
-    weakness_type: { type: ["string", "null"] },
-    trainer_type: { type: ["string", "null"], enum: ["Supporter", "Item", "Stadium", "Tool", null] },
-  },
-  required: [
-    "readable", "category", "stage", "hp", "attacks", "abilities",
-    "rules_text", "retreat", "weakness_type", "trainer_type",
-  ],
-  additionalProperties: false,
-} as const;
-
-const CARD_READ_SYSTEM = `You read a single Pokémon TCG card from its photo and
-transcribe its printed game data EXACTLY — name of attacks, energy-symbol
-counts, damage numbers, ability and effect text word for word. Do not guess
-values you cannot read; use null (or readable=false if the whole card is
-illegible). Transcribe, never invent.`;
-
-async function aiReadCard(
-  imageUrl: string,
-  userId: string | null,
-  admin: SupabaseClient
-): Promise<CardBattleData | null> {
-  try {
-    const client = anthropic();
-    const response = await client.messages.create({
-      model: SCAN_MODEL,
-      max_tokens: 2000,
-      system: CARD_READ_SYSTEM,
-      output_config: {
-        format: { type: "json_schema", schema: CARD_READ_SCHEMA as unknown as Record<string, unknown> },
-      },
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image", source: { type: "url", url: imageUrl } },
-            { type: "text", text: "Transcribe this card's game data." },
-          ],
-        },
-      ],
-    });
-    if (userId) await logAiUsage(admin, userId, "card_fx", SCAN_MODEL, response.usage);
-    const block = response.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") return null;
-    const read = JSON.parse(block.text) as {
-      readable: boolean;
-      category: string;
-      stage: string | null;
-      hp: number | null;
-      attacks: Array<{ name: string; cost_count: number; damage: string; text: string | null }>;
-      abilities: Array<{ name: string; text: string }>;
-      rules_text: string[];
-      retreat: number | null;
-      weakness_type: string | null;
-      trainer_type: string | null;
-    };
-    if (!read.readable) return null;
-    return {
-      attacks: (read.attacks ?? []).map((a) => ({
-        name: a.name,
-        cost: Array.from({ length: Math.max(0, Math.min(5, a.cost_count)) }, () => "Colorless"),
-        damage: a.damage ?? "",
-        text: a.text || null,
-      })),
-      weak: read.weakness_type ? { type: read.weakness_type, value: "×2" } : null,
-      resist: null,
-      retreat: read.retreat ?? 0,
-      ...(read.rules_text?.length ? { rules: read.rules_text } : {}),
-      ...(read.abilities?.length ? { abilities: read.abilities } : {}),
-      stage: read.stage,
-      hp: read.hp,
-      trainerType: read.trainer_type,
-    };
-  } catch {
-    return null;
-  }
-}
 
 /** AI effect compiler: turns a Trainer card's printed text into a tiny op
  *  script the referee can execute — ONCE per unique card, ever. The result
@@ -356,9 +239,19 @@ export async function expandDeck(
     (m) => !m.id!.startsWith("custom-") && !m.id!.startsWith("tcgdex-")
   );
   const viaTcgdex = needsBd.filter((m) => m.id!.startsWith("tcgdex-"));
+  // ANY card with a picture and no text, not just photo scans.
+  //
+  // This was gated on the id starting with "custom-", which excluded every
+  // card the free databases don't describe — promo bundles, brand-new sets,
+  // the printings only TCGplayer sells. Those have a real picture and no
+  // text, which is exactly the case a vision read exists for; the id prefix
+  // was standing in for "we have no other source" and getting it wrong.
+  //
+  // Still last, still capped: it runs only for cards the two free lookups
+  // above left empty, and vision reads are the priciest thing here.
   const viaAi = needsBd
-    .filter((m) => m.id!.startsWith("custom-") && (m.big || m.image))
-    .slice(0, 4); // vision reads are the priciest — small cap per battle
+    .filter((m) => (m.big || m.image) && !primary.includes(m) && !viaTcgdex.includes(m))
+    .slice(0, 4);
 
   const persistBd = async (m: (typeof needsBd)[number]) => {
     if (m.bd && m.hasBdColumn) {
@@ -382,10 +275,18 @@ export async function expandDeck(
       })
     );
   }
+  // The free sources have had their turn by now, so anything still without
+  // text and holding a picture joins the queue — that is the card whose
+  // database simply doesn't carry it.
+  const stillEmpty = [...primary, ...viaTcgdex]
+    .filter((m) => !m.bd && (m.big || m.image))
+    .slice(0, 4);
+  for (const m of stillEmpty) if (!viaAi.includes(m)) viaAi.push(m);
+
   for (let i = 0; i < viaAi.length; i += 2) {
     await Promise.all(
       viaAi.slice(i, i + 2).map(async (m) => {
-        m.bd = await aiReadCard((m.big ?? m.image)!, opts?.userId ?? null, admin);
+        m.bd = await readCardFromImage((m.big ?? m.image)!, opts?.userId ?? null, admin);
         await persistBd(m);
       })
     );

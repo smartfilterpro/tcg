@@ -3,6 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
+import { readCardFromImage } from "@/lib/cardText";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
@@ -244,7 +245,9 @@ async function runSetCompletion(
 
 async function runCardLookup(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  input: { name?: string; set_name?: string }
+  input: { name?: string; set_name?: string },
+  /** Whose credits a vision read is billed to. */
+  userId: string | null = null
 ): Promise<string> {
   const name = (input.name ?? "").trim();
   const set = (input.set_name ?? "").trim();
@@ -282,15 +285,36 @@ async function runCardLookup(
   // about would turn one question into a minute of waiting.
   const rows = data as Array<Record<string, unknown>>;
   const detailed = rows.length <= 6;
+  // Vision reads are the most expensive thing this tool can do, and they are
+  // permanent — the result is written back, so the cost is once per card
+  // rather than once per question. Two per lookup keeps a broad question
+  // from turning into a bill.
+  const MAX_VISION_READS = 2;
+  let visionReads = 0;
   if (detailed) {
     for (const row of rows) {
       if (!("battle_data" in row) || row.battle_data != null) continue;
       const id = row.id as string;
       if (id.startsWith("custom-")) continue;
       try {
-        const bd = id.startsWith("tcgdex-")
+        // Free sources first, then the card's own picture.
+        //
+        // Neither free database catalogues everything — promo bundles and
+        // brand-new sets arrive with a name, a price and a photograph and
+        // nothing about what the card does. For those the picture IS the
+        // source, and transcribing it is not the same kind of act as
+        // recalling a card from training data: it is reading what is
+        // printed, from the image a person would read it from.
+        let bd = id.startsWith("tcgdex-")
           ? await getTcgdexBattleDataById(id)
           : await getBattleDataById(id);
+
+        const art = (row.image_large as string | null) ?? (row.image_small as string | null);
+        if (!bd && art && visionReads < MAX_VISION_READS) {
+          visionReads += 1;
+          bd = await readCardFromImage(art, userId, createAdminClient());
+        }
+
         if (bd) {
           row.battle_data = bd;
           await createAdminClient().from("cards").update({ battle_data: bd }).eq("id", id);
@@ -448,7 +472,7 @@ async function runChat(opts: {
       }
       const lookup =
         b.name === "search_card_database"
-          ? await runCardLookup(supabase, args)
+          ? await runCardLookup(supabase, args, userId)
           : b.name === "set_completion"
             ? await runSetCompletion(supabase, userId, args)
             : `Unknown tool: ${b.name}`;
