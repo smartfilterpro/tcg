@@ -61,7 +61,11 @@ export async function POST() {
       // than only in the nightly job, so pressing the button fixes both.
       let needsArt = !card.image_small && card.image_locked !== true;
       if (needsArt && !card.id.startsWith("custom-")) {
-        const free = await findTcgdexImage({ name: card.name, number: card.number });
+        const free = await findTcgdexImage({
+          name: card.name,
+          number: card.number,
+          setName: card.set_name,
+        });
         if (free) {
           await supabase
             .from("cards")

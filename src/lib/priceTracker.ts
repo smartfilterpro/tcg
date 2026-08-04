@@ -27,6 +27,7 @@
 // the four image sizes a single card carries.
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { setsAgree } from "@/lib/setName";
 
 const BASE = (process.env.POKEMONPRICETRACKER_BASE ?? "https://www.pokemonpricetracker.com/api/v2")
   .trim()
@@ -502,6 +503,19 @@ export async function findCard(query: {
     });
     let card: PtCard | null = firstCard(json);
 
+    // Even the PINNED answer gets its number checked.
+    //
+    // The set filter constrains which set, not which card in it, and their
+    // ranking is loose enough that an unpinned "Pikachu 55" came back as a
+    // Blitzle. Pinned, the same looseness returns the wrong card from the
+    // RIGHT set — still the wrong price, and harder to spot because the set
+    // on screen is correct. Only a STATED number that disagrees is refused:
+    // when their record carries no number there is nothing to check and the
+    // pin stands on its own, as it always did.
+    if (card && query.number && card.cardNumber && !numbersAgree(card.cardNumber, query.number)) {
+      card = null;
+    }
+
     for (const params of widened) {
       if (card) break;
       const wider = await ptFetch("/cards", params);
@@ -510,7 +524,21 @@ export async function findCard(query: {
       // CHECKED rather than taken. A bare name can return any printing of
       // it, and a confidently wrong price on somebody's card is worse than
       // no price at all — that is the whole reason the filter was there.
-      if (candidate && numbersAgree(candidate.cardNumber, query.number)) {
+      //
+      // The number alone is not that check. A promo bundle reprints a card
+      // at its ORIGINAL collector number — the Trick or Trade Haunter is
+      // 103/162, exactly like the Temporal Forces Haunter it reprints — so a
+      // widened search matched on name and number lands on a different card
+      // in a different set and its price is written to ours. The set has to
+      // agree too, loosely, which is what the pin was doing before it was
+      // dropped for being too strict. Loose containment gets the benefit
+      // (their "SV: Paldea Evolved" against our "Paldea Evolved") without
+      // the cost.
+      if (
+        candidate &&
+        numbersAgree(candidate.cardNumber, query.number) &&
+        (query.setName ? setsAgree(candidate.setName, query.setName) : true)
+      ) {
         card = candidate;
         json = wider;
       }

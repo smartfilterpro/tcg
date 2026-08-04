@@ -2,6 +2,7 @@
 // daily-updated TCGplayer/eBay/Cardmarket prices and graded values.
 // Entirely optional: no POKETRACE_API_KEY env var → feature off.
 import { numberKey } from "@/lib/pokemontcg";
+import { setsAgree } from "@/lib/setName";
 
 const BASE = "https://api.poketrace.com/v1";
 
@@ -117,25 +118,40 @@ export async function searchPoketraceCard(
   if (list.length === 0) return { id: null, requests };
 
   const wantedNumber = numberKey(number);
-  const wantedSet = (setName ?? "").toLowerCase();
   const scored = list
     .filter((c) => c.id && (c.productType == null || c.productType === "single"))
     .map((c) => {
       let score = 0;
       // PokeTrace numbers look like "004/102" — compare digits-only keys.
       const theirNumber = numberKey((c.cardNumber ?? "").split("/")[0]);
-      if (wantedNumber && theirNumber === wantedNumber) score += 4;
-      const theirSet = (c.set?.name ?? "").toLowerCase();
-      if (wantedSet && theirSet && (theirSet.includes(wantedSet) || wantedSet.includes(theirSet)))
-        score += 2;
+      const numberOk = !!wantedNumber && theirNumber === wantedNumber;
+      if (numberOk) score += 4;
+      const setOk = setsAgree(c.set?.name ?? null, setName);
+      if (setOk) score += 2;
       if ((c.name ?? "").toLowerCase() === clean.toLowerCase()) score += 1;
-      return { c, score };
+      return { c, score, numberOk, setOk };
     })
     .sort((a, b) => b.score - a.score);
   const best = scored[0];
-  // Require a collector-number match, or (for cards without numbers, like
-  // basic energy) an exact name + set match — never guess.
-  const acceptable = best && (best.score >= 4 || (!wantedNumber && best.score >= 3));
+  // A number match ALONE is not enough when we know the set.
+  //
+  // It was: four points, earned by the collector number and nothing else,
+  // and the set was worth two decorative ones. But a promo bundle reprints
+  // a card at its ORIGINAL number — the Trick or Trade Haunter is 103/162,
+  // the same as the Temporal Forces Haunter — so name and number match
+  // perfectly across two different cards. And the id this returns is
+  // WRITTEN TO THE CARD and reused forever after, so a single wrong match
+  // means every future price and grade for that card is quietly read off
+  // somebody else's.
+  //
+  // So: the number and the set have to agree. Where we have no set name to
+  // check against, the old rule stands — it is the best that can be done,
+  // and refusing outright would leave those cards unpriced.
+  const acceptable =
+    best &&
+    (setName
+      ? (best.numberOk && best.setOk) || (!wantedNumber && best.setOk && best.score >= 3)
+      : best.score >= 4);
   return { id: acceptable ? best.c.id ?? null : null, requests };
 }
 

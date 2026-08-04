@@ -83,6 +83,11 @@ export interface MirrorRow {
    *  rare — only a hard failure needs them. */
   name?: string | null;
   number?: string | null;
+  /** The set, carried for the same reason: a name and a number are not a
+   *  card. A promo bundle reprints at the original collector number, so
+   *  re-sourcing art on those two alone can fetch a different printing's
+   *  picture and mirror it as this card's own. */
+  set_name?: string | null;
   /** Admin-curated art is never blanked, whatever the source says. */
   image_locked?: boolean | null;
   /** Failures so far, when the caller selected it. Lets a successful mirror
@@ -172,18 +177,20 @@ async function resourceArt(
 ): Promise<string | null> {
   let name = row.name ?? null;
   let number = row.number ?? null;
+  let setName = row.set_name ?? null;
   if (!name) {
     const { data } = await admin
       .from("cards")
-      .select("name, number")
+      .select("name, number, set_name")
       .eq("id", row.id)
       .maybeSingle();
     name = (data?.name as string | null) ?? null;
     number = (data?.number as string | null) ?? null;
+    setName = (data?.set_name as string | null) ?? null;
   }
   if (!name) return null;
 
-  const free = await findTcgdexImage({ name, number });
+  const free = await findTcgdexImage({ name, number, setName });
   // A source that hands back the same dead URL has told us nothing.
   return free && !deadUrls.includes(free) ? free : null;
 }
@@ -377,8 +384,9 @@ const ART_RETRY_AFTER_DAYS = 30;
  *  migration 044. Selected as one string so the fallback below can swap it
  *  wholesale rather than rebuilding the query. */
 const SCAN_COLUMNS =
-  "id, image_small, image_large, name, number, image_locked, art_attempts, art_failed_at";
-const SCAN_COLUMNS_LEGACY = "id, image_small, image_large, name, number, image_locked";
+  "id, image_small, image_large, name, number, set_name, image_locked, art_attempts, art_failed_at";
+const SCAN_COLUMNS_LEGACY =
+  "id, image_small, image_large, name, number, set_name, image_locked";
 
 /** True when an error is Postgres saying a column doesn't exist. */
 function isMissingColumn(message: string): boolean {

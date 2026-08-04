@@ -201,7 +201,11 @@ async function fillMissing(cardIds: string[]): Promise<void> {
       // exactly the cards arriving here with no picture, and asking costs
       // nothing — so it goes ahead of the paid lookup rather than after it.
       if (wantsArt) {
-        const free = await findTcgdexImage({ name: card.name, number: card.number });
+        const free = await findTcgdexImage({
+          name: card.name,
+          number: card.number,
+          setName: card.set_name,
+        });
         if (free) {
           patch.image_small = free;
           patch.image_large = free;

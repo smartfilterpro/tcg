@@ -260,6 +260,7 @@ export async function refreshStalePrices(
             const free = await findTcgdexImage({
               name: card.name as string,
               number: (card.number as string | null) ?? null,
+              setName: (card.set_name as string | null) ?? null,
             });
             if (free) {
               const { error: freeErr } = await admin
