@@ -3,7 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
-import { readCardFromImage } from "@/lib/cardText";
+import { readCardTextOnce } from "@/lib/cardText";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
@@ -309,13 +309,18 @@ async function runCardLookup(
           ? await getTcgdexBattleDataById(id)
           : await getBattleDataById(id);
 
-        const art = (row.image_large as string | null) ?? (row.image_small as string | null);
-        if (!bd && art && visionReads < MAX_VISION_READS) {
+        if (!bd && visionReads < MAX_VISION_READS) {
           visionReads += 1;
-          bd = await readCardFromImage(art, userId, createAdminClient());
-        }
-
-        if (bd) {
+          // Reads once and remembers the outcome — including a failure, so
+          // an unreadable card is not re-read and re-charged on every
+          // question about it. Writes battle_data itself on success.
+          bd = await readCardTextOnce(
+            createAdminClient(),
+            row as unknown as Parameters<typeof readCardTextOnce>[1],
+            userId
+          );
+          if (bd) row.battle_data = bd;
+        } else if (bd) {
           row.battle_data = bd;
           await createAdminClient().from("cards").update({ battle_data: bd }).eq("id", id);
         }

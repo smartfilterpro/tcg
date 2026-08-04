@@ -7,7 +7,7 @@ import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { logAiUsage } from "@/lib/usage";
 import type { Deck, Profile } from "@/lib/types";
-import { readCardFromImage } from "@/lib/cardText";
+import { readCardTextOnce } from "@/lib/cardText";
 
 /** AI card reader: for cards NO database knows (photo-scanned customs),
  *  read the card's own picture once and extract its battle data. Cached in
@@ -136,6 +136,10 @@ export async function expandDeck(
     types: string[];
     bd: CardBattleData | null;
     hasBdColumn: boolean;
+    /** Failed vision reads, so an unreadable card is not retried every
+     *  battle. Undefined before migration 050. */
+    textAttempts?: number | null;
+    textFailedAt?: string | null;
   }
   const rowToMeta = (row: Record<string, unknown>): CardMeta => {
     const supertype = ((row.supertype as string | null) ?? "").toLowerCase();
@@ -166,6 +170,8 @@ export async function expandDeck(
       types: (row.types as string[] | null) ?? [],
       bd: (row.battle_data as CardBattleData | null) ?? null,
       hasBdColumn: "battle_data" in row,
+      textAttempts: (row.text_attempts as number | null) ?? null,
+      textFailedAt: (row.text_failed_at as string | null) ?? null,
     };
   };
 
@@ -286,8 +292,19 @@ export async function expandDeck(
   for (let i = 0; i < viaAi.length; i += 2) {
     await Promise.all(
       viaAi.slice(i, i + 2).map(async (m) => {
-        m.bd = await readCardFromImage((m.big ?? m.image)!, opts?.userId ?? null, admin);
-        await persistBd(m);
+        // Same read, same memory. A card the model cannot make out was
+        // being re-read at the start of every battle it appeared in.
+        m.bd = await readCardTextOnce(
+          admin,
+          {
+            id: m.id!,
+            image_large: m.big,
+            image_small: m.image,
+            text_attempts: m.textAttempts,
+            text_failed_at: m.textFailedAt,
+          },
+          opts?.userId ?? null
+        );
       })
     );
   }

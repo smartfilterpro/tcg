@@ -142,3 +142,68 @@ export async function readCardFromImage(
     return null;
   }
 }
+
+/** How many failed reads before a card is left alone for a while. */
+const MAX_TEXT_ATTEMPTS = 2;
+
+/** …and how long alone. A card unreadable today is unreadable tomorrow
+ *  unless its picture changes, and pictures do change — the art mirror
+ *  replaces thumbnails with full-size scans, and members upload their own.
+ *  A week is long enough to stop the bleeding and short enough that a better
+ *  image gets used. */
+const TEXT_COOL_OFF_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Read a card's text from its picture ONCE, and remember either outcome.
+ *
+ *  The plain reader returns null on failure and writes nothing, so the same
+ *  unreadable card was re-read — and re-charged — on every question about
+ *  it. And it is exactly the card that gets asked about repeatedly, because
+ *  it never gains the text that would stop the asking.
+ *
+ *  Success is written to battle_data and the failure counters clear.
+ *  Failure is counted, and a card that has failed twice is skipped until the
+ *  cool-off passes. Returns null when it declines to try, which reads the
+ *  same to a caller as a failure — the difference is that this one is free.
+ *
+ *  Bookkeeping is best-effort: migration 050 may not have run, and a missing
+ *  column must not stop a read that would otherwise work. */
+export async function readCardTextOnce(
+  admin: SupabaseClient,
+  card: { id: string; image_large?: string | null; image_small?: string | null;
+          text_attempts?: number | null; text_failed_at?: string | null },
+  userId: string | null
+): Promise<CardBattleData | null> {
+  const art = card.image_large ?? card.image_small;
+  if (!art) return null;
+
+  const attempts = card.text_attempts ?? 0;
+  if (attempts >= MAX_TEXT_ATTEMPTS) {
+    const failedAt = card.text_failed_at ? Date.parse(card.text_failed_at) : 0;
+    if (Number.isFinite(failedAt) && Date.now() - failedAt < TEXT_COOL_OFF_MS) return null;
+  }
+
+  const bd = await readCardFromImage(art, userId, admin);
+
+  try {
+    if (bd) {
+      await admin
+        .from("cards")
+        .update({ battle_data: bd, text_attempts: 0, text_failed_at: null })
+        .eq("id", card.id);
+    } else {
+      await admin
+        .from("cards")
+        .update({ text_attempts: attempts + 1, text_failed_at: new Date().toISOString() })
+        .eq("id", card.id);
+    }
+  } catch {
+    // Migration 050 hasn't run. The read still counts; only the memory of
+    // it is lost, and repeating a read is a smaller failure than refusing
+    // to do one.
+    if (bd) {
+      await admin.from("cards").update({ battle_data: bd }).eq("id", card.id).then(() => {});
+    }
+  }
+
+  return bd;
+}
