@@ -19,6 +19,14 @@ async function safeSearch(
   }
 }
 
+/** How many cards a "set:" listing may return.
+ *
+ *  Big enough for any real set — the largest modern sets run past 250 once
+ *  secret rares are counted, and a Trick or Trade bundle mixes reprints from
+ *  several — because the failure this replaces was a set quietly appearing
+ *  to be half its size. */
+const SET_LIMIT = 400;
+
 const SUMMARY_COLS =
   "id, name, supertype, subtypes, types, hp, number, rarity, set_id, set_name, set_series, set_printed_total, release_date, image_small, image_large, market_price, prices";
 
@@ -149,16 +157,24 @@ export async function GET(req: Request) {
     // when the catalogue couldn't fully answer: the requested number wasn't
     // found locally, or a name-only search came back thin (the catalogue is
     // still importing, so absence local isn't absence).
-    // A set search that found nothing locally has to go outside: the whole
-    // reason to search a set by name is usually that it is new, and new is
-    // exactly what the catalogue import hasn't reached. A set that DID
-    // answer locally is left alone — 200 cards from our own rows is a
-    // complete answer and carries our mirrored artwork.
-    const needExternal = parsed.setName
-      ? local.length === 0
-      : wantedKey
-        ? !hasWantedNumber(local)
-        : local.length < 8;
+    // Listing a set ALWAYS consults the external sources, even when the
+    // catalogue answered.
+    //
+    // The first version only went outside when nothing came back locally, on
+    // the reasoning that our own rows are a complete answer. They are not: the
+    // catalogue import is still walking the sets, so a half-imported set
+    // answers confidently with half its cards and the rest are simply absent —
+    // which is exactly how a Haunter goes missing from a bundle that plainly
+    // contains one. "We hold some of this set" says nothing about whether we
+    // hold all of it, and the merge below folds the duplicates anyway.
+    const listingSet = !!parsed.setName && !parsed.name && !parsed.number;
+    const needExternal = listingSet
+      ? true
+      : parsed.setName
+        ? local.length === 0
+        : wantedKey
+          ? !hasWantedNumber(local)
+          : local.length < 8;
 
     let cards: CardSummary[] = [];
     let source = local.length > 0 ? "catalogue" : "pokemontcg.io";
@@ -284,6 +300,30 @@ export async function GET(req: Request) {
               : 3;
       return numberMiss * 10 + nameRank;
     };
+    // Listing a set is a different job from searching for a card, and it
+    // wants a different order and a different limit.
+    //
+    // Order: collector number. The rank above scores every card 0 when
+    // there is no name or number to match, so a set listing fell through to
+    // "newest release first" — meaningless within one set, and it threw away
+    // the binder order the catalogue query had already sorted into. Somebody
+    // entering a bundle is holding the cards in number order.
+    //
+    // Limit: 40 was silently cutting a set in half. It is the right size for
+    // a search — nobody scrolls past forty Charizards — and the wrong size
+    // for "show me everything in this set", where the missing entries look
+    // like the set is missing them.
+    if (listingSet) {
+      const asNumber = (v: string) => {
+        const digits = (v ?? "").replace(/\D/g, "");
+        return digits ? parseInt(digits, 10) : Number.MAX_SAFE_INTEGER;
+      };
+      merged.sort(
+        (a, b) => asNumber(a.number) - asNumber(b.number) || a.number.localeCompare(b.number)
+      );
+      return NextResponse.json({ cards: merged.slice(0, SET_LIMIT), source });
+    }
+
     merged.sort(
       (a, b) => rank(a) - rank(b) || (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "")
     );
