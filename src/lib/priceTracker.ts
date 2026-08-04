@@ -288,6 +288,12 @@ export interface PriceTrackerCard {
    *  for every bulk dataset they publish, and we have no other way to get
    *  one short of fuzzy-matching names later. */
   tcgPlayerId: string | null;
+  /** Which FINISH the price belongs to, as they word it ("Reverse
+   *  Holofoil", "Holofoil", "Normal"). One number arrives per card, not one
+   *  per finish, so without knowing which finish it describes the only
+   *  honest thing to do with it is show it for all of them — which is how a
+   *  reverse holo ends up displaying a normal's price as if it were its own. */
+  printing: string | null;
   /** Kept for the admin probe, so the shape can be inspected once. */
   raw?: unknown;
 }
@@ -367,7 +373,7 @@ interface PtCard {
   imageCdnUrl200?: string;
   imageCdnUrl400?: string;
   imageCdnUrl800?: string;
-  prices?: { market?: number; low?: number };
+  prices?: { market?: number; low?: number; primaryPrinting?: string };
 }
 
 /** Card art from the documented fields, biggest first.
@@ -505,9 +511,11 @@ export async function findCard(query: {
     // miss cached for an hour, and the credit spent for nothing. Art and
     // price are separate questions and a response can answer one of them.
     const tcgPlayerId = typeof card?.tcgPlayerId === "string" ? card.tcgPlayerId : null;
+    const printing =
+      typeof card?.prices?.primaryPrinting === "string" ? card.prices.primaryPrinting : null;
     const value: PriceTrackerCard | null =
       images.length || price != null || tcgPlayerId
-        ? { images, marketPrice: price, tcgPlayerId }
+        ? { images, marketPrice: price, tcgPlayerId, printing }
         : null;
     cache.set(key, { at: Date.now(), value });
     return value;
@@ -531,10 +539,15 @@ export async function priceTrackerCard(query: {
   name: string;
   setName?: string | null;
   number?: string | null;
-}): Promise<{ market: number | null; image: string | null; tcgPlayerId: string | null }> {
+}): Promise<{
+  market: number | null;
+  image: string | null;
+  tcgPlayerId: string | null;
+  printing: string | null;
+}> {
   try {
     const card = await findCard(query);
-    if (!card) return { market: null, image: null, tcgPlayerId: null };
+    if (!card) return { market: null, image: null, tcgPlayerId: null, printing: null };
     // findCard has already ranked the images and read the price off the
     // documented fields; re-walking its return value would only re-derive
     // what it just decided, less well.
@@ -545,9 +558,10 @@ export async function priceTrackerCard(query: {
       // dataset they publish and we have no other way to obtain one. It
       // arrives free with a lookup we already paid for.
       tcgPlayerId: card.tcgPlayerId,
+      printing: card.printing,
     };
   } catch {
-    return { market: null, image: null, tcgPlayerId: null };
+    return { market: null, image: null, tcgPlayerId: null, printing: null };
   }
 }
 

@@ -47,24 +47,95 @@ async function get<T>(url: string): Promise<T | null> {
   }
 }
 
-/** Best-effort price from TCGdex's pricing block (shape varies; be defensive). */
-function extractTcgdexPrice(pricing: Record<string, unknown> | undefined): number | null {
-  if (!pricing) return null;
-  const cm = pricing.cardmarket as Record<string, unknown> | undefined;
-  for (const key of ["avg30", "avg", "trendPrice", "trend", "low"]) {
-    const v = cm?.[key];
-    if (typeof v === "number" && v > 0) return v;
-  }
-  const tp = pricing.tcgplayer as Record<string, Record<string, unknown>> | undefined;
+/** TCGdex's finish names → the keys the rest of the app prices by.
+ *
+ *  Those keys are pokemontcg.io's, because that is where the price map
+ *  originally came from and availableVariants/priceForVariant read them
+ *  directly. TCGdex hyphenates where pokemontcg.io camel-cases, which is the
+ *  whole of the difference. */
+const TCGDEX_FINISHES: Record<string, string> = {
+  normal: "normal",
+  holofoil: "holofoil",
+  "reverse-holofoil": "reverseHolofoil",
+  "1st-edition": "1stEditionNormal",
+  "1st-edition-holofoil": "1stEditionHolofoil",
+  unlimited: "unlimitedNormal",
+  "unlimited-holofoil": "unlimitedHolofoil",
+};
+
+/** Which finish to quote as the card's headline price, best first. Matches
+ *  the order pokemontcg.io's extractor uses, so a card doesn't change its
+ *  headline finish depending on which source happened to price it. */
+const HEADLINE_ORDER = [
+  "holofoil",
+  "normal",
+  "reverseHolofoil",
+  "1stEditionHolofoil",
+  "1stEditionNormal",
+  "unlimitedHolofoil",
+  "unlimitedNormal",
+];
+
+function usable(v: unknown): number | null {
+  return typeof v === "number" && v > 0 ? v : null;
+}
+
+/** Every finish TCGdex prices, and the one to show as the headline.
+ *
+ *  This used to return a single number, picked by taking the FIRST TCGplayer
+ *  variant the object happened to iterate — so a card owned in two finishes
+ *  got one price for both, and which finish it belonged to was luck. TCGdex
+ *  publishes the whole per-finish block; reading it is free and it is the
+ *  same TCGplayer data the rest of the app prices in.
+ *
+ *  TCGPLAYER IS PREFERRED OVER CARDMARKET, which is the other half of the
+ *  bug. Cardmarket is the European marketplace and quotes EUR; this app
+ *  prints "$" everywhere and totals collections in dollars. The old order
+ *  tried cardmarket FIRST, so any card it covered was showing euros labelled
+ *  as dollars. Cardmarket is kept only as a last resort — a roughly right
+ *  number beats none for a print no US marketplace lists — and it can only
+ *  ever set the headline, never a per-finish figure. */
+export function tcgdexPrices(pricing: Record<string, unknown> | undefined): {
+  market: number | null;
+  prices: Record<string, number | null> | null;
+} {
+  if (!pricing) return { market: null, prices: null };
+
+  const tp = pricing.tcgplayer as Record<string, unknown> | undefined;
+  const prices: Record<string, number | null> = {};
   if (tp) {
-    for (const variant of Object.values(tp)) {
-      if (variant && typeof variant === "object") {
-        const m = (variant as Record<string, unknown>).marketPrice;
-        if (typeof m === "number" && m > 0) return m;
-      }
+    for (const [theirs, ours] of Object.entries(TCGDEX_FINISHES)) {
+      const block = tp[theirs] as Record<string, unknown> | undefined;
+      if (!block || typeof block !== "object") continue;
+      // Same preference the pokemontcg.io extractor uses: the market price
+      // when there is one, then the midpoint, then the low. A finish that
+      // exists but is unpriced is left out rather than stored as null —
+      // otherwise it would advertise a finish nobody can value.
+      const value =
+        usable(block.marketPrice) ?? usable(block.midPrice) ?? usable(block.lowPrice);
+      if (value != null) prices[ours] = value;
     }
   }
-  return null;
+
+  for (const key of HEADLINE_ORDER) {
+    const v = prices[key];
+    if (v != null) {
+      return { market: v, prices: Object.keys(prices).length ? prices : null };
+    }
+  }
+
+  // Nothing from TCGplayer. Cardmarket, in euros, as the last thing standing.
+  const cm = pricing.cardmarket as Record<string, unknown> | undefined;
+  for (const key of ["avg30", "avg", "trendPrice", "trend", "low"]) {
+    const v = usable(cm?.[key]);
+    if (v != null) return { market: v, prices: null };
+  }
+  return { market: null, prices: null };
+}
+
+/** Headline price only, for callers that don't store a per-finish map. */
+function extractTcgdexPrice(pricing: Record<string, unknown> | undefined): number | null {
+  return tcgdexPrices(pricing).market;
 }
 
 function toSummary(card: TcgdexCard): CardSummary {
@@ -100,9 +171,20 @@ function toSummary(card: TcgdexCard): CardSummary {
 
 /** Refresh pricing for a card we stored from TCGdex ("tcgdex-" id prefix). */
 export async function getTcgdexPriceById(prefixedId: string): Promise<number | null> {
+  return (await getTcgdexPricesById(prefixedId)).market;
+}
+
+/** The same lookup, keeping the per-finish map instead of discarding it.
+ *
+ *  One request either way — the pricing block arrives with the card whether
+ *  anyone reads it or not. */
+export async function getTcgdexPricesById(prefixedId: string): Promise<{
+  market: number | null;
+  prices: Record<string, number | null> | null;
+}> {
   const id = prefixedId.replace(/^tcgdex-/, "");
   const card = await get<TcgdexCard>(`${BASE}/cards/${encodeURIComponent(id)}`);
-  return card ? extractTcgdexPrice(card.pricing) : null;
+  return card ? tcgdexPrices(card.pricing) : { market: null, prices: null };
 }
 
 /** Image URLs for a TCGdex-sourced card ("tcgdex-" id prefix).

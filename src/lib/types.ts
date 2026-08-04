@@ -157,6 +157,26 @@ export function defaultVariantFor(
   return avail[0];
 }
 
+/** A finish's price, and whether it is actually THAT finish's price.
+ *
+ *  priceForVariant falls back to the card's headline number for any finish
+ *  the price map doesn't cover, which is the right value to show — it is the
+ *  best estimate available — but the UI was labelling it "Market (Reverse
+ *  Holo)", stating a measurement the app does not have. A reverse holo
+ *  routinely trades at several times a normal, so that mislabel is not a
+ *  rounding error.
+ *
+ *  `exact` is false when the number came from the fallback, so a caller can
+ *  say "across all finishes" instead of naming one. */
+export function variantPrice(
+  card: { prices?: Record<string, number | null> | null; market_price?: number | null },
+  variant: string
+): { value: number | null; exact: boolean } {
+  const own = card.prices?.[variant];
+  if (own != null) return { value: own, exact: true };
+  return { value: card.market_price ?? null, exact: false };
+}
+
 /** USD price for a specific finish, falling back to the headline price. */
 export function priceForVariant(
   card: { prices?: Record<string, number | null> | null; market_price?: number | null },
