@@ -195,6 +195,22 @@ async function matchFromLocalDb(
   }
 }
 
+/** Where a scan's time went, per stage and per card.
+ *
+ *  "It took 57 seconds" is not a diagnosis. The model reading the photo, the
+ *  catalogue answering, and one card falling through to an external API
+ *  having a bad minute are three different problems with three different
+ *  fixes, and they are indistinguishable from a single total. Every scan now
+ *  keeps its own split: what the model cost, what matching cost, and for each
+ *  card which source answered and how long it took. */
+export interface ScanTimings {
+  modelMs: number;
+  matchMs: number;
+  totalMs: number;
+  /** Which source answered, per card, with the time it took. */
+  cards: Array<{ name: string; ms: number; path: string; swapped?: boolean }>;
+}
+
 /** Do the scan, recording progress against a job row.
  *
  *  Deliberately NOT tied to the request that started it. The model runs for
@@ -210,8 +226,10 @@ async function runScan(opts: {
   image: string;
   mediaType: string | undefined;
   jobId: string;
+  timings: ScanTimings;
 }): Promise<ScanMatch[]> {
-  const { supabase, admin, userId, image, mediaType, jobId } = opts;
+  const { supabase, admin, userId, image, mediaType, jobId, timings } = opts;
+  const scanStartedAt = Date.now();
   {
     const client = anthropic();
     // Streamed with a generous cap: thinking + per-card JSON both draw from
@@ -337,6 +355,8 @@ async function runScan(opts: {
           : "The scan came back malformed — please try again."
       );
     }
+    timings.modelMs = Date.now() - scanStartedAt;
+
     // Match each detected card against the reference database (in parallel,
     // capped to avoid hammering the API).
     const detectedCards: DetectedCard[] = parsed.cards.map((c) => {
@@ -377,16 +397,27 @@ async function runScan(opts: {
     });
 
     const results: ScanMatch[] = [];
+    const matchStartedAt = Date.now();
     const BATCH = 4;
     for (let i = 0; i < detectedCards.length; i += BATCH) {
       const batch = detectedCards.slice(i, i + BATCH);
       const matched = await Promise.all(
         batch.map(async (detected) => {
+          const cardStartedAt = Date.now();
+          const note = (path: string, swapped?: boolean) =>
+            timings.cards.push({
+              name: detected.name,
+              ms: Date.now() - cardStartedAt,
+              path,
+              ...(swapped ? { swapped: true } : {}),
+            });
+
           // Fast path: a card someone already saved matches from our own
           // database in one quick query instead of several external calls.
           const local = await matchFromLocalDb(supabase, detected);
           if (local) {
             const swapped = await patternPrintingFor(supabase, local, detected.rarityHint);
+            note("catalogue", !!swapped);
             return {
               detected,
               match: swapped ?? local,
@@ -395,6 +426,7 @@ async function runScan(opts: {
           }
 
           let { match, candidates } = await matchDetectedCard(detected);
+          let usedTcgdex = false;
 
           // Consult TCGdex when the primary DB found nothing — or found only
           // cards that DON'T carry the detected collector number. That second
@@ -417,18 +449,23 @@ async function runScan(opts: {
               // Number-exact fallback wins; keep primary results as alternatives
               match = altNumberMatches[0];
               candidates = [...altNumberMatches, ...candidates];
+              usedTcgdex = true;
             } else if (candidates.length === 0 && alt.length > 0) {
               match = alt[0];
               candidates = alt;
+              usedTcgdex = true;
             }
           }
+          let swappedHere = false;
           if (match) {
             const swapped = await patternPrintingFor(supabase, match, detected.rarityHint);
             if (swapped) {
               match = swapped;
               candidates = [swapped, ...candidates];
+              swappedHere = true;
             }
           }
+          note(match ? (usedTcgdex ? "tcgdex" : "pokemontcg") : "no match", swappedHere);
           return { detected, match, candidates } satisfies ScanMatch;
         })
       );
@@ -479,6 +516,27 @@ async function runScan(opts: {
       // Memory is best-effort — a failure here never breaks a scan.
     }
 
+    timings.matchMs = Date.now() - matchStartedAt;
+    timings.totalMs = Date.now() - scanStartedAt;
+
+    // One line per scan, in the log an admin can read from a phone. The
+    // per-source counts are the whole diagnosis: cards answered by our own
+    // catalogue are instant, and anything else is a network round trip we
+    // may be able to remove.
+    const byPath = timings.cards.reduce<Record<string, number>>((acc, c) => {
+      acc[c.path] = (acc[c.path] ?? 0) + 1;
+      return acc;
+    }, {});
+    const slowest = [...timings.cards].sort((a, b) => b.ms - a.ms)[0];
+    console.log(
+      `scan ${jobId}: ${results.length} cards in ${(timings.totalMs / 1000).toFixed(1)}s ` +
+        `(model ${(timings.modelMs / 1000).toFixed(1)}s, matching ${(timings.matchMs / 1000).toFixed(1)}s) · ` +
+        Object.entries(byPath)
+          .map(([k, v]) => `${v} ${k}`)
+          .join(", ") +
+        (slowest ? ` · slowest "${slowest.name}" ${(slowest.ms / 1000).toFixed(1)}s via ${slowest.path}` : "")
+    );
+
     return results;
   }
 }
@@ -523,20 +581,29 @@ export async function POST(req: Request) {
     }
     const jobId = job.id as string;
 
+    // Filled in as the scan runs, so the finished job carries its own
+    // breakdown rather than one number nobody can act on.
+    const timings: ScanTimings = { modelMs: 0, matchMs: 0, totalMs: 0, cards: [] };
+
     // Not awaited. The handler returns now; the work continues in this
     // process and reports itself into the job row.
-    void runScan({ supabase, admin, userId: user.id, image, mediaType, jobId })
+    void runScan({ supabase, admin, userId: user.id, image, mediaType, jobId, timings })
       .then(async (results) => {
-        await admin
-          .from("scan_jobs")
-          .update({
-            status: "done",
-            cards: results,
-            expected: results.length,
-            duration_ms: Date.now() - startedAt,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", jobId);
+        const patch = {
+          status: "done",
+          cards: results,
+          expected: results.length,
+          duration_ms: Date.now() - startedAt,
+          timings,
+          updated_at: new Date().toISOString(),
+        };
+        const { error } = await admin.from("scan_jobs").update(patch).eq("id", jobId);
+        // timings only exists after migration 053. A scan must not fail to
+        // record itself over a diagnostic column.
+        if (error && /timings/.test(error.message)) {
+          const { timings: _drop, ...rest } = patch;
+          await admin.from("scan_jobs").update(rest).eq("id", jobId);
+        }
       })
       .catch(async (err) => {
         // Recorded on the job, not thrown into a void. The person is owed an
