@@ -1066,6 +1066,7 @@ export default function CollectionPage({
               <CardText
                 detail={cardText.detail}
                 loading={cardText.loading}
+                onRetry={cardText.retry}
                 missingNote="No printed text on file for this card yet — it fills in automatically as the card databases are read."
               />
             </div>

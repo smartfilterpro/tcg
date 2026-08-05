@@ -12,7 +12,7 @@
 // So this is the deck viewer's markup lifted out whole, plus the fetching, so
 // both screens read the same and neither can drift into being the good one.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { CardDetail } from "@/app/api/cards/details/route";
 
 /** Fetch one card's printed text by id.
@@ -25,6 +25,23 @@ export function useCardText(cardId: string | null | undefined) {
   const [detail, setDetail] = useState<CardDetail | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const fetchText = useCallback(
+    async (id: string, force: boolean, isCancelled: () => boolean) => {
+      setLoading(true);
+      try {
+        const res = await fetch(
+          `/api/cards/details?ids=${encodeURIComponent(id)}${force ? "&force=1" : ""}`
+        );
+        const json = await res.json();
+        if (!isCancelled() && res.ok) setDetail(json.byId?.[id] ?? null);
+      } catch {
+        // The sheet says it couldn't find the text rather than pretending.
+      }
+      if (!isCancelled()) setLoading(false);
+    },
+    []
+  );
+
   useEffect(() => {
     if (!cardId) {
       setDetail(null);
@@ -32,23 +49,18 @@ export function useCardText(cardId: string | null | undefined) {
     }
     let cancelled = false;
     setDetail(null);
-    setLoading(true);
-    (async () => {
-      try {
-        const res = await fetch(`/api/cards/details?ids=${encodeURIComponent(cardId)}`);
-        const json = await res.json();
-        if (!cancelled && res.ok) setDetail(json.byId?.[cardId] ?? null);
-      } catch {
-        // The sheet says it couldn't find the text rather than pretending.
-      }
-      if (!cancelled) setLoading(false);
-    })();
+    void fetchText(cardId, false, () => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [cardId]);
+  }, [cardId, fetchText]);
 
-  return { detail, loading };
+  /** Read it again, ignoring both what we hold and the failure cool-off. */
+  const retry = useCallback(() => {
+    if (cardId) void fetchText(cardId, true, () => false);
+  }, [cardId, fetchText]);
+
+  return { detail, loading, retry };
 }
 
 /** True when we have a record but it carries no printed text at all. Basic
@@ -63,11 +75,16 @@ export function hasNoText(d: CardDetail | null | undefined): boolean {
 export default function CardText({
   detail,
   loading,
+  onRetry,
   /** Shown when the lookup finished and found no card record. */
   missingNote = "Couldn't find this card in the database, so there's no text to show.",
 }: {
   detail: CardDetail | null;
   loading: boolean;
+  /** Offered when a read has been tried and came back empty. Reading a card
+   *  costs an AI call, so this is a button rather than something that
+   *  happens on its own every time the panel opens. */
+  onRetry?: () => void;
   missingNote?: string;
 }) {
   if (loading && !detail) return <p className="text-sm text-slate-400">Looking up the card…</p>;
@@ -126,11 +143,16 @@ export default function CardText({
         // of somebody reading a card and, by then, out of date.
         <p className="text-sm text-slate-500">
           {detail.triedPicture
-            ? "No printed text for this one. Basic Energy has none — for anything else, the card databases don't list it and reading it from the picture didn't work either. It's tried again when a clearer picture of the card arrives."
+            ? "No printed text for this one. Basic Energy has none — for anything else, the card databases don't list it and reading it from the picture didn't work either."
             : detail.image
               ? "No printed text on file yet. Basic Energy has none; anything else fills in the next time the card is looked up."
               : "No printed text on file, and no picture to read it from yet. It fills in once the card has a picture."}
         </p>
+      )}
+      {hasNoText(detail) && detail.image && onRetry && (
+        <button className="btn-secondary text-xs" disabled={loading} onClick={onRetry}>
+          {loading ? "Reading the card…" : "Try reading the picture again"}
+        </button>
       )}
     </div>
   );

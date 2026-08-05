@@ -83,12 +83,74 @@ counts, damage numbers, ability and effect text word for word. Do not guess
 values you cannot read; use null (or readable=false if the whole card is
 illegible). Transcribe, never invent.`;
 
+/** The picture, as bytes we have actually seen.
+ *
+ *  A url image source asks the MODEL'S side to fetch the picture, and it
+ *  cannot always do that: the paid source's card images sit on a CDN that
+ *  answers us and not necessarily anyone else, and a URL that 403s there
+ *  comes back as a failed read here — indistinguishable, before this, from a
+ *  card whose text is genuinely unreadable. We can fetch it, so we should:
+ *  one request we already know succeeds, and the model gets the pixels
+ *  instead of a hostname.
+ *
+ *  Null when the fetch fails or the file is implausible, and then the caller
+ *  falls back to the URL form — worth trying, since the failure might be on
+ *  our side of the wire. */
+async function imageBytes(
+  url: string
+): Promise<{ media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string } | null> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) {
+      console.warn(`card read: couldn't fetch ${url} — HTTP ${res.status}`);
+      return null;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    // 5MB is the API's limit; a card scan is a few hundred KB, so anything
+    // near it is not the picture we think it is.
+    if (buf.length === 0 || buf.length > 5_000_000) {
+      console.warn(`card read: ${url} is ${buf.length} bytes — not sending it`);
+      return null;
+    }
+    const declared = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    // Sniffed rather than trusted: a CDN serving "application/octet-stream"
+    // for a perfectly good PNG would otherwise be refused by the API.
+    const media_type =
+      buf[0] === 0x89 && buf[1] === 0x50
+        ? "image/png"
+        : buf[0] === 0xff && buf[1] === 0xd8
+          ? "image/jpeg"
+          : buf.slice(0, 4).toString("ascii") === "RIFF"
+            ? "image/webp"
+            : buf.slice(0, 3).toString("ascii") === "GIF"
+              ? "image/gif"
+              : declared === "image/png" ||
+                  declared === "image/jpeg" ||
+                  declared === "image/gif" ||
+                  declared === "image/webp"
+                ? (declared as "image/png")
+                : null;
+    if (!media_type) {
+      console.warn(`card read: ${url} isn't an image we can send (content-type "${declared}")`);
+      return null;
+    }
+    return { media_type, data: buf.toString("base64") };
+  } catch (err) {
+    console.warn(`card read: fetching ${url} failed — ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
 export async function readCardFromImage(
   imageUrl: string,
   userId: string | null,
   admin: SupabaseClient
 ): Promise<CardBattleData | null> {
   try {
+    const bytes = await imageBytes(imageUrl);
+    const source = bytes
+      ? { type: "base64" as const, media_type: bytes.media_type, data: bytes.data }
+      : { type: "url" as const, url: imageUrl };
     const client = anthropic();
     const response = await client.messages.create({
       model: SCAN_MODEL,
@@ -101,7 +163,7 @@ export async function readCardFromImage(
         {
           role: "user",
           content: [
-            { type: "image", source: { type: "url", url: imageUrl } },
+            { type: "image", source },
             { type: "text", text: "Transcribe this card's game data." },
           ],
         },
@@ -109,7 +171,10 @@ export async function readCardFromImage(
     });
     if (userId) await logAiUsage(admin, userId, "card_fx", SCAN_MODEL, response.usage);
     const block = response.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") return null;
+    if (!block || block.type !== "text") {
+      console.warn(`card read: no transcription came back for ${imageUrl} (stop: ${response.stop_reason})`);
+      return null;
+    }
     const read = JSON.parse(block.text) as {
       readable: boolean;
       category: string;
@@ -122,7 +187,10 @@ export async function readCardFromImage(
       weakness_type: string | null;
       trainer_type: string | null;
     };
-    if (!read.readable) return null;
+    if (!read.readable) {
+      console.warn(`card read: the model called ${imageUrl} illegible`);
+      return null;
+    }
     return {
       attacks: (read.attacks ?? []).map((a) => ({
         name: a.name,
@@ -139,7 +207,15 @@ export async function readCardFromImage(
       hp: read.hp,
       trainerType: read.trainer_type,
     };
-  } catch {
+  } catch (err) {
+    // Loudly. This swallowed everything — a rejected image, a bad URL, a
+    // rate limit, a malformed response — and every one of them reached the
+    // screen as "reading it from the picture didn't work", with no way to
+    // find out which. That is the difference between a card that can't be
+    // read and a card we never actually sent.
+    console.error(
+      `card read: FAILED for ${imageUrl} — ${err instanceof Error ? err.message : String(err)}`
+    );
     return null;
   }
 }
@@ -172,13 +248,21 @@ export async function readCardTextOnce(
   admin: SupabaseClient,
   card: { id: string; image_large?: string | null; image_small?: string | null;
           text_attempts?: number | null; text_failed_at?: string | null },
-  userId: string | null
+  userId: string | null,
+  /** Ignore the cool-off — somebody is looking at the card and asked.
+   *
+   *  The cool-off exists to stop a background job re-reading an unreadable
+   *  card forever. It is the wrong rule for a person tapping "try again",
+   *  who may well know something has changed — a better picture, or a fix to
+   *  the reader itself. Every card that failed while a bug was in the reader
+   *  is otherwise locked out for a week after the bug is gone. */
+  opts?: { force?: boolean }
 ): Promise<CardBattleData | null> {
   const art = card.image_large ?? card.image_small;
   if (!art) return null;
 
   const attempts = card.text_attempts ?? 0;
-  if (attempts >= MAX_TEXT_ATTEMPTS) {
+  if (!opts?.force && attempts >= MAX_TEXT_ATTEMPTS) {
     const failedAt = card.text_failed_at ? Date.parse(card.text_failed_at) : 0;
     if (Number.isFinite(failedAt) && Date.now() - failedAt < TEXT_COOL_OFF_MS) return null;
   }
@@ -240,21 +324,24 @@ export async function ensureCardText(
     text_attempts?: number | null;
     text_failed_at?: string | null;
   },
-  opts?: { allowVision?: boolean; userId?: string | null }
+  opts?: { allowVision?: boolean; userId?: string | null; force?: boolean }
 ): Promise<CardBattleData | null> {
-  // 1. Ours.
-  if (card.battle_data) return card.battle_data as CardBattleData;
+  // 1. Ours. (`force` skips even this: somebody asking to re-read a card
+  //  that already has text would get the old text back otherwise.)
+  if (card.battle_data && !opts?.force) return card.battle_data as CardBattleData;
 
   const id = card.id;
   if (id.startsWith("custom-")) {
     // A photo-scanned card has no database entry anywhere; its picture is
     // the only source there has ever been.
-    return opts?.allowVision ? readCardTextOnce(admin, card, opts?.userId ?? null) : null;
+    return opts?.allowVision
+      ? readCardTextOnce(admin, card, opts?.userId ?? null, { force: opts?.force })
+      : null;
   }
 
   // Nothing to gain from asking again inside the cool-off.
   const attempts = card.text_attempts ?? 0;
-  if (attempts >= MAX_TEXT_ATTEMPTS) {
+  if (!opts?.force && attempts >= MAX_TEXT_ATTEMPTS) {
     const failedAt = card.text_failed_at ? Date.parse(card.text_failed_at) : 0;
     if (Number.isFinite(failedAt) && Date.now() - failedAt < TEXT_COOL_OFF_MS) return null;
   }
@@ -282,7 +369,8 @@ export async function ensureCardText(
   }
 
   // 3. The picture, if this caller is one that should pay for it.
-  if (opts?.allowVision) return readCardTextOnce(admin, card, opts?.userId ?? null);
+  if (opts?.allowVision)
+    return readCardTextOnce(admin, card, opts?.userId ?? null, { force: opts?.force });
 
   // Remember the free miss, so the next build doesn't repeat it.
   try {
