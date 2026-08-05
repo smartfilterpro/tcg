@@ -31,6 +31,13 @@ export interface CardDetail {
   weak: { type: string; value: string } | null;
   resist: { type: string; value: string } | null;
   retreat: number | null;
+  /** Has this card's own picture been read for its text — now or before?
+   *
+   *  So the screen can say what was actually tried instead of guessing. "No
+   *  text on file" covers two different situations: nobody has looked yet,
+   *  and everything available has been looked at and come back empty. Only
+   *  one of those is worth waiting for. */
+  triedPicture: boolean;
 }
 
 /** Same alternate spellings the image lookup uses — decks write "Basic
@@ -64,6 +71,7 @@ function toDetail(row: Record<string, unknown>, requestedName: string): CardDeta
     weak: bd?.weak ?? null,
     resist: bd?.resist ?? null,
     retreat: bd?.retreat ?? null,
+    triedPicture: row.__triedPicture === true || ((row.text_attempts as number | null) ?? 0) > 0,
   };
 }
 
@@ -75,7 +83,7 @@ function toDetail(row: Record<string, unknown>, requestedName: string): CardDeta
  *  cached, so the next reader — including a battle — gets it for free. */
 export async function GET(req: Request) {
   try {
-    await requireUser();
+    const { user } = await requireUser();
     const url = new URL(req.url);
     const ids = [
       ...new Set(
@@ -112,12 +120,33 @@ export async function GET(req: Request) {
     const missing = [...rows, ...nameRows].filter(
       (r) => "battle_data" in r && !r.battle_data && typeof r.id === "string"
     );
+
+    // ONE card asked for by id is somebody looking AT that card, and that is
+    // the case allowed to read the picture.
+    //
+    // Every caller here used the free databases only, so a card they don't
+    // carry stayed blank on the screen of the person actively asking about
+    // it — while a battle would happily spend the read to answer the same
+    // question. Opening a card is at least as deliberate as playing it. The
+    // read happens once: the result is stored, and a failure is remembered
+    // so an unreadable card isn't re-read on every visit.
+    //
+    // Deliberately NOT extended to the name path or to multi-card requests.
+    // A deck warming 60 cards would be sixty vision reads, and a name can
+    // match several printings — reading a picture picked at random from
+    // those is a cost with no matching benefit.
+    const singleId = ids.length === 1 && names.length === 0 ? ids[0] : null;
     if (missing.length > 0) {
       const admin = createAdminClient();
       for (const row of missing.slice(0, 10)) {
-        const id = row.id as string;
+        const wantsVision = singleId != null && row.id === singleId;
+        if (wantsVision) row.__triedPicture = true;
         try {
-          const bd = await ensureCardText(admin, row as Parameters<typeof ensureCardText>[1]);
+          const bd = await ensureCardText(
+            admin,
+            row as Parameters<typeof ensureCardText>[1],
+            wantsVision ? { allowVision: true, userId: user.id } : undefined
+          );
           if (!bd) continue;
           row.battle_data = bd;
         } catch {

@@ -119,9 +119,17 @@ export default function CardText({
         </p>
       )}
       {hasNoText(detail) && (
+        // Says what was actually TRIED, which is the difference between
+        // "nobody has looked yet" and "everything available has been looked
+        // at". The old wording said it would fill in "the first time the
+        // card is used in a battle", which was both a strange thing to ask
+        // of somebody reading a card and, by then, out of date.
         <p className="text-sm text-slate-500">
-          No printed text on file for this one yet. Basic Energy has none; for anything else it
-          fills in the first time the card is used in a battle or picked up by the nightly refresh.
+          {detail.triedPicture
+            ? "No printed text for this one. Basic Energy has none — for anything else, the card databases don't list it and reading it from the picture didn't work either. It's tried again when a clearer picture of the card arrives."
+            : detail.image
+              ? "No printed text on file yet. Basic Energy has none; anything else fills in the next time the card is looked up."
+              : "No printed text on file, and no picture to read it from yet. It fills in once the card has a picture."}
         </p>
       )}
     </div>
