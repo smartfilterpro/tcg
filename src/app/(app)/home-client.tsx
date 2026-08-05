@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
 import CardText, { useCardText } from "@/components/CardText";
+import CardZoom from "@/components/CardZoom";
 import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
 import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc } from "@/lib/art";
@@ -46,6 +47,8 @@ export default function CollectionPage({
   const [supertypeFilter, setSupertypeFilter] = useState("");
   const [sort, setSort] = useState<SortKey>("newest");
   const [selected, setSelected] = useState<CollectionItem | null>(null);
+  /** The picture being looked at full-screen, if any. */
+  const [zoom, setZoom] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [changingCard, setChangingCard] = useState(false);
@@ -867,7 +870,24 @@ export default function CollectionPage({
             {/* Stacked on phones (image on top), side-by-side from sm up */}
             <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start sm:pr-6">
               {hasImage(selected) ? (
-                <div className="flex aspect-[63/88] w-40 shrink-0 items-center justify-center self-center overflow-hidden rounded-lg bg-slate-100 shadow sm:self-start">
+                // A button, because it does something: the picture at this
+                // size is enough to recognise a card and not enough to read
+                // one, and "is the copy in my hand this printing?" is asked
+                // while holding the card.
+                <button
+                  type="button"
+                  className="flex aspect-[63/88] w-40 shrink-0 cursor-zoom-in items-center justify-center self-center overflow-hidden rounded-lg bg-slate-100 shadow sm:self-start"
+                  onClick={() =>
+                    setZoom(
+                      artSrc(
+                        selected.card.id,
+                        selected.card.image_large ?? selected.card.image_small,
+                        "large"
+                      )!
+                    )
+                  }
+                  aria-label={`See ${selected.card.name} larger`}
+                >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={artSrc(
@@ -879,7 +899,7 @@ export default function CollectionPage({
                     className="h-full w-full object-contain"
                     onError={() => markBroken(selected.card.id)}
                   />
-                </div>
+                </button>
               ) : (
                 <div className="flex aspect-[63/88] w-40 flex-col items-center justify-center gap-2 self-center rounded-lg bg-slate-100 p-3 text-center text-xs text-slate-400 sm:self-start">
                   <span className="text-2xl">📷</span>
@@ -1139,6 +1159,12 @@ export default function CollectionPage({
           onClose={() => setChangingCard(false)}
           onPick={(card) => changeCard(selected, card)}
         />
+      )}
+
+      {/* Outside the card panel, so it covers the whole screen rather than
+          being clipped by a scrolling modal. */}
+      {zoom && (
+        <CardZoom src={zoom} alt={selected?.card.name ?? "Card"} onClose={() => setZoom(null)} />
       )}
     </div>
   );

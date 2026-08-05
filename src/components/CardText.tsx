@@ -149,6 +149,10 @@ export default function CardText({
               : "No printed text on file, and no picture to read it from yet. It fills in once the card has a picture."}
         </p>
       )}
+      {hasNoText(detail) && detail.textError && (
+        // The actual reason, on the screen where the question gets asked.
+        <p className="text-xs text-slate-400">Last attempt: {detail.textError}.</p>
+      )}
       {hasNoText(detail) && detail.image && onRetry && (
         <button className="btn-secondary text-xs" disabled={loading} onClick={onRetry}>
           {loading ? "Reading the card…" : "Try reading the picture again"}

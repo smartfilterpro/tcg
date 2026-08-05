@@ -15,6 +15,7 @@ import { FREE_DECK_LIMIT } from "@/lib/limits";
 import DeckEditCard, { type DeckEditProposal } from "@/components/DeckEditCard";
 import { resilientFetch } from "@/lib/clientLoop";
 import CardText from "@/components/CardText";
+import CardZoom from "@/components/CardZoom";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -939,6 +940,8 @@ export default function DecksPage() {
   const [reading, setReading] = useState<DeckCardEntry | null>(null);
   const [details, setDetails] = useState<Record<string, CardDetail>>({});
   const [readingBusy, setReadingBusy] = useState(false);
+  /** The card picture being looked at full-screen, if any. */
+  const [zoomed, setZoomed] = useState<string | null>(null);
 
   /** Key a card's text by its id when it has one, and by name otherwise —
    *  the same split the images lookup uses for deck entries that never
@@ -1537,8 +1540,18 @@ export default function DecksPage() {
         >
           <div className="mb-3 flex items-start gap-3">
             {image && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={image} alt={reading.name} className="w-24 shrink-0 rounded-lg shadow-sm" />
+              // 96px wide is a thumbnail, not a card. Tapping it gives the
+              // card — same behaviour as the collection's panel, since it is
+              // the same question being asked.
+              <button
+                type="button"
+                className="shrink-0 cursor-zoom-in"
+                onClick={() => setZoomed(image)}
+                aria-label={`See ${reading.name} larger`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={image} alt={reading.name} className="w-24 rounded-lg shadow-sm" />
+              </button>
             )}
             <div className="min-w-0 flex-1">
               <h2 className="break-words text-lg font-bold">{d?.name ?? reading.name}</h2>
@@ -1573,6 +1586,9 @@ export default function DecksPage() {
           {/* Shared with the collection's card panel — see components/CardText. */}
           <CardText detail={d ?? null} loading={readingBusy} />
         </div>
+        {zoomed && (
+          <CardZoom src={zoomed} alt={reading.name} onClose={() => setZoomed(null)} />
+        )}
       </div>
     );
   }
