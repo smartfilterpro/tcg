@@ -10,6 +10,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createObjectScanner, isEnvelope } from "@/lib/jsonStream";
 import { rowToSummary, defaultVariantFor, type CardSummaryRow } from "@/lib/types";
 import { pickPrinting, patternPrintingFor } from "@/lib/cardPrinting";
+import { setsAgree } from "@/lib/setName";
 import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
 import { loadFinishOverrides } from "@/lib/finishFeedback";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -161,17 +162,51 @@ async function matchFromLocalDb(
   detected: DetectedCard
 ): Promise<CardSummary | null> {
   try {
+    if (!detected.name) return null;
     const key = numberKey(detected.collectorNumber);
-    if (!detected.name || !key) return null;
     const { data } = await supabase
       .from("cards")
       .select("*")
       // Exact (case-insensitive) name match; strip ilike wildcards
       .ilike("name", detected.name.replace(/[%_]/g, ""))
       .limit(25);
-    let hits = ((data ?? []) as CardSummaryRow[]).filter(
-      (r) => numberKey(r.number) === key
-    );
+    const all = (data ?? []) as CardSummaryRow[];
+
+    // NO NUMBER IS NOT NO ANSWER.
+    //
+    // This used to give up the moment the collector number came back
+    // unreadable — which happens constantly on a photo of a pile, where the
+    // bottom edge of a card is the first thing another card covers. Giving
+    // up meant a card we have held for weeks went out to an external API
+    // and, on a bad minute, spent forty seconds there while six other cards
+    // waited behind it.
+    //
+    // A name we hold exactly, narrowed by the set if the scanner read one,
+    // is a perfectly good answer when it leaves ONE collector number
+    // standing. Two numbers means two different cards and it still goes
+    // outside, which is the case the strictness was really for.
+    if (!key) {
+      let byName = all;
+      const setHint = detected.setNameHint?.trim();
+      if (setHint) {
+        const bySet = byName.filter((r) => setsAgree(r.set_name, setHint));
+        if (bySet.length > 0) byName = bySet;
+      }
+      const totalOnly = detected.setTotal?.trim() ?? "";
+      if (/^\d+$/.test(totalOnly)) {
+        const total = parseInt(totalOnly, 10);
+        const byTotal = byName.filter(
+          (r) => r.set_printed_total === total || r.set_printed_total == null
+        );
+        if (byTotal.length > 0) byName = byTotal;
+      }
+      const numbers = new Set(byName.map((r) => numberKey(r.number)));
+      if (numbers.size !== 1) return null;
+      const picked = pickPrinting(byName, detected.rarityHint);
+      return picked ? rowToSummary(picked) : null;
+    }
+
+    let hits = all.filter((r) => numberKey(r.number) === key);
     // Same name+number can exist in several sets ("025/198" vs "025/159") —
     // use the printed set total to disambiguate when we read one. A set size
     // we don't hold can't refute anything, so it is only allowed to narrow.
@@ -194,6 +229,14 @@ async function matchFromLocalDb(
     return null; // any local hiccup → just use the external APIs
   }
 }
+
+/** How long one card may spend on external lookups before the scan moves on.
+ *
+ *  A person is watching a spinner, and an unmatched card costs them one tap
+ *  to fix. Twelve seconds is generous for two attempts at two query shapes
+ *  and firmly bounded: seven cards can no longer add up to a minute because
+ *  one of them was unlucky. */
+const EXTERNAL_BUDGET_MS = 12_000;
 
 /** Where a scan's time went, per stage and per card.
  *
@@ -425,7 +468,15 @@ async function runScan(opts: {
             } satisfies ScanMatch;
           }
 
-          let { match, candidates } = await matchDetectedCard(detected);
+          // A budget for this card, not an open-ended wait. Four query
+          // shapes with their own retry ladders is how one Lampent spent
+          // 39.5 seconds while the rest of the scan waited: a batch finishes
+          // when its slowest member does.
+          let { match, candidates } = await matchDetectedCard(detected, {
+            deadline: cardStartedAt + EXTERNAL_BUDGET_MS,
+            timeoutMs: 8_000,
+            attempts: 2,
+          });
           let usedTcgdex = false;
 
           // Consult TCGdex when the primary DB found nothing — or found only
@@ -465,7 +516,13 @@ async function runScan(opts: {
               swappedHere = true;
             }
           }
-          note(match ? (usedTcgdex ? "tcgdex" : "pokemontcg") : "no match", swappedHere);
+          // "no number read" is the difference between a card we couldn't
+          // find and a card we never looked for. Both used to log the same.
+          const why = numberKey(detected.collectorNumber) ? "" : " (no number read)";
+          note(
+            (match ? (usedTcgdex ? "tcgdex" : "pokemontcg") : "no match") + why,
+            swappedHere
+          );
           return { detected, match, candidates } satisfies ScanMatch;
         })
       );
