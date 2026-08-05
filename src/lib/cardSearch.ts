@@ -82,6 +82,8 @@ async function searchCatalogue(
   const name = parsed.name ? cleanCardName(parsed.name) : "";
   const variants = parsed.number ? storedNumberVariants(parsed.number) : [];
   const set = parsed.setName?.trim();
+  const totalNumber = Number(parsed.printedTotal);
+  const wantedTotal = Number.isFinite(totalNumber) && totalNumber > 0 ? totalNumber : null;
 
   // "set:Trick or Trade" with nothing else — list the set.
   //
@@ -112,7 +114,7 @@ async function searchCatalogue(
     if (variants.length > 0) q = q.in("number", variants);
     if (withName && name) q = q.ilike("name", `%${name}%`);
     if (set) q = q.ilike("set_name", `%${set}%`);
-    if (withTotal && Number.isFinite(Number(parsed.printedTotal))) {
+    if (withTotal && wantedTotal != null) {
       // A set size we DON'T hold must not exclude a card.
       //
       // This was an equality filter, and it quietly hid every printing whose
@@ -127,10 +129,36 @@ async function searchCatalogue(
       // don't know" is not evidence of a different set. A total that IS
       // known and different still excludes, which is the whole job — it is
       // what keeps #151 from every other set out of the results.
-      q = q.or(`set_printed_total.eq.${Number(parsed.printedTotal)},set_printed_total.is.null`);
+      q = q.or(`set_printed_total.eq.${wantedTotal},set_printed_total.is.null`);
     }
     const { data } = await q;
-    return (data ?? []) as unknown as CardSummaryRow[];
+    const rows = (data ?? []) as unknown as CardSummaryRow[];
+    if (!withTotal || wantedTotal == null) return rows;
+
+    // …and an unknown size only counts if it's from the RIGHT SET.
+    //
+    // Letting nulls through unconditionally was the other half of the same
+    // mistake: "151/217" then returned #151 from Miscellaneous Cards, Prize
+    // Pack Series, Primal Clash and everything else whose size we happen not
+    // to know — twelve wrong cards to rescue two right ones.
+    //
+    // The cards that DO match the size name the set being asked about. A
+    // null-size row is kept when its set agrees with one of those, loosely,
+    // which is exactly the "ME: Ascended Heroes" against "Ascended Heroes"
+    // case the variants live in. Everything else is a different card that
+    // happens to share a number.
+    //
+    // With no exact match there is no anchor, so nothing is dropped — the
+    // person may be searching a set we hold no size for at all, and a short
+    // wrong list is worse than a long one they can look through.
+    const exact = rows.filter((r) => r.set_printed_total === wantedTotal);
+    if (exact.length === 0) return rows;
+    const anchors = [...new Set(exact.map((r) => r.set_name))];
+    return rows.filter(
+      (r) =>
+        r.set_printed_total === wantedTotal ||
+        anchors.some((a) => setsAgree(a, r.set_name))
+    );
   };
 
   // Full constraints first, then relax: printedTotal counts only the base
