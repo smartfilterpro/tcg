@@ -136,16 +136,22 @@ export async function GET(req: Request) {
     // match several printings — reading a picture picked at random from
     // those is a cost with no matching benefit.
     const singleId = ids.length === 1 && names.length === 0 ? ids[0] : null;
-    if (missing.length > 0) {
+    // "Try reading it again", from the card's own panel. Only meaningful for
+    // a single card, and it skips both the cool-off and the text we already
+    // hold — the whole point is to redo a read whose result was wrong or
+    // whose failure is now believed to be fixable.
+    const force = singleId != null && url.searchParams.get("force") === "1";
+    const toFill = force ? rows.filter((r) => r.id === singleId) : missing;
+    if (toFill.length > 0) {
       const admin = createAdminClient();
-      for (const row of missing.slice(0, 10)) {
+      for (const row of toFill.slice(0, 10)) {
         const wantsVision = singleId != null && row.id === singleId;
         if (wantsVision) row.__triedPicture = true;
         try {
           const bd = await ensureCardText(
             admin,
             row as Parameters<typeof ensureCardText>[1],
-            wantsVision ? { allowVision: true, userId: user.id } : undefined
+            wantsVision ? { allowVision: true, userId: user.id, force } : undefined
           );
           if (!bd) continue;
           row.battle_data = bd;
