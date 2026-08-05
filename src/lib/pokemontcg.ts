@@ -123,6 +123,19 @@ const ATTEMPTS = 3;
  *  overloaded server twenty seconds to recover beats losing the run. */
 export const IMPORT_ATTEMPTS = 5;
 
+/** How long a caller is willing to wait.
+ *
+ *  The import and a scan want opposite things from the same code. An import
+ *  should out-wait a struggling server; a scan should give up and let a
+ *  person carry on. Without this the interactive path inherited the import's
+ *  patience — and one unlucky card held up a whole scan for forty seconds. */
+export interface Patience {
+  /** Wall-clock stop, as an epoch ms. No new attempt starts after it. */
+  deadline?: number;
+  /** Per-request timeout. 30s is a background number. */
+  timeoutMs?: number;
+}
+
 /** Say what actually happened.
  *
  *  The old message was `pokemontcg.io 500:` and nothing else — the body was
@@ -154,11 +167,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  *  happened: one 500 on page 1 and the whole import wrote nothing. */
 async function apiFetchJson(
   url: string,
-  attempts = ATTEMPTS
+  attempts = ATTEMPTS,
+  opts?: Patience
 ): Promise<Record<string, unknown>> {
   let last = "pokemontcg.io could not be reached";
   let retryAfterMs = 0;
+  const timeoutMs = opts?.timeoutMs ?? 30_000;
   for (let attempt = 0; attempt < attempts; attempt++) {
+    // Out of time. The retry ladder is right for a bulk import that nobody
+    // is watching and wrong for somebody holding a phone: three attempts,
+    // four query shapes and a 30-second timeout multiply into the 39.5
+    // seconds ONE card spent while six others waited on it.
+    if (opts?.deadline != null && Date.now() >= opts.deadline) break;
     if (attempt > 0) {
       // 1s, 2s, 4s, 8s, capped — with jitter so a burst of failures doesn't
       // reconverge into a synchronised thundering retry. Two seconds of
@@ -176,7 +196,7 @@ async function apiFetchJson(
       res = await fetch(url, {
         headers: headers(),
         cache: "no-store",
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
       last = `pokemontcg.io network error: ${err instanceof Error ? err.message : String(err)}`;
@@ -273,10 +293,16 @@ export function toSummary(card: RawCard): CardSummary {
   };
 }
 
-async function apiGet(path: string, params: Record<string, string>): Promise<RawCard[]> {
+async function apiGet(
+  path: string,
+  params: Record<string, string>,
+  patience?: Patience & { attempts?: number }
+): Promise<RawCard[]> {
   const url = new URL(`${BASE}${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const json = (await apiFetchJson(url.toString())) as { data: RawCard | RawCard[] };
+  const json = (await apiFetchJson(url.toString(), patience?.attempts ?? ATTEMPTS, patience)) as {
+    data: RawCard | RawCard[];
+  };
   return Array.isArray(json.data) ? json.data : [json.data];
 }
 
@@ -461,6 +487,8 @@ export async function searchCards(opts: {
    *  broad. */
   looseSetName?: boolean;
   pageSize?: number;
+  /** How long the caller will wait. Omitted means the background default. */
+  patience?: Patience & { attempts?: number };
 }): Promise<CardSummary[]> {
   const clauses: string[] = [];
   if (opts.name) clauses.push(nameClause(cleanCardName(opts.name)));
@@ -486,11 +514,15 @@ export async function searchCards(opts: {
     clauses.push(`set.printedTotal:${esc(opts.printedTotal).replace(/^0+(?=\d)/, "")}`);
   if (opts.setName) clauses.push(setNameClause(opts.setName, opts.looseSetName));
   if (clauses.length === 0) return [];
-  const cards = await apiGet("/cards", {
-    q: clauses.join(" "),
-    pageSize: String(opts.pageSize ?? 12),
-    orderBy: "-set.releaseDate",
-  });
+  const cards = await apiGet(
+    "/cards",
+    {
+      q: clauses.join(" "),
+      pageSize: String(opts.pageSize ?? 12),
+      orderBy: "-set.releaseDate",
+    },
+    opts.patience
+  );
   return cards.map(toSummary);
 }
 
@@ -529,45 +561,60 @@ export async function getCardById(id: string): Promise<CardSummary | null> {
 }
 
 /** Given what Claude detected on a card, find the best DB match + alternatives. */
-export async function matchDetectedCard(detected: {
-  name: string;
-  collectorNumber: string | null;
-  setTotal: string | null;
-  setNameHint: string | null;
-}): Promise<{ match: CardSummary | null; candidates: CardSummary[] }> {
+export async function matchDetectedCard(
+  detected: {
+    name: string;
+    collectorNumber: string | null;
+    setTotal: string | null;
+    setNameHint: string | null;
+  },
+  /** A wall-clock budget for THIS card. Four query shapes, each with its own
+   *  retry ladder, is a lot of patience to spend on one card while six
+   *  others wait behind it — and a batch is only as fast as its slowest
+   *  member. Passing a deadline turns an unbounded wait into a bounded one:
+   *  the passes that fit inside it run, the rest don't, and an unmatched
+   *  card is a tap to fix where a forty-second scan is not. */
+  patience?: Patience & { attempts?: number }
+): Promise<{ match: CardSummary | null; candidates: CardSummary[] }> {
   let candidates: CardSummary[] = [];
+  const outOfTime = () => patience?.deadline != null && Date.now() >= patience.deadline;
 
   // Pass 1: name + number (most precise)
   if (detected.name && detected.collectorNumber) {
     try {
-      candidates = await searchCards({ name: detected.name, number: detected.collectorNumber });
+      candidates = await searchCards({
+        name: detected.name,
+        number: detected.collectorNumber,
+        patience,
+      });
     } catch {
       candidates = [];
     }
   }
   // Pass 2: name only
-  if (candidates.length === 0 && detected.name) {
+  if (candidates.length === 0 && detected.name && !outOfTime()) {
     try {
-      candidates = await searchCards({ name: detected.name, pageSize: 12 });
+      candidates = await searchCards({ name: detected.name, pageSize: 12, patience });
     } catch {
       candidates = [];
     }
   }
   // Pass 3: punctuation-blind word matching (handles apostrophes, periods,
   // hyphens, é — "Farfetch'd", "Mr. Mime", "Ho-Oh", "Pokémon Catcher")
-  if (candidates.length === 0 && detected.name) {
+  if (candidates.length === 0 && detected.name && !outOfTime()) {
     try {
       candidates = await searchCards({
         nameTokens: detected.name,
         number: detected.collectorNumber ?? undefined,
         pageSize: 12,
+        patience,
       });
     } catch {
       candidates = [];
     }
-    if (candidates.length === 0) {
+    if (candidates.length === 0 && !outOfTime()) {
       try {
-        candidates = await searchCards({ nameTokens: detected.name, pageSize: 12 });
+        candidates = await searchCards({ nameTokens: detected.name, pageSize: 12, patience });
       } catch {
         candidates = [];
       }
