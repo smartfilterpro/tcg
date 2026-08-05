@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import CardZoom from "@/components/CardZoom";
 import {
   SEALED_KINDS,
   sealedKindLabel,
@@ -33,6 +34,8 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
   const [condition, setCondition] = useState("sealed");
   const [adding, setAdding] = useState(false);
   const [suggestions, setSuggestions] = useState<SealedSuggestion[]>([]);
+  /** The product picture being looked at full-screen, if any. */
+  const [zoom, setZoom] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
 
   const load = useCallback(async () => {
@@ -328,14 +331,24 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
                 key={item.id}
                 className="card-panel flex flex-wrap items-center gap-3 p-3 text-sm"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
                 {item.product?.image_url ? (
-                  <img
-                    src={item.product.image_url}
-                    alt=""
-                    className="h-16 w-16 shrink-0 rounded object-cover"
-                    loading="lazy"
-                  />
+                  // Tappable, same as a card's picture: a 64px thumbnail of a
+                  // box is enough to tell one product from another and not
+                  // enough to read the packaging.
+                  <button
+                    type="button"
+                    className="shrink-0 cursor-zoom-in"
+                    onClick={() => setZoom(item.product!.image_url!)}
+                    aria-label={`See ${item.product?.name ?? "this product"} larger`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={item.product.image_url}
+                      alt=""
+                      className="h-16 w-16 rounded object-cover"
+                      loading="lazy"
+                    />
+                  </button>
                 ) : (
                   <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded bg-slate-100 text-lg">
                     📦
@@ -410,6 +423,8 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
         set completion, or in your card total. Values come from current sealed listings and are
         a guide, not an appraisal.
       </p>
+
+      {zoom && <CardZoom src={zoom} alt="Sealed product" onClose={() => setZoom(null)} />}
     </div>
   );
 }

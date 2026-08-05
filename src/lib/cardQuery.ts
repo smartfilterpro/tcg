@@ -2,6 +2,54 @@
  *  route so it can be exercised directly — a route file may only export
  *  HTTP handlers. */
 
+/** A collector number as stored, comparable: "073" and "73" and "73/86" all
+ *  reduce to the same thing, while "112a" keeps its letter — that suffix
+ *  marks an alternate printing and collapsing it would match the wrong card. */
+function numKey(n: string | null | undefined): string {
+  return (n ?? "")
+    .split("/")[0]
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/(^|[^0-9])0+(?=\d)/g, "$1");
+}
+
+/** Does a card match a query written the way the number is PRINTED on it?
+ *
+ *  "73/86" is what a person reads off the card, and it matched nothing: the
+ *  collection's search is a token match over name, set and number, and the
+ *  number column holds "73" while the set size lives in another column
+ *  entirely. So the one string on the card that uniquely identifies it was
+ *  the one string that couldn't find it.
+ *
+ *  Deliberately narrow, and used as an OR alongside the ordinary token
+ *  match: only the slash form gets here, so nothing that finds a card today
+ *  stops finding it. A set size we don't hold (null) matches anything —
+ *  the number is doing the work, and the size can only refute, never
+ *  confirm. */
+export function matchesPrintedNumber(
+  query: string,
+  card: { name?: string | null; number?: string | null; printedTotal?: number | null }
+): boolean {
+  const parsed = parseCardQuery(query);
+  if (!parsed.number || !parsed.printedTotal) return false;
+
+  const wanted = numKey(parsed.number);
+  if (!wanted || numKey(card.number) !== wanted) return false;
+
+  const total = Number(parsed.printedTotal);
+  if (Number.isFinite(total) && card.printedTotal != null && card.printedTotal !== total) {
+    return false;
+  }
+
+  // "Dragonair 73/86" — the name still has to be the card's.
+  if (parsed.name) {
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!norm(card.name ?? "").includes(norm(parsed.name))) return false;
+  }
+  return true;
+}
+
 export interface ParsedCardQuery {
   name?: string;
   number?: string;

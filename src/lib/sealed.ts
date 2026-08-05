@@ -244,9 +244,11 @@ export async function priceProduct(
   try {
     const { createAdminClient } = await import("@/lib/supabase/admin");
     const admin = createAdminClient();
+    // select("*") — image_source only exists after migration 052, and
+    // naming it would fail the whole read on a database without it.
     const { data: current } = await admin
       .from("sealed_products")
-      .select("image_url, tcgplayer_id")
+      .select("*")
       .eq("id", productId)
       .maybeSingle();
 
@@ -268,9 +270,11 @@ export async function priceProduct(
       ? await trackerSealedById(existingId)
       : await trackerSealedByName(name);
 
+    let imageSource: string | null = null;
     if (fromTracker?.price != null) {
       value = fromTracker.price;
       image = fromTracker.image;
+      imageSource = "pricetracker";
       patch.price_source = "TCGplayer via Pokémon Price Tracker";
       patch.source = "pricetracker";
       if (!existingId && fromTracker.tcgPlayerId) patch.tcgplayer_id = fromTracker.tcgPlayerId;
@@ -283,6 +287,7 @@ export async function priceProduct(
       if (listings) {
         value = listings.median;
         image = listings.image ?? null;
+        imageSource = "ebay";
         patch.price_source = `${listings.source} (${listings.count} listings)`;
         patch.source = "ebay";
       }
@@ -291,14 +296,36 @@ export async function priceProduct(
     if (value == null) return null;
     patch.market_price = value;
 
-    // Only fill a picture we don't have. Repricing runs every time somebody
-    // presses Check price, and swapping the image on each run would mean a
-    // product's photo changing under its owner for no reason.
-    if (!current?.image_url && image) {
+    // Fill a picture we don't have — and UPGRADE one we shouldn't have kept.
+    //
+    // "Only fill what's missing" is right in general: repricing runs every
+    // time somebody presses Check price, and a photo changing under its
+    // owner on every run is its own bug. But it left a product that was
+    // priced from eBay before the paid catalogue knew about it stuck with a
+    // seller's snapshot for ever — a box in a car footwell, at an angle,
+    // thumb in shot — however good a picture turned up afterwards.
+    //
+    // So exactly one upgrade is allowed: a listing photo may be replaced by
+    // an official product shot. Nothing replaces an official shot, and
+    // nothing replaces a picture a person chose.
+    const heldSource = (current?.image_source as string | null) ?? null;
+    const replaceable = heldSource == null || heldSource === "ebay";
+    const upgrading = !!current?.image_url && replaceable && imageSource === "pricetracker";
+    if (image && (!current?.image_url || upgrading)) {
       patch.image_url = (await mirrorSealedImage(productId, image)) ?? image;
+      patch.image_source = imageSource;
     }
 
-    await admin.from("sealed_products").update(patch).eq("id", productId);
+    const { error: writeErr } = await admin
+      .from("sealed_products")
+      .update(patch)
+      .eq("id", productId);
+    // image_source only exists after migration 052. Losing the price over a
+    // column that records provenance would be the wrong trade.
+    if (writeErr && /image_source/.test(writeErr.message)) {
+      const { image_source: _drop, ...rest } = patch;
+      await admin.from("sealed_products").update(rest).eq("id", productId);
+    }
     return value;
   } catch {
     return null;
