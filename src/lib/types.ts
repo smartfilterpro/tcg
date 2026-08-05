@@ -197,14 +197,60 @@ export function variantLabel(variant: string): string {
   );
 }
 
-/** Finishes known to exist for a card (from TCGplayer price keys), with a
- *  sensible fallback when no price data exists. */
+/** The order finishes are offered in, so a dropdown doesn't reshuffle itself
+ *  as price data arrives. Anything unrecognised keeps its own order after. */
+const FINISH_ORDER = ["normal", "holofoil", "reverseHolofoil"];
+
+/** Finishes that exist for a card.
+ *
+ *  A PRICE KEY IS NOT THE SAME QUESTION. This read the keys of the price map
+ *  and answered with those, which conflates "finishes we have a price for"
+ *  with "finishes this card was printed in" — and the two came apart the
+ *  moment the paid source started pricing cards. That source returns ONE
+ *  number and the printing it belongs to, so a card it priced ends up with
+ *  {normal: 0.06} and nothing else, and the dropdown stopped offering
+ *  Reverse Holo for an ordinary Rare that plainly has one. Cards got worse
+ *  options as the pricing got better, which is the wrong way round.
+ *
+ *  So the price keys are a hint, added to what the RARITY implies:
+ *
+ *    Common / Uncommon / Rare  → Normal and Reverse Holo
+ *    Holo Rare                 → Holofoil and Reverse Holo (no plain)
+ *
+ *  Everything above that — ex, V, full arts, illustration and secret rares —
+ *  comes in one finish, so nothing is added and the keys stand alone. Named
+ *  printings ("(Poké Ball Pattern)") are their own product and get nothing
+ *  added either; the name IS the finish.
+ *
+ *  Erring toward offering one finish too many is deliberate. An option
+ *  nobody picks costs a line in a menu; a missing one means somebody cannot
+ *  record the card they are holding. */
 export function availableVariants(card: {
   prices?: Record<string, number | null> | null;
+  rarity?: string | null;
+  name?: string;
 }): string[] {
-  const keys = card.prices ? Object.keys(card.prices) : [];
-  if (keys.length > 0) return keys;
-  return ["normal", "holofoil", "reverseHolofoil"];
+  const out = new Set<string>(card.prices ? Object.keys(card.prices) : []);
+
+  const named = typeof card.name === "string" && isSpecificPrinting(card.name);
+  const r = (card.rarity ?? "").toLowerCase();
+  if (!named && r) {
+    const reverse = !/reverse/.test(r);
+    if (/holo/.test(r) && !/reverse/.test(r)) {
+      out.add("holofoil");
+      if (reverse) out.add("reverseHolofoil");
+    } else if (/^(common|uncommon|rare)$/.test(r.trim())) {
+      out.add("normal");
+      out.add("reverseHolofoil");
+    }
+  }
+
+  if (out.size === 0) return [...FINISH_ORDER];
+  return [...out].sort((a, b) => {
+    const ai = FINISH_ORDER.indexOf(a);
+    const bi = FINISH_ORDER.indexOf(b);
+    return (ai < 0 ? FINISH_ORDER.length : ai) - (bi < 0 ? FINISH_ORDER.length : bi);
+  });
 }
 
 /** Best default finish given the card + what the scanner thought it saw. */
