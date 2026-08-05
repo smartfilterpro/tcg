@@ -6,6 +6,7 @@ import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { logAiUsage } from "@/lib/usage";
+import { askForJson } from "@/lib/aiJson";
 import type { Deck, Profile } from "@/lib/types";
 import { readCardTextOnce } from "@/lib/cardText";
 
@@ -23,7 +24,11 @@ const FX_SCHEMA = {
   properties: {
     ops: {
       type: "array",
-      maxItems: 3,
+      // NOT a maxItems constraint — the API rejects that keyword and the
+      // whole request 400s before the model sees it, which is exactly how
+      // every card read in the app failed silently for weeks. See
+      // lib/aiJson. The limit is enforced below, where it always was.
+      description: "At most 3 operations.",
       items: {
         type: "object",
         properties: {
@@ -69,22 +74,26 @@ async function compileTrainerFx(
 ): Promise<CardBattleData["fx"]> {
   try {
     const client = anthropic();
-    const response = await client.messages.create({
-      model: FX_MODEL,
-      max_tokens: 500,
-      system: FX_SYSTEM,
-      output_config: {
-        format: { type: "json_schema", schema: FX_SCHEMA as unknown as Record<string, unknown> },
+    const parsed = await askForJson<{
+      ops?: Array<{ op: string; n?: number | null; note?: string | null }>;
+    }>(
+      client,
+      {
+        model: FX_MODEL,
+        max_tokens: 500,
+        system: FX_SYSTEM,
+        messages: [
+          { role: "user", content: `Card: "${cardName}"\nText: ${rules.join(" / ")}` },
+        ],
       },
-      messages: [
-        { role: "user", content: `Card: "${cardName}"\nText: ${rules.join(" / ")}` },
-      ],
-    });
-    if (userId) await logAiUsage(admin, userId, "card_fx", FX_MODEL, response.usage);
-    const text = response.content.find((b) => b.type === "text");
-    if (!text || text.type !== "text") return null;
-    const parsed = JSON.parse(text.text) as { ops?: Array<{ op: string; n?: number | null; note?: string | null }> };
-    if (!Array.isArray(parsed.ops)) return null;
+      FX_SCHEMA as unknown as Record<string, unknown>,
+      {
+        onResponse: (response) => {
+          if (userId) return logAiUsage(admin, userId, "card_fx", FX_MODEL, response.usage);
+        },
+      }
+    );
+    if (!parsed || !Array.isArray(parsed.ops)) return null;
     return {
       ops: parsed.ops.slice(0, 3).map((o) => ({
         op: String(o.op),

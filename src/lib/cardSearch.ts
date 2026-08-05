@@ -112,8 +112,22 @@ async function searchCatalogue(
     if (variants.length > 0) q = q.in("number", variants);
     if (withName && name) q = q.ilike("name", `%${name}%`);
     if (set) q = q.ilike("set_name", `%${set}%`);
-    if (withTotal && parsed.printedTotal) {
-      q = q.eq("set_printed_total", Number(parsed.printedTotal));
+    if (withTotal && Number.isFinite(Number(parsed.printedTotal))) {
+      // A set size we DON'T hold must not exclude a card.
+      //
+      // This was an equality filter, and it quietly hid every printing whose
+      // set size we happen not to know. Searching "151/217" returned one
+      // Dragonair while the set listing plainly showed four — the plain one
+      // came from pokemontcg.io with a printed total of 217, and the Love
+      // Ball and Energy Symbol Pattern printings came from the paid source,
+      // which doesn't publish a set size, so their column is null. Null is
+      // not 217, so they were filtered out before anyone saw them.
+      //
+      // Null can't contradict the query: it means we don't know, and "we
+      // don't know" is not evidence of a different set. A total that IS
+      // known and different still excludes, which is the whole job — it is
+      // what keeps #151 from every other set out of the results.
+      q = q.or(`set_printed_total.eq.${Number(parsed.printedTotal)},set_printed_total.is.null`);
     }
     const { data } = await q;
     return (data ?? []) as unknown as CardSummaryRow[];
@@ -570,8 +584,21 @@ export async function runCardSearch(
     // The ranking the complaint was actually about: a card carrying the
     // EXACT number you typed belongs at the top, zeros ignored — name
     // closeness only breaks ties. Newest printing first within each band.
+    const wantedTotal = parsed.printedTotal ? Number(parsed.printedTotal) : null;
     const rank = (c: CardSummary) => {
       const numberMiss = wantedKey ? (numberKey(c.number) === wantedKey ? 0 : 1) : 0;
+      // Set size, now that it sorts rather than excludes: an exact match
+      // first, then the printings whose size we don't know — those are the
+      // ball patterns and stamped versions, and they belong in the answer,
+      // just under the plain card rather than above it.
+      const totalMiss =
+        wantedTotal == null
+          ? 0
+          : c.setPrintedTotal === wantedTotal
+            ? 0
+            : c.setPrintedTotal == null
+              ? 1
+              : 2;
       const n = normalizeForSearch(c.name);
       const nameRank = !wantedName
         ? 0
@@ -582,7 +609,7 @@ export async function runCardSearch(
             : n.includes(wantedName)
               ? 2
               : 3;
-      return numberMiss * 10 + nameRank;
+      return numberMiss * 100 + totalMiss * 10 + nameRank;
     };
     // Listing a set is a different job from searching for a card, and it
     // wants a different order and a different limit.
