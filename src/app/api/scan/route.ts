@@ -8,15 +8,8 @@ import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createObjectScanner, isEnvelope } from "@/lib/jsonStream";
-import {
-  rowToSummary,
-  defaultVariantFor,
-  ballPatternOf,
-  isSpecificPrinting,
-  type CardSummaryRow,
-} from "@/lib/types";
-import { normalizeForSearch } from "@/lib/text";
-import { setsAgree } from "@/lib/setName";
+import { rowToSummary, defaultVariantFor, type CardSummaryRow } from "@/lib/types";
+import { pickPrinting, patternPrintingFor } from "@/lib/cardPrinting";
 import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
 import { loadFinishOverrides } from "@/lib/finishFeedback";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -180,79 +173,26 @@ async function matchFromLocalDb(
       (r) => numberKey(r.number) === key
     );
     // Same name+number can exist in several sets ("025/198" vs "025/159") —
-    // use the printed set total to disambiguate when we read one.
+    // use the printed set total to disambiguate when we read one. A set size
+    // we don't hold can't refute anything, so it is only allowed to narrow.
     const totalText = detected.setTotal?.trim() ?? "";
     if (/^\d+$/.test(totalText)) {
       const total = parseInt(totalText, 10);
-      hits = hits.filter((r) => r.set_printed_total === total);
+      const byTotal = hits.filter(
+        (r) => r.set_printed_total === total || r.set_printed_total == null
+      );
+      if (byTotal.length > 0) hits = byTotal;
     }
-    return hits.length === 1 ? rowToSummary(hits[0]) : null;
+    // Several rows sharing a name and a number is now NORMAL — the sync
+    // creates a row per printing, so "Dragonair" is three cards. This used to
+    // require exactly one candidate, so it failed on every card with
+    // printings and went out to the external APIs for something sitting in
+    // our own database. Choosing the right one keeps the fast path fast.
+    const picked = pickPrinting(hits, detected.rarityHint);
+    return picked ? rowToSummary(picked) : null;
   } catch {
     return null; // any local hiccup → just use the external APIs
   }
-}
-
-/** The card's OWN row for a ball-pattern printing, if the catalogue has one.
- *
- *  Scanning a Master Ball Pikachu used to produce a plain Pikachu with a
- *  hand-picked finish label, which prices as the plain card — and a Master
- *  Ball reverse can be worth many times one. TCGplayer sells the printing as
- *  its own product and the paid sync now creates those rows, so the right
- *  answer usually already exists in our catalogue: same card, same number,
- *  same set, name carrying the pattern.
- *
- *  Matched narrowly on purpose. The set has to agree, the collector number
- *  has to agree, and the name has to be the base card's plus the pattern —
- *  so a scan can only ever swap to a row that IS the card in the photo. When
- *  nothing matches, the caller keeps the plain card and records the pattern
- *  as a finish, which is what it did before.
- */
-async function patternPrinting(
-  supabase: SupabaseClient,
-  base: CardSummary,
-  words: string[],
-  /** False when the scan saw "a ball" without naming which. Then two
-   *  candidates is an unanswered question, not a choice — picking one would
-   *  be a coin flip filed as a fact. */
-  specific: boolean
-): Promise<CardSummary | null> {
-  try {
-    const { data } = await supabase
-      .from("cards")
-      .select("*")
-      .ilike("name", `${base.name.replace(/[%_]/g, " ")}%`)
-      .limit(40);
-    const rows = (data ?? []) as CardSummaryRow[];
-    const wantedNumber = numberKey(base.number);
-    const baseName = normalizeForSearch(base.name);
-    const hits = rows.filter((r) => {
-      if (r.id === base.id) return false;
-      if (numberKey(r.number) !== wantedNumber) return false;
-      if (!setsAgree(r.set_name, base.setName)) return false;
-      const n = normalizeForSearch(r.name);
-      return n.startsWith(baseName) && words.some((w) => n.includes(w));
-    });
-    if (hits.length === 0) return null;
-    if (hits.length > 1 && !specific) return null;
-    return rowToSummary(hits[0]);
-  } catch {
-    // The plain card plus a finish label is a perfectly good fallback.
-    return null;
-  }
-}
-
-/** Swap a scanned card for its ball-pattern printing when the scan saw one
- *  and the catalogue holds it. Null when there is nothing better to use. */
-async function preferPattern(
-  supabase: SupabaseClient,
-  detected: DetectedCard,
-  match: CardSummary
-): Promise<CardSummary | null> {
-  const ball = ballPatternOf(detected.rarityHint);
-  if (!ball) return null;
-  // A row that is already a named printing is not swapped again.
-  if (isSpecificPrinting(match.name)) return null;
-  return patternPrinting(supabase, match, ball.words, ball.variant != null);
 }
 
 /** Do the scan, recording progress against a job row.
@@ -446,7 +386,7 @@ async function runScan(opts: {
           // database in one quick query instead of several external calls.
           const local = await matchFromLocalDb(supabase, detected);
           if (local) {
-            const swapped = await preferPattern(supabase, detected, local);
+            const swapped = await patternPrintingFor(supabase, local, detected.rarityHint);
             return {
               detected,
               match: swapped ?? local,
@@ -483,7 +423,7 @@ async function runScan(opts: {
             }
           }
           if (match) {
-            const swapped = await preferPattern(supabase, detected, match);
+            const swapped = await patternPrintingFor(supabase, match, detected.rarityHint);
             if (swapped) {
               match = swapped;
               candidates = [swapped, ...candidates];
