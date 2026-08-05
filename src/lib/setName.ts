@@ -47,11 +47,22 @@ const YEAR = /^(19|20)\d{2}$/;
  *  Shield" is not "Sword & Shield—Battle Styles". */
 function isDecoration(t: string): boolean {
   if (YEAR.test(t)) return true;
-  // A short code with a letter in it: "SV", "SWSH", "XY", and the numbered
-  // ones the paid source uses — "MEO3: Perfect Order" against our "Perfect
-  // Order". Requiring a letter is what keeps a bare "2" out, and a bare 2 is
-  // the whole difference between Base Set and Base Set 2.
-  return /[a-z]/.test(t) && /^[a-z0-9]{1,4}$/.test(t);
+  // An era or product code: letters, then optionally a number. "SV",
+  // "SWSH", "XY", "HGSS", and the numbered ones both paid catalogues use —
+  // "SWSH05: Battle Styles" against our "Battle Styles", "MEO3: Perfect
+  // Order" against "Perfect Order", "SM12", "ME01".
+  //
+  // This was capped at four characters, which fitted "MEO3" and shut out
+  // "SWSH05" — and a sync then declared thousands of cards to be in a
+  // different set from themselves, refusing to price them. The shape is
+  // what identifies a code, not its length: up to four letters, up to three
+  // digits, nothing else.
+  //
+  // Letters are REQUIRED, so a bare "2" is not decoration — and a bare 2 is
+  // the whole difference between Base Set and Base Set 2. Digits are
+  // optional but capped, so a real word ("Promos", "Battle") never
+  // qualifies.
+  return /^[a-z]{1,4}\d{0,3}$/.test(t);
 }
 
 /** Loose agreement: the same set, allowing for how differently it is named.

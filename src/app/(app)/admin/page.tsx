@@ -2305,6 +2305,8 @@ function PriceSyncPanel() {
       cardsAdded?: number;
       unmatchedSamples?: Array<{ set: string; name: string; num: string; key?: string }>;
       matched?: number;
+      plainSeen?: number;
+      plainMatched?: number;
       addsPaused?: string | null;
       budgetPaused?: string | null;
       idConflicts?: number;
@@ -2427,6 +2429,8 @@ function PriceSyncPanel() {
             {(st.skippedAmbiguous ?? 0) > 0 && ` · ${st.skippedAmbiguous} skipped as ambiguous`}
             {(st.skippedSetMismatch ?? 0) > 0 &&
               ` · ${(st.skippedSetMismatch ?? 0).toLocaleString()} skipped: same name and number, different set`}
+            {(st.plainSeen ?? 0) > 0 &&
+              ` · ${(st.plainMatched ?? 0).toLocaleString()} of ${(st.plainSeen ?? 0).toLocaleString()} plain cards matched`}
             {(st.idConflicts ?? 0) > 0 &&
               ` · ${st.idConflicts} already claimed by a duplicate row (merge them below)`}
           </p>
@@ -2455,13 +2459,18 @@ function PriceSyncPanel() {
               that never happens when a matcher is merely mostly broken — a
               97%-miss run showed a few ids filled and looked healthy. It is
               the RATE that says whether matching works. */}
-          {(st.cardsSeen ?? 0) > 50 &&
-            (st.matched ?? 0) / Math.max(1, st.cardsSeen ?? 1) < 0.5 && (
+          {/* Judged on their PLAIN cards. Their per-printing products —
+              "(Love Ball)", "(Poké Ball Pattern)" — are supposed not to
+              match anything of ours: we hold one row per card and they sell
+              one product per printing. Counting those as misses made a
+              working sync look 50% broken. */}
+          {(st.plainSeen ?? 0) > 50 &&
+            (st.plainMatched ?? 0) / Math.max(1, st.plainSeen ?? 1) < 0.5 && (
               <p className="m-0 mb-1 text-xs text-brand-negative">
                 {!st.indexedCards
                   ? "None of our cards were indexed — the catalogue is empty, migration 033 hasn't run, or this run predates the check."
-                  : `Only ${(st.matched ?? 0).toLocaleString()} of ${(st.cardsSeen ?? 0).toLocaleString()} ` +
-                    `of their cards matched ours, against ${st.indexedCards.toLocaleString()} indexed. ` +
+                  : `Only ${(st.plainMatched ?? 0).toLocaleString()} of ${(st.plainSeen ?? 0).toLocaleString()} ` +
+                    `of their plain cards matched ours, against ${st.indexedCards.toLocaleString()} indexed. ` +
                     `A healthy sync matches nearly everything — both catalogues are the same game — ` +
                     `so this is a name or number format mismatch, not a missing catalogue. ` +
                     `The examples below show how their side writes them.`}
