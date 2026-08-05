@@ -1344,6 +1344,10 @@ export default function AdminPage() {
             <SearchProbePanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">⏱️ Recent scans</h2>
+            <ScanLogPanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🪵 Server log</h2>
             <ServerLogPanel />
           </div>
@@ -3895,6 +3899,124 @@ function SearchProbePanel() {
           </details>
         </>
       )}
+    </div>
+  );
+}
+
+/** Where recent scans spent their time.
+ *
+ *  A slow scan has three possible culprits and one number, so the number
+ *  tells you nothing. This splits it: what the model took to read the photo,
+ *  what matching took, and for each card which source answered. Cards
+ *  answered by our own catalogue are effectively free; anything answered
+ *  outside is a network round trip, and those are what a 57-second nine-card
+ *  scan is made of. */
+function ScanLogPanel() {
+  const [out, setOut] = useState<{
+    scans?: Array<{
+      id: string;
+      at: string;
+      status: string;
+      cardCount: number;
+      durationMs: number | null;
+      modelMs: number | null;
+      matchMs: number | null;
+      byPath: Record<string, number>;
+      slowest: Array<{ name: string; ms: number; path: string; swapped?: boolean }>;
+      error: string | null;
+    }>;
+    summary?: {
+      scans: number;
+      avgModelMs: number;
+      avgMatchMs: number;
+      fromCatalogue: number;
+      fromOutside: number;
+      unmatched: number;
+    } | null;
+    error?: string;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/scan-log");
+      const json = await res.json();
+      setOut(res.ok ? json : { error: json.error || "Failed" });
+    } catch (e) {
+      setOut({ error: e instanceof Error ? e.message : "Failed" });
+    }
+    setBusy(false);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const secs = (ms: number | null) => (ms == null ? "?" : `${(ms / 1000).toFixed(1)}s`);
+
+  return (
+    <div className="space-y-2">
+      <p className="m-0 text-xs text-brand-ink4">
+        Every scan records where its time went. A card answered by our own catalogue is
+        instant; one answered by an external database is a round trip, and a handful of those
+        is what makes one scan take four times as long as another.
+      </p>
+      <button className="btn-secondary text-xs" disabled={busy} onClick={() => void load()}>
+        {busy ? "Loading…" : "Refresh"}
+      </button>
+
+      {out?.error && <p className="m-0 text-xs text-brand-negative">{out.error}</p>}
+
+      {out?.summary && (
+        <p className="m-0 text-xs text-brand-ink3">
+          Last {out.summary.scans} timed scans: model {secs(out.summary.avgModelMs)} avg, matching{" "}
+          {secs(out.summary.avgMatchMs)} avg · {out.summary.fromCatalogue} cards from our
+          catalogue, {out.summary.fromOutside} from outside
+          {out.summary.unmatched > 0 && `, ${out.summary.unmatched} unmatched`}.
+        </p>
+      )}
+      {out && !out.summary && (
+        <p className="m-0 text-xs text-brand-ink4">
+          No timing data yet — run migration 053, then scan something.
+        </p>
+      )}
+
+      <div className="space-y-1">
+        {(out?.scans ?? []).map((s) => (
+          <details key={s.id} className="text-[11px] text-brand-ink4">
+            <summary className="cursor-pointer">
+              <span
+                className={
+                  (s.durationMs ?? 0) > 20000 ? "text-brand-negative" : "text-brand-ink3"
+                }
+              >
+                {secs(s.durationMs)}
+              </span>{" "}
+              · {s.cardCount} card{s.cardCount === 1 ? "" : "s"} ·{" "}
+              {new Date(s.at).toLocaleString()}
+              {s.status !== "done" && ` · ${s.status}`}
+            </summary>
+            <div className="mt-1 space-y-0.5">
+              <div>
+                model {secs(s.modelMs)} · matching {secs(s.matchMs)}
+                {Object.keys(s.byPath).length > 0 &&
+                  " · " +
+                    Object.entries(s.byPath)
+                      .map(([k, v]) => `${v} ${k}`)
+                      .join(", ")}
+              </div>
+              {s.slowest.map((c, i) => (
+                <div key={i} className="font-mono">
+                  {secs(c.ms)} {c.name} via {c.path}
+                  {c.swapped ? " (swapped to a printing)" : ""}
+                </div>
+              ))}
+              {s.error && <div className="text-brand-negative">{s.error}</div>}
+            </div>
+          </details>
+        ))}
+      </div>
     </div>
   );
 }
