@@ -47,7 +47,11 @@ const YEAR = /^(19|20)\d{2}$/;
  *  Shield" is not "Sword & Shield—Battle Styles". */
 function isDecoration(t: string): boolean {
   if (YEAR.test(t)) return true;
-  return /^[a-z]{1,4}$/.test(t);
+  // A short code with a letter in it: "SV", "SWSH", "XY", and the numbered
+  // ones the paid source uses — "MEO3: Perfect Order" against our "Perfect
+  // Order". Requiring a letter is what keeps a bare "2" out, and a bare 2 is
+  // the whole difference between Base Set and Base Set 2.
+  return /[a-z]/.test(t) && /^[a-z0-9]{1,4}$/.test(t);
 }
 
 /** Loose agreement: the same set, allowing for how differently it is named.
