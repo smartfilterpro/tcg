@@ -13,7 +13,8 @@ import type { DeckEditProposal } from "@/lib/deckEdit";
 import { DECK_EDIT_TOOL, runDeckEditProposal } from "@/lib/deckEditTool";
 import { buildContext } from "@/lib/assistantContext";
 import { ASSISTANT_SYSTEM, OFF_TOPIC_REPLY, isClearlyOffTopic } from "@/lib/assistantScope";
-import { completeWithRoom, answerText, noAnswerReply } from "@/lib/aiAnswer";
+import { completeWithRoom, answerText, noAnswerReply, addFinalRoundNote } from "@/lib/aiAnswer";
+import { setsAgree } from "@/lib/setName";
 
 export const maxDuration = 120;
 
@@ -189,14 +190,30 @@ async function runSetCompletion(
 
   // A loose name can catch several sets ("Base" catches Base Set and Base
   // Set 2). Answering about the wrong one would be worse than asking.
+  //
+  // But the same set under two spellings is not several sets. Our rows say
+  // "Perfect Order" and the paid source's say "MEO3: Perfect Order", and
+  // this counted them as two — so a completion question came back as "which
+  // of these two do you mean?", and the model, handed a contradiction,
+  // explained the app's catalogue to a player who had asked about cards.
+  // Folded here instead: the set with the most cards names the group, and
+  // any spelling that agrees with it joins.
   const setNames = [...new Set(rows.map((r) => r.set_name ?? "Unknown set"))];
-  if (setNames.length > 1) {
+  const byCount = [...setNames].sort(
+    (a, b) =>
+      rows.filter((r) => (r.set_name ?? "Unknown set") === b).length -
+      rows.filter((r) => (r.set_name ?? "Unknown set") === a).length
+  );
+  const primary = byCount[0];
+  const others = byCount.slice(1).filter((n) => !setsAgree(n, primary));
+  if (others.length > 0) {
     return (
-      `"${wanted}" matches ${setNames.length} sets: ${setNames.slice(0, 12).join(", ")}. ` +
+      `"${wanted}" matches ${others.length + 1} different sets: ` +
+      `${[primary, ...others].slice(0, 12).join(", ")}. ` +
       "Call this tool again with the exact one you mean."
     );
   }
-  const setName = setNames[0];
+  const setName = primary;
 
   const { data: ownedRows, error: ownErr } = await supabase
     .from("collection_items")
@@ -435,6 +452,11 @@ async function runChat(opts: {
   // the client can offer it for approval. Nothing has been written.
   let pendingEdit: DeckEditProposal | null = null;
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const finalRound = round === MAX_TOOL_ROUNDS - 1;
+    // Said out loud on the round where the tools close. See FINAL_ROUND_NOTE:
+    // taking the model's next move away without offering another is how a
+    // deck-building question ends in an empty turn.
+    if (finalRound) addFinalRoundNote(messages);
     response = await completeWithRoom(
       client,
       {
@@ -456,7 +478,7 @@ async function runChat(opts: {
         // the one most able to spend the whole budget reasoning and return
         // an empty turn — which reaches the player as an apology for a
         // question that was never the problem.
-        ...(round === MAX_TOOL_ROUNDS - 1
+        ...(finalRound
           ? {
               tool_choice: { type: "none" as const },
               output_config: { effort: "medium" as const },

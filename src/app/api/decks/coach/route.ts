@@ -8,7 +8,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { DeckCardEntry } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { legalityBriefing } from "@/lib/deckLegality";
-import { completeWithRoom, answerText, noAnswerReply } from "@/lib/aiAnswer";
+import { completeWithRoom, answerText, noAnswerReply, addFinalRoundNote } from "@/lib/aiAnswer";
 import { DECK_EDIT_TOOL, runDeckEditProposal } from "@/lib/deckEditTool";
 import type { DeckEditProposal } from "@/lib/deckEdit";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -177,6 +177,10 @@ async function runCoach(
   const startedAt = Date.now();
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const finalRound = round === MAX_TOOL_ROUNDS - 1;
+    // Taking the tool away without saying what to do instead is how a turn
+    // ends with nothing in it — see FINAL_ROUND_NOTE.
+    if (canEdit && finalRound) addFinalRoundNote(messages);
     // Thinking tokens and the visible answer share max_tokens. The cap is
     // a ceiling, not a bill — a generous one costs nothing on the
     // questions that answer in three lines, and rescues the ones that
@@ -191,9 +195,7 @@ async function runCoach(
         // The last permitted round takes the tool away, so the model
         // answers with words instead of ending the turn on a proposal
         // nothing will ever run.
-        ...(canEdit && round === MAX_TOOL_ROUNDS - 1
-          ? { tool_choice: { type: "none" as const } }
-          : {}),
+        ...(canEdit && finalRound ? { tool_choice: { type: "none" as const } } : {}),
         messages,
       },
       // Every attempt is logged, including a retry — it cost what it cost.

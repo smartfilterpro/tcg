@@ -68,7 +68,15 @@ const setKey = (s: string | null) =>
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/^(?:sv|swsh|sm|xy|bw|hgss|dp|ex)\s*[:-]\s*/, "")
+    // Any short leading code, not a fixed list of them. The list had the
+    // eras on it and missed the numbered product codes the paid source
+    // uses, so "MEO3: Perfect Order" and "Perfect Order" stayed two sets and
+    // their duplicate rows could never be grouped for merging \u2014 which is how
+    // one set came to appear twice in the app with the cards split between
+    // them. A COLON only: "Sword & Shield - Battle Styles" separates a real
+    // subset name with a dash, and stripping that would merge two sets that
+    // genuinely differ.
+    .replace(/^[a-z0-9]{1,5}\s*:\s*/, "")
     .replace(/[^a-z0-9]/g, "");
 
 function provenance(id: string): number {
