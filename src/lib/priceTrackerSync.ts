@@ -66,6 +66,21 @@ export interface SyncState {
    *  "3,771 new cards added" readable as either a healthy import or a
    *  broken matcher — without it the two look identical. */
   matched: number;
+  /** …and the same two numbers over their PLAIN products only.
+   *
+   *  TCGplayer sells a printing as its own product: "Dragonair (Love Ball)",
+   *  "Pikachu (Poké Ball Pattern)", the stamped and sealed-exclusive
+   *  versions. Our catalogue holds one row per card, so those legitimately
+   *  match nothing — they are cards we don't have, which is precisely what
+   *  the add step exists for.
+   *
+   *  Counting them as misses made a healthy sync look broken: half of their
+   *  catalogue "unmatched" tripped the guard, adding stopped, and the
+   *  variants everyone actually wanted stopped arriving. The health of the
+   *  MATCHER is a question about the cards both sides should have, so it is
+   *  asked about those. */
+  plainSeen?: number;
+  plainMatched?: number;
   /** Set when the match rate collapsed and adding was stopped. Carries the
    *  reason so the panel can say what happened rather than just going
    *  quiet. */
@@ -127,6 +142,8 @@ export function freshSyncState(): SyncState {
     setIndex: 0,
     cardsSeen: 0,
     matched: 0,
+    plainSeen: 0,
+    plainMatched: 0,
     addsPaused: null,
     pricesFilled: 0,
     imagesFilled: 0,
@@ -728,7 +745,15 @@ export async function runPriceSync(
           continue;
         }
 
-        if (mine) state.matched += 1;
+        // Is this a plain card, or one of their per-printing products?
+        // "Dragonair (Love Ball)" is the second kind: a real product that our
+        // catalogue has no row for and never did.
+        const plain = !/\([^)]*\)\s*$/.test((theirs.name ?? "").trim());
+        if (plain) state.plainSeen = (state.plainSeen ?? 0) + 1;
+        if (mine) {
+          state.matched += 1;
+          if (plain) state.plainMatched = (state.plainMatched ?? 0) + 1;
+        }
         if (!mine) {
           // A card we don't hold at all: add it rather than skip it. The
           // catalogue is only as complete as its sources, and this source is
@@ -746,14 +771,29 @@ export async function runPriceSync(
           // duplicate rows that then cost storage, bandwidth and a cleanup.
           // Pausing is free and reversible; the run keeps updating the
           // cards it DID match.
-          if (state.addsPaused == null && state.cardsSeen >= ADD_GUARD_MIN_SEEN) {
-            const rate = state.matched / state.cardsSeen;
+          // Judged on their PLAIN cards, not on everything they sell.
+          //
+          // The guard is asking "is the matcher working?", and it was
+          // answering with a number that can't tell. TCGplayer lists every
+          // printing as its own product — Love Ball, Poké Ball pattern,
+          // stamped, sealed-exclusive — and our catalogue has one row per
+          // card, so those match nothing NO MATTER HOW WELL the matcher
+          // works. They are the cards the add step exists for. Counting them
+          // as misses put the rate at 50%, tripped the guard, and stopped
+          // the app collecting the variants it had just been taught to want.
+          //
+          // A card with no parenthetical qualifier is one both catalogues
+          // should have. If those match, the matcher is fine.
+          const guardSeen = state.plainSeen ?? 0;
+          if (state.addsPaused == null && guardSeen >= ADD_GUARD_MIN_SEEN) {
+            const rate = (state.plainMatched ?? 0) / guardSeen;
             if (rate < ADD_GUARD_MIN_RATE) {
               state.addsPaused =
-                `Only ${Math.round(rate * 100)}% of their cards matched ours over the ` +
-                `first ${state.cardsSeen.toLocaleString()} seen. That reads as a matching ` +
-                `problem rather than a genuinely missing catalogue, so adding new cards ` +
-                `stopped. Prices and images for matched cards are still being updated. ` +
+                `Only ${Math.round(rate * 100)}% of their PLAIN cards matched ours over the ` +
+                `first ${guardSeen.toLocaleString()} seen (per-printing products like ` +
+                `"(Love Ball)" are excluded — those are meant not to match). That reads as a ` +
+                `matching problem rather than a genuinely missing catalogue, so adding new ` +
+                `cards stopped. Prices and images for matched cards are still being updated. ` +
                 `Check the unmatched examples below to see how their names and numbers ` +
                 `are written.`;
             }

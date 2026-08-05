@@ -123,6 +123,7 @@ export const VARIANT_LABELS: Record<string, string> = {
   pokeBall: "Poké Ball pattern",
   masterBall: "Master Ball pattern",
   friendBall: "Friend Ball pattern",
+  loveBall: "Love Ball pattern",
 };
 
 /** Stamped versions exist physically but not as separate database entries —
@@ -150,7 +151,7 @@ export const STAMP_VARIANTS = ["pcStamp", "prereleaseStamp", "staffStamp"] as co
  *  The list grows: Poké Ball and Master Ball came with Scarlet & Violet,
  *  Friend Ball with Mega Evolution. Adding one is a line here and a label
  *  above. */
-export const PATTERN_VARIANTS = ["pokeBall", "masterBall", "friendBall"] as const;
+export const PATTERN_VARIANTS = ["pokeBall", "masterBall", "friendBall", "loveBall"] as const;
 
 /** Every finish a member can record that no database will ever list for
  *  them. Offered in the pickers on top of whatever the card's price map
@@ -185,6 +186,32 @@ export function isSpecificPrinting(name: string): boolean {
   return /\(.+\)/.test(name);
 }
 
+/** The ball motif a scan reported, as the words a product name would use.
+ *  Null when the scan saw no ball. Shared so the scanner, the matcher and
+ *  the finish list all agree on what counts as a pattern. */
+export function ballPatternOf(hint: string | null | undefined): {
+  /** The finish to record when the card has no separate row of its own.
+   *  Null for a ball we have no finish for — then the printing's own row is
+   *  the only way to record it, and a plain reverse holo is the fallback. */
+  variant: string | null;
+  /** How the printing's NAME would spell it, normalised. */
+  words: string[];
+} | null {
+  const h = (hint ?? "").toLowerCase();
+  if (h.includes("poke ball") || h.includes("poké ball")) {
+    return { variant: "pokeBall", words: ["pokeball", "pokball"] };
+  }
+  if (h.includes("master ball")) return { variant: "masterBall", words: ["masterball"] };
+  if (h.includes("friend ball")) return { variant: "friendBall", words: ["friendball"] };
+  if (h.includes("love ball")) return { variant: "loveBall", words: ["loveball"] };
+  // A ball the scanner recognised as a ball but couldn't name. The list of
+  // ball patterns grows every set — Poké and Master with Scarlet & Violet,
+  // Friend and Love since — so "some ball" still gets to find the printing's
+  // own row, which is the answer that carries a real price.
+  if (h.includes("ball pattern")) return { variant: null, words: ["ball"] };
+  return null;
+}
+
 /** The finishes worth offering for this card. */
 export function manualVariantsFor(card: { name: string }): string[] {
   return isSpecificPrinting(card.name) ? [] : [...MANUAL_VARIANTS];
@@ -197,14 +224,60 @@ export function variantLabel(variant: string): string {
   );
 }
 
-/** Finishes known to exist for a card (from TCGplayer price keys), with a
- *  sensible fallback when no price data exists. */
+/** The order finishes are offered in, so a dropdown doesn't reshuffle itself
+ *  as price data arrives. Anything unrecognised keeps its own order after. */
+const FINISH_ORDER = ["normal", "holofoil", "reverseHolofoil"];
+
+/** Finishes that exist for a card.
+ *
+ *  A PRICE KEY IS NOT THE SAME QUESTION. This read the keys of the price map
+ *  and answered with those, which conflates "finishes we have a price for"
+ *  with "finishes this card was printed in" — and the two came apart the
+ *  moment the paid source started pricing cards. That source returns ONE
+ *  number and the printing it belongs to, so a card it priced ends up with
+ *  {normal: 0.06} and nothing else, and the dropdown stopped offering
+ *  Reverse Holo for an ordinary Rare that plainly has one. Cards got worse
+ *  options as the pricing got better, which is the wrong way round.
+ *
+ *  So the price keys are a hint, added to what the RARITY implies:
+ *
+ *    Common / Uncommon / Rare  → Normal and Reverse Holo
+ *    Holo Rare                 → Holofoil and Reverse Holo (no plain)
+ *
+ *  Everything above that — ex, V, full arts, illustration and secret rares —
+ *  comes in one finish, so nothing is added and the keys stand alone. Named
+ *  printings ("(Poké Ball Pattern)") are their own product and get nothing
+ *  added either; the name IS the finish.
+ *
+ *  Erring toward offering one finish too many is deliberate. An option
+ *  nobody picks costs a line in a menu; a missing one means somebody cannot
+ *  record the card they are holding. */
 export function availableVariants(card: {
   prices?: Record<string, number | null> | null;
+  rarity?: string | null;
+  name?: string;
 }): string[] {
-  const keys = card.prices ? Object.keys(card.prices) : [];
-  if (keys.length > 0) return keys;
-  return ["normal", "holofoil", "reverseHolofoil"];
+  const out = new Set<string>(card.prices ? Object.keys(card.prices) : []);
+
+  const named = typeof card.name === "string" && isSpecificPrinting(card.name);
+  const r = (card.rarity ?? "").toLowerCase();
+  if (!named && r) {
+    const reverse = !/reverse/.test(r);
+    if (/holo/.test(r) && !/reverse/.test(r)) {
+      out.add("holofoil");
+      if (reverse) out.add("reverseHolofoil");
+    } else if (/^(common|uncommon|rare)$/.test(r.trim())) {
+      out.add("normal");
+      out.add("reverseHolofoil");
+    }
+  }
+
+  if (out.size === 0) return [...FINISH_ORDER];
+  return [...out].sort((a, b) => {
+    const ai = FINISH_ORDER.indexOf(a);
+    const bi = FINISH_ORDER.indexOf(b);
+    return (ai < 0 ? FINISH_ORDER.length : ai) - (bi < 0 ? FINISH_ORDER.length : bi);
+  });
 }
 
 /** Best default finish given the card + what the scanner thought it saw. */
@@ -218,6 +291,13 @@ export function defaultVariantFor(
   if (hint.includes("center") || hint.includes("pokemon center")) return "pcStamp";
   if (hint.includes("prerelease")) return "prereleaseStamp";
   if (hint.includes("staff")) return "staffStamp";
+  // A ball-pattern reverse holo, when the scanner read one and the card has
+  // no separate row of its own. On a card that DOES have one, the scan swaps
+  // to that row before this runs and the name carries the printing instead.
+  if (hint.includes("poke ball") || hint.includes("poké ball")) return "pokeBall";
+  if (hint.includes("master ball")) return "masterBall";
+  if (hint.includes("friend ball")) return "friendBall";
+  if (hint.includes("love ball")) return "loveBall";
   // The scanner explicitly saw NO foil ("matte") — trust it when possible
   if (hint.includes("matte") && avail.includes("normal")) return "normal";
   if (hint.includes("reverse") && avail.includes("reverseHolofoil")) return "reverseHolofoil";
