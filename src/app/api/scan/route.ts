@@ -8,7 +8,15 @@ import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createObjectScanner, isEnvelope } from "@/lib/jsonStream";
-import { rowToSummary, defaultVariantFor, type CardSummaryRow } from "@/lib/types";
+import {
+  rowToSummary,
+  defaultVariantFor,
+  ballPatternOf,
+  isSpecificPrinting,
+  type CardSummaryRow,
+} from "@/lib/types";
+import { normalizeForSearch } from "@/lib/text";
+import { setsAgree } from "@/lib/setName";
 import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
 import { loadFinishOverrides } from "@/lib/finishFeedback";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -74,6 +82,21 @@ const SCAN_SCHEMA = {
             description:
               "The card's foil finish. 'holo': the ARTWORK window itself is foil/rainbow-shiny while the rest of the card is matte. 'reverse_holo': everything EXCEPT the artwork shines — the card body/borders are foil (often with an etched pattern) and the artwork is matte. 'normal': no foil anywhere. Full-art, ex/V/GX, and illustration-rare cards whose entire face is foil count as 'holo'. Use 'unknown' when glare, angle, or resolution makes it impossible to tell — do NOT guess.",
           },
+          patt: {
+            type: "string",
+            enum: [
+              "standard",
+              "poke_ball",
+              "master_ball",
+              "friend_ball",
+              "love_ball",
+              "other_ball",
+              "none",
+              "unknown",
+            ],
+            description:
+              "ONLY meaningful when fin is 'reverse_holo': which motif is etched into the foil, repeating across the card face. 'poke_ball' / 'master_ball' / 'friend_ball' / 'love_ball': the foil is filled with repeated balls of that type — these are separate, rarer printings and worth telling apart. 'other_ball': clearly a repeating ball motif, but not one of those four. 'standard': the set's ordinary reverse pattern (stars, set symbols, generic sparkle). 'none' when the card is not reverse holo. 'unknown' when it is reverse holo but the pattern can't be made out — do NOT guess a ball.",
+          },
           stamp: {
             type: "string",
             enum: ["none", "pokemon_center", "prerelease", "staff", "unknown"],
@@ -87,7 +110,7 @@ const SCAN_SCHEMA = {
               "high = name AND collector number clearly read; medium = name clear but number uncertain; low = partially obscured or blurry.",
           },
         },
-        required: ["name", "num", "tot", "set", "rar", "fin", "stamp", "conf"],
+        required: ["name", "num", "tot", "set", "rar", "fin", "patt", "stamp", "conf"],
         additionalProperties: false,
       },
     },
@@ -122,6 +145,15 @@ FINISH — look carefully at WHERE the shine is, not just whether there is shine
   photos are NOT foil. When you see shine but cannot see rainbow color or an
   etched pattern, answer 'normal' for common/uncommon cards and 'unknown'
   otherwise — never default to holo or reverse_holo on weak evidence.
+
+REVERSE-HOLO PATTERN — when, and only when, a card is reverse holo, look at
+what is etched into the shiny part. Most cards show the set's ordinary motif:
+stars, set symbols, generic sparkle. A few show a repeating BALL motif filling
+the foil — Poké Balls, Master Balls, or Friend Balls — and those are separate,
+much rarer printings, so they are worth reading carefully. The balls repeat in
+a regular grid across the card face and are unmistakable once seen; if you
+cannot make out what the pattern is, answer 'unknown' rather than guessing a
+ball. Cards that are not reverse holo get 'none'.
 
 STAMPS — check the artwork area of every card for small gold foil stamps: a
 Pokémon Center logo, the word PRERELEASE, or the word STAFF. These are easy to
@@ -158,6 +190,69 @@ async function matchFromLocalDb(
   } catch {
     return null; // any local hiccup → just use the external APIs
   }
+}
+
+/** The card's OWN row for a ball-pattern printing, if the catalogue has one.
+ *
+ *  Scanning a Master Ball Pikachu used to produce a plain Pikachu with a
+ *  hand-picked finish label, which prices as the plain card — and a Master
+ *  Ball reverse can be worth many times one. TCGplayer sells the printing as
+ *  its own product and the paid sync now creates those rows, so the right
+ *  answer usually already exists in our catalogue: same card, same number,
+ *  same set, name carrying the pattern.
+ *
+ *  Matched narrowly on purpose. The set has to agree, the collector number
+ *  has to agree, and the name has to be the base card's plus the pattern —
+ *  so a scan can only ever swap to a row that IS the card in the photo. When
+ *  nothing matches, the caller keeps the plain card and records the pattern
+ *  as a finish, which is what it did before.
+ */
+async function patternPrinting(
+  supabase: SupabaseClient,
+  base: CardSummary,
+  words: string[],
+  /** False when the scan saw "a ball" without naming which. Then two
+   *  candidates is an unanswered question, not a choice — picking one would
+   *  be a coin flip filed as a fact. */
+  specific: boolean
+): Promise<CardSummary | null> {
+  try {
+    const { data } = await supabase
+      .from("cards")
+      .select("*")
+      .ilike("name", `${base.name.replace(/[%_]/g, " ")}%`)
+      .limit(40);
+    const rows = (data ?? []) as CardSummaryRow[];
+    const wantedNumber = numberKey(base.number);
+    const baseName = normalizeForSearch(base.name);
+    const hits = rows.filter((r) => {
+      if (r.id === base.id) return false;
+      if (numberKey(r.number) !== wantedNumber) return false;
+      if (!setsAgree(r.set_name, base.setName)) return false;
+      const n = normalizeForSearch(r.name);
+      return n.startsWith(baseName) && words.some((w) => n.includes(w));
+    });
+    if (hits.length === 0) return null;
+    if (hits.length > 1 && !specific) return null;
+    return rowToSummary(hits[0]);
+  } catch {
+    // The plain card plus a finish label is a perfectly good fallback.
+    return null;
+  }
+}
+
+/** Swap a scanned card for its ball-pattern printing when the scan saw one
+ *  and the catalogue holds it. Null when there is nothing better to use. */
+async function preferPattern(
+  supabase: SupabaseClient,
+  detected: DetectedCard,
+  match: CardSummary
+): Promise<CardSummary | null> {
+  const ball = ballPatternOf(detected.rarityHint);
+  if (!ball) return null;
+  // A row that is already a named printing is not swapped again.
+  if (isSpecificPrinting(match.name)) return null;
+  return patternPrinting(supabase, match, ball.words, ball.variant != null);
 }
 
 /** Do the scan, recording progress against a job row.
@@ -280,6 +375,15 @@ async function runScan(opts: {
         set: string | null;
         rar: string | null;
         fin?: "normal" | "holo" | "reverse_holo" | "unknown";
+        patt?:
+          | "standard"
+          | "poke_ball"
+          | "master_ball"
+          | "friend_ball"
+          | "love_ball"
+          | "other_ball"
+          | "none"
+          | "unknown";
         stamp?: "none" | "pokemon_center" | "prerelease" | "staff" | "unknown";
         conf: "high" | "medium" | "low";
       }>;
@@ -306,6 +410,20 @@ async function runScan(opts: {
       if (c.fin === "reverse_holo") hintParts.push("Reverse Holo");
       else if (c.fin === "holo") hintParts.push("Holo");
       else if (c.fin === "normal") hintParts.push("matte");
+      // The ball motif, only where it means something. A pattern reported on
+      // a card that isn't reverse holo is the model answering a question it
+      // wasn't being asked.
+      const BALL_WORDS: Record<string, string> = {
+        poke_ball: "Poké Ball pattern",
+        master_ball: "Master Ball pattern",
+        friend_ball: "Friend Ball pattern",
+        love_ball: "Love Ball pattern",
+        // A ball it recognised but couldn't name. Still enough to go looking
+        // for the printing's own row, which is where the real price is.
+        other_ball: "Ball pattern",
+      };
+      const ball = c.fin === "reverse_holo" ? (BALL_WORDS[c.patt ?? ""] ?? null) : null;
+      if (ball) hintParts.push(ball);
       if (c.rar) hintParts.push(c.rar);
       return {
         // Normalize away curly apostrophes etc. the vision model may emit
@@ -328,7 +446,12 @@ async function runScan(opts: {
           // database in one quick query instead of several external calls.
           const local = await matchFromLocalDb(supabase, detected);
           if (local) {
-            return { detected, match: local, candidates: [local] } satisfies ScanMatch;
+            const swapped = await preferPattern(supabase, detected, local);
+            return {
+              detected,
+              match: swapped ?? local,
+              candidates: swapped ? [swapped, local] : [local],
+            } satisfies ScanMatch;
           }
 
           let { match, candidates } = await matchDetectedCard(detected);
@@ -357,6 +480,13 @@ async function runScan(opts: {
             } else if (candidates.length === 0 && alt.length > 0) {
               match = alt[0];
               candidates = alt;
+            }
+          }
+          if (match) {
+            const swapped = await preferPattern(supabase, detected, match);
+            if (swapped) {
+              match = swapped;
+              candidates = [swapped, ...candidates];
             }
           }
           return { detected, match, candidates } satisfies ScanMatch;
