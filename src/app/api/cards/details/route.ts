@@ -31,6 +31,11 @@ export interface CardDetail {
   weak: { type: string; value: string } | null;
   resist: { type: string; value: string } | null;
   retreat: number | null;
+  /** Why this card still has no text, when a read was attempted this
+   *  request. Shown on the card's own panel: three rounds of guessing at why
+   *  one Haunter wouldn't read were three rounds where the program knew and
+   *  the screen didn't. */
+  textError?: string | null;
   /** Has this card's own picture been read for its text — now or before?
    *
    *  So the screen can say what was actually tried instead of guessing. "No
@@ -72,6 +77,7 @@ function toDetail(row: Record<string, unknown>, requestedName: string): CardDeta
     resist: bd?.resist ?? null,
     retreat: bd?.retreat ?? null,
     triedPicture: row.__triedPicture === true || ((row.text_attempts as number | null) ?? 0) > 0,
+    textError: (row.__textError as string | null) ?? null,
   };
 }
 
@@ -151,7 +157,17 @@ export async function GET(req: Request) {
           const bd = await ensureCardText(
             admin,
             row as Parameters<typeof ensureCardText>[1],
-            wantsVision ? { allowVision: true, userId: user.id, force } : undefined
+            wantsVision
+              ? {
+                  allowVision: true,
+                  userId: user.id,
+                  force,
+                  // First reason wins: it is the one nearest the cause.
+                  report: (reason: string) => {
+                    row.__textError ??= reason;
+                  },
+                }
+              : undefined
           );
           if (!bd) continue;
           row.battle_data = bd;

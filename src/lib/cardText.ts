@@ -97,12 +97,14 @@ illegible). Transcribe, never invent.`;
  *  falls back to the URL form — worth trying, since the failure might be on
  *  our side of the wire. */
 async function imageBytes(
-  url: string
+  url: string,
+  report?: (reason: string) => void
 ): Promise<{ media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string } | null> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) {
       console.warn(`card read: couldn't fetch ${url} — HTTP ${res.status}`);
+      report?.(`the picture wouldn't download (HTTP ${res.status})`);
       return null;
     }
     const buf = Buffer.from(await res.arrayBuffer());
@@ -110,6 +112,7 @@ async function imageBytes(
     // near it is not the picture we think it is.
     if (buf.length === 0 || buf.length > 5_000_000) {
       console.warn(`card read: ${url} is ${buf.length} bytes — not sending it`);
+      report?.(`the picture is ${buf.length} bytes, which isn't a usable image`);
       return null;
     }
     const declared = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
@@ -132,22 +135,41 @@ async function imageBytes(
                 : null;
     if (!media_type) {
       console.warn(`card read: ${url} isn't an image we can send (content-type "${declared}")`);
+      report?.(`the picture came back as "${declared || "an unknown type"}", not an image`);
       return null;
     }
     return { media_type, data: buf.toString("base64") };
   } catch (err) {
     console.warn(`card read: fetching ${url} failed — ${err instanceof Error ? err.message : err}`);
+    report?.(`the picture couldn't be downloaded (${err instanceof Error ? err.message : "failed"})`);
     return null;
   }
 }
 
+/** Why a read produced nothing, in words a person can act on.
+ *
+ *  Passed in by callers that have somewhere to show it. Three straight
+ *  guesses at why one Haunter wouldn't read — the CDN, the cool-off, the
+ *  model — were three guesses too many: the program knew the answer every
+ *  time and had nowhere to put it. */
+export type ReadReport = (reason: string) => void;
+
 export async function readCardFromImage(
   imageUrl: string,
   userId: string | null,
-  admin: SupabaseClient
+  admin: SupabaseClient,
+  report?: ReadReport,
+  /** A second URL for the same card, tried only if the first won't
+   *  download. A card carries a large and a small image and they can come
+   *  from different places — one mirrored into our own storage, one still
+   *  pointing at a source that has since started refusing us — so failing on
+   *  the first when the second would have worked is a read thrown away for
+   *  no reason. Only the download is retried; the model is still asked once. */
+  altUrl?: string | null
 ): Promise<CardBattleData | null> {
   try {
-    const bytes = await imageBytes(imageUrl);
+    let bytes = await imageBytes(imageUrl, report);
+    if (!bytes && altUrl && altUrl !== imageUrl) bytes = await imageBytes(altUrl, report);
     const source = bytes
       ? { type: "base64" as const, media_type: bytes.media_type, data: bytes.data }
       : { type: "url" as const, url: imageUrl };
@@ -173,6 +195,7 @@ export async function readCardFromImage(
     const block = response.content.find((b) => b.type === "text");
     if (!block || block.type !== "text") {
       console.warn(`card read: no transcription came back for ${imageUrl} (stop: ${response.stop_reason})`);
+      report?.(`the reader returned nothing (stopped: ${response.stop_reason})`);
       return null;
     }
     const read = JSON.parse(block.text) as {
@@ -189,6 +212,7 @@ export async function readCardFromImage(
     };
     if (!read.readable) {
       console.warn(`card read: the model called ${imageUrl} illegible`);
+      report?.("the reader said the picture is too small or blurry to transcribe");
       return null;
     }
     return {
@@ -216,6 +240,7 @@ export async function readCardFromImage(
     console.error(
       `card read: FAILED for ${imageUrl} — ${err instanceof Error ? err.message : String(err)}`
     );
+    report?.(err instanceof Error ? err.message : "the read failed");
     return null;
   }
 }
@@ -256,18 +281,30 @@ export async function readCardTextOnce(
    *  who may well know something has changed — a better picture, or a fix to
    *  the reader itself. Every card that failed while a bug was in the reader
    *  is otherwise locked out for a week after the bug is gone. */
-  opts?: { force?: boolean }
+  opts?: { force?: boolean; report?: ReadReport }
 ): Promise<CardBattleData | null> {
   const art = card.image_large ?? card.image_small;
-  if (!art) return null;
+  if (!art) {
+    opts?.report?.("this card has no picture stored, so there is nothing to read");
+    return null;
+  }
 
   const attempts = card.text_attempts ?? 0;
   if (!opts?.force && attempts >= MAX_TEXT_ATTEMPTS) {
     const failedAt = card.text_failed_at ? Date.parse(card.text_failed_at) : 0;
-    if (Number.isFinite(failedAt) && Date.now() - failedAt < TEXT_COOL_OFF_MS) return null;
+    if (Number.isFinite(failedAt) && Date.now() - failedAt < TEXT_COOL_OFF_MS) {
+      // NOT a failed read — a read that never happened. The two looked
+      // identical from outside, which is most of why this took three tries
+      // to diagnose.
+      opts?.report?.(
+        `the last ${attempts} reads failed, so it's resting until the cool-off passes — "Try reading the picture again" skips that`
+      );
+      return null;
+    }
   }
 
-  const bd = await readCardFromImage(art, userId, admin);
+  const alt = art === card.image_large ? card.image_small : card.image_large;
+  const bd = await readCardFromImage(art, userId, admin, opts?.report, alt ?? null);
 
   try {
     if (bd) {
@@ -324,7 +361,7 @@ export async function ensureCardText(
     text_attempts?: number | null;
     text_failed_at?: string | null;
   },
-  opts?: { allowVision?: boolean; userId?: string | null; force?: boolean }
+  opts?: { allowVision?: boolean; userId?: string | null; force?: boolean; report?: ReadReport }
 ): Promise<CardBattleData | null> {
   // 1. Ours. (`force` skips even this: somebody asking to re-read a card
   //  that already has text would get the old text back otherwise.)
@@ -335,7 +372,10 @@ export async function ensureCardText(
     // A photo-scanned card has no database entry anywhere; its picture is
     // the only source there has ever been.
     return opts?.allowVision
-      ? readCardTextOnce(admin, card, opts?.userId ?? null, { force: opts?.force })
+      ? readCardTextOnce(admin, card, opts?.userId ?? null, {
+          force: opts?.force,
+          report: opts?.report,
+        })
       : null;
   }
 
@@ -370,7 +410,10 @@ export async function ensureCardText(
 
   // 3. The picture, if this caller is one that should pay for it.
   if (opts?.allowVision)
-    return readCardTextOnce(admin, card, opts?.userId ?? null, { force: opts?.force });
+    return readCardTextOnce(admin, card, opts?.userId ?? null, {
+      force: opts?.force,
+      report: opts?.report,
+    });
 
   // Remember the free miss, so the next build doesn't repeat it.
   try {
