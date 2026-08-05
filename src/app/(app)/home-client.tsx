@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
+import CardText, { useCardText } from "@/components/CardText";
 import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
 import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc } from "@/lib/art";
@@ -320,6 +321,11 @@ export default function CollectionPage({
     if (item.price_override != null) return { value: item.price_override, exact: true };
     return variantPrice(item.card, item.variant ?? "normal");
   };
+
+  // The open card's printed text. Fetched by the hook when `selected`
+  // changes and skipped entirely while the panel is closed, so browsing a
+  // collection costs nothing extra.
+  const cardText = useCardText(selected?.card.id);
 
   const selectedFinishes = useMemo(() => {
     if (!selected) return [];
@@ -1046,6 +1052,22 @@ export default function CollectionPage({
                   </p>
                 </dl>
               </div>
+            </div>
+
+            {/* WHAT THE CARD DOES.
+                The picture is on screen at 160px wide, which on a phone is
+                too small to read the attack text off — and this is the one
+                screen where somebody is looking straight at a single card
+                and asking exactly that. The text is already on the card row
+                and already served, so showing it here costs a lookup the
+                deck viewer has been making for months. */}
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <div className="mb-2 text-xs font-semibold text-slate-500">What this card does</div>
+              <CardText
+                detail={cardText.detail}
+                loading={cardText.loading}
+                missingNote="No printed text on file for this card yet — it fills in automatically as the card databases are read."
+              />
             </div>
 
             <div className="mt-4 border-t border-slate-100 pt-3">

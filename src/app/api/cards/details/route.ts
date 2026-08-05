@@ -25,6 +25,12 @@ export interface CardDetail {
   rules: string[];
   stage: string | null;
   trainerType: string | null;
+  /** The three numbers that decide a trade in play. They were on the card
+   *  row all along and simply weren't passed on, so a Pokémon's panel could
+   *  tell you what it attacks for and not what it folds to. */
+  weak: { type: string; value: string } | null;
+  resist: { type: string; value: string } | null;
+  retreat: number | null;
 }
 
 /** Same alternate spellings the image lookup uses — decks write "Basic
@@ -55,6 +61,9 @@ function toDetail(row: Record<string, unknown>, requestedName: string): CardDeta
     rules: bd?.rules ?? [],
     stage: bd?.stage ?? null,
     trainerType: bd?.trainerType ?? null,
+    weak: bd?.weak ?? null,
+    resist: bd?.resist ?? null,
+    retreat: bd?.retreat ?? null,
   };
 }
 

@@ -14,6 +14,7 @@ import { useCredits } from "@/components/useCredits";
 import { FREE_DECK_LIMIT } from "@/lib/limits";
 import DeckEditCard, { type DeckEditProposal } from "@/components/DeckEditCard";
 import { resilientFetch } from "@/lib/clientLoop";
+import CardText from "@/components/CardText";
 
 type UpgradeSuggestion = DeckSuggestion;
 
@@ -1525,7 +1526,6 @@ export default function DecksPage() {
     const d = details[detailKey(reading)];
     const image = (reading.card_id ? cardImages[reading.card_id] : null) ?? nameImages[reading.name] ?? d?.image;
     const kind = [d?.stage, d?.trainerType, d?.supertype].find(Boolean) ?? reading.category;
-    const nothing = d && d.attacks.length === 0 && d.abilities.length === 0 && d.rules.length === 0;
     return (
       <div
         className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-4"
@@ -1570,57 +1570,8 @@ export default function DecksPage() {
             </p>
           )}
 
-          {readingBusy && !d && <p className="text-sm text-slate-400">Looking up the card…</p>}
-
-          {d && (
-            <div className="space-y-3">
-              {d.abilities.map((a) => (
-                <div key={a.name}>
-                  <p className="text-sm font-semibold">
-                    <span className="mr-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-red-700">
-                      Ability
-                    </span>
-                    {a.name}
-                  </p>
-                  <p className="text-sm leading-relaxed text-slate-700">{a.text}</p>
-                </div>
-              ))}
-              {d.attacks.map((a, i) => (
-                <div key={i}>
-                  <p className="flex items-baseline justify-between gap-2 text-sm font-semibold">
-                    <span>
-                      {a.cost.filter((c) => c.toLowerCase() !== "free").length > 0 && (
-                        <span className="mr-1 text-slate-400">
-                          {"⚡".repeat(a.cost.filter((c) => c.toLowerCase() !== "free").length)}
-                        </span>
-                      )}
-                      {a.name}
-                    </span>
-                    <span className="shrink-0 text-slate-500">{a.damage || "—"}</span>
-                  </p>
-                  {a.text && <p className="text-sm leading-relaxed text-slate-700">{a.text}</p>}
-                </div>
-              ))}
-              {d.rules.map((r, i) => (
-                <p key={i} className="text-sm leading-relaxed text-slate-700">
-                  {r}
-                </p>
-              ))}
-              {nothing && (
-                <p className="text-sm text-slate-500">
-                  No printed text on file for this one yet. Basic Energy has none; for anything
-                  else it fills in the first time the card is used in a battle or picked up by the
-                  nightly refresh.
-                </p>
-              )}
-            </div>
-          )}
-
-          {!readingBusy && !d && (
-            <p className="text-sm text-slate-500">
-              Couldn&apos;t find this card in the database, so there&apos;s no text to show.
-            </p>
-          )}
+          {/* Shared with the collection's card panel — see components/CardText. */}
+          <CardText detail={d ?? null} loading={readingBusy} />
         </div>
       </div>
     );
