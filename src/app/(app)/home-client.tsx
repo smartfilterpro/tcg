@@ -10,6 +10,7 @@ import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc } from "@/lib/art";
 import SealedTab from "@/components/SealedTab";
 import { matchesSearch } from "@/lib/text";
+import { matchesPrintedNumber } from "@/lib/cardQuery";
 
 import {
   availableVariants,
@@ -256,8 +257,20 @@ export default function CollectionPage({
     // carry odd characters that a strict substring match misses.
     const q = search.trim();
     if (q) {
-      list = list.filter((i) =>
-        matchesSearch(q, i.card.name, i.card.set_name, i.card.number)
+      // …plus the number exactly as it is PRINTED on the card. "73/86" is
+      // what somebody reads off the card in their hand, and the token match
+      // can never find it: the number column holds "73" and the set size
+      // lives in another column, so the one string that identifies the card
+      // uniquely was the one string that returned nothing. An OR, so
+      // everything that finds a card today still does.
+      list = list.filter(
+        (i) =>
+          matchesSearch(q, i.card.name, i.card.set_name, i.card.number) ||
+          matchesPrintedNumber(q, {
+            name: i.card.name,
+            number: i.card.number,
+            printedTotal: i.card.set_printed_total,
+          })
       );
     }
     if (typeFilter) list = list.filter((i) => (i.card.types ?? []).includes(typeFilter));
