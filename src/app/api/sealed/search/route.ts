@@ -124,8 +124,19 @@ export async function GET(req: Request) {
     //
     // Costs credits per search, so it is gated on a real query rather than
     // firing on an empty box, and results are cached upstream for an hour.
+    let notice: string | null = null;
     if (q.length >= 3) {
-      for (const p of await searchTrackerSealed(q)) {
+      const paid = await searchTrackerSealed(q);
+      // Say it on the screen when the product database declined, rather than
+      // letting an empty answer read as "no such product". Only when it
+      // found NOTHING — a short list that still has the box in it needs no
+      // explanation.
+      if (paid.products.length === 0 && !paid.log.startsWith("0 product")) {
+        notice = paid.log.includes("budget")
+          ? "The product database is out of credits for today, so this list is only what's already in the catalogue. New product will appear when the allowance resets."
+          : `Only showing what's already in the catalogue — ${paid.log}.`;
+      }
+      for (const p of paid.products) {
         push({
           name: p.name,
           kind: kindFromName(p.name),
@@ -190,7 +201,10 @@ export async function GET(req: Request) {
       }
     }
 
-    return NextResponse.json({ suggestions: out.slice(0, 60) });
+    return NextResponse.json({
+      suggestions: out.slice(0, 60),
+      ...(notice ? { notice } : {}),
+    });
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
