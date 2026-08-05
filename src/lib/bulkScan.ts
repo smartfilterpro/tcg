@@ -13,6 +13,8 @@ import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { estimateCostUsd, logAiUsage } from "@/lib/usage";
 import { numberKey } from "@/lib/pokemontcg";
 import { normalizeForSearch } from "@/lib/text";
+import { pickPrinting } from "@/lib/cardPrinting";
+import { defaultVariantFor } from "@/lib/types";
 
 export const BULK_BUCKET = "bulk-scans";
 export const MAX_JOB_CARDS = 8000;
@@ -22,6 +24,18 @@ export interface BulkRead {
   number?: string;
   set_name?: string;
   finish?: string;
+  /** The finish, pattern and stamp as one phrase — the same shape the phone
+   *  scanner produces, so both feed the same finish rules. */
+  hint?: string;
+  /** The finish to SAVE, in the app's own vocabulary.
+   *
+   *  `finish` above is the model's enum — "reverse_holofoil" — and that was
+   *  being written straight into collection_items.variant, where the app
+   *  spells it "reverseHolofoil". So every reverse holo the machine scanned
+   *  was stored under a key nothing else in the app recognises: no per-finish
+   *  price, and a label rendered from the raw string. Converted once, here,
+   *  where the card and the read are both in hand. */
+  variant?: string;
   /** Catalogue id the read resolved to; null when nothing matched. */
   cardId?: string | null;
   cardName?: string | null;
@@ -29,6 +43,16 @@ export interface BulkRead {
   cardSet?: string | null;
   error?: string;
 }
+
+/** Ball motifs, as the words a printing's name would use. Mirrors the phone
+ *  scanner's map; both feed ballPatternOf. */
+const BALL_WORDS: Record<string, string> = {
+  poke_ball: "Poké Ball pattern",
+  master_ball: "Master Ball pattern",
+  friend_ball: "Friend Ball pattern",
+  love_ball: "Love Ball pattern",
+  other_ball: "Ball pattern",
+};
 
 const READ_SCHEMA = {
   type: "object",
@@ -42,22 +66,53 @@ const READ_SCHEMA = {
     finish: {
       type: "string",
       enum: ["normal", "holofoil", "reverse_holofoil"],
-      description: "The card's finish.",
+      description:
+        "Where the shine is. 'holofoil': the ARTWORK window is foil and the rest is matte (or the whole card is foil, as on full arts and ex cards). 'reverse_holofoil': the opposite — matte artwork, shiny card body, usually with an etched repeating pattern. 'normal': no foil. Require positive evidence — rainbow colour shift or an etched pattern — before answering either foil value; glare from the rig's lights is not foil.",
+    },
+    pattern: {
+      type: "string",
+      enum: [
+        "standard",
+        "poke_ball",
+        "master_ball",
+        "friend_ball",
+        "love_ball",
+        "other_ball",
+        "none",
+        "unknown",
+      ],
+      description:
+        "ONLY when finish is reverse_holofoil: which motif is etched into the foil, repeating across the card face. A ball motif ('poke_ball' / 'master_ball' / 'friend_ball' / 'love_ball', or 'other_ball' for one you can see but can't name) marks a separate, much rarer printing and must not be missed. 'standard' is the set's ordinary pattern — stars, set symbols, sparkle. 'none' when the card isn't reverse holo. 'unknown' when it is but the pattern can't be made out — never guess a ball.",
+    },
+    stamp: {
+      type: "string",
+      enum: ["none", "pokemon_center", "prerelease", "staff", "unknown"],
+      description:
+        "Gold foil stamp pressed onto the artwork: a Pokémon Center logo, the word PRERELEASE, or the word STAFF. 'none' when there is clearly none.",
     },
     readable: {
       type: "boolean",
       description: "False if the photo shows no readable card (blank, sleeve, misfeed).",
     },
   },
-  required: ["name", "number", "set_name", "finish", "readable"],
+  required: ["name", "number", "set_name", "finish", "pattern", "stamp", "readable"],
 } as const;
 
 const READ_SYSTEM = `You read a single Pokémon TCG card from one photograph
 taken by a card-feeding machine. The card fills most of the frame and may be
 slightly rotated. Report exactly what is printed — name, collector number,
-set if identifiable from the set symbol or bottom text, and finish. If the
-photo does not show a readable card face (blank frame, card back, misfeed),
-set readable=false.`;
+set if identifiable from the set symbol or bottom text, finish, reverse-holo
+pattern, and any gold stamp. If the photo does not show a readable card face
+(blank frame, card back, misfeed), set readable=false.
+
+The card fills the frame, so you can see detail a phone snapshot of a whole
+binder page cannot. Use it. The reverse-holo PATTERN is the field most worth
+your attention: a Poké Ball, Master Ball, Friend Ball or Love Ball motif
+repeating across the foil marks a different and far more valuable printing
+than the same card with the set's ordinary star pattern, and the whole point
+of this machine is that nobody has to check its work afterwards. Look at the
+foil area specifically, not the artwork. If you genuinely cannot tell, say
+'unknown' — that is a useful answer and a wrong ball is not.`;
 
 /** Read one photo and resolve it against the catalogue. Charges the JOB,
  *  never a member: usage is logged under the admin who created the job with
@@ -117,18 +172,36 @@ export async function identifyPhoto(
       number?: string;
       set_name?: string;
       finish?: string;
+      pattern?: string;
+      stamp?: string;
       readable?: boolean;
     };
     if (parsed.readable === false) {
       return { error: "no readable card in the photo (misfeed?)" };
     }
+    // The same hint string the phone scanner builds, so both go through one
+    // set of rules for what a finish and a pattern mean.
+    const hintParts: string[] = [];
+    if (parsed.stamp === "pokemon_center") hintParts.push("Pokémon Center stamp");
+    else if (parsed.stamp === "prerelease") hintParts.push("Prerelease stamp");
+    else if (parsed.stamp === "staff") hintParts.push("Staff stamp");
+    if (parsed.finish === "reverse_holofoil") hintParts.push("Reverse Holo");
+    else if (parsed.finish === "holofoil") hintParts.push("Holo");
+    else hintParts.push("matte");
+    if (parsed.finish === "reverse_holofoil") {
+      const ball = BALL_WORDS[parsed.pattern ?? ""];
+      if (ball) hintParts.push(ball);
+    }
+    const hint = hintParts.join(", ");
+
     const read: BulkRead = {
       name: parsed.name ?? "",
       number: parsed.number ?? "",
       set_name: parsed.set_name ?? "",
       finish: parsed.finish ?? "normal",
+      hint,
     };
-    return { ...read, ...(await matchCatalogue(admin, read)) };
+    return { ...read, ...(await matchCatalogue(admin, read, hint)) };
   } catch (err) {
     return { error: err instanceof Error ? err.message.slice(0, 200) : "read failed" };
   }
@@ -139,19 +212,36 @@ export async function identifyPhoto(
  *  guess happened twice. */
 async function matchCatalogue(
   admin: SupabaseClient,
-  read: BulkRead
-): Promise<Pick<BulkRead, "cardId" | "cardName" | "cardNumber" | "cardSet">> {
-  const none = { cardId: null, cardName: null, cardNumber: null, cardSet: null };
+  read: BulkRead,
+  hint: string
+): Promise<Pick<BulkRead, "cardId" | "cardName" | "cardNumber" | "cardSet" | "variant">> {
+  const none = {
+    cardId: null,
+    cardName: null,
+    cardNumber: null,
+    cardSet: null,
+    variant: undefined,
+  };
   const name = (read.name ?? "").trim();
   if (!name) return none;
+  // rarity and prices come along because the finish is decided here — the
+  // card's own printings are what make "reverse holo" mean something.
   const { data } = await admin
     .from("cards")
-    .select("id, name, number, set_name")
+    .select("id, name, number, set_name, rarity, prices")
     .ilike("name", `%${name.replace(/[%_]/g, " ")}%`)
     .limit(60);
   const wanted = normalizeForSearch(name);
-  let hits = ((data ?? []) as Array<{ id: string; name: string; number: string; set_name: string | null }>)
-    .filter((c) => normalizeForSearch(c.name) === wanted);
+  let hits = (
+    (data ?? []) as Array<{
+      id: string;
+      name: string;
+      number: string;
+      set_name: string | null;
+      rarity: string | null;
+      prices: Record<string, number | null> | null;
+    }>
+  ).filter((c) => normalizeForSearch(c.name) === wanted);
   const printed = (read.number ?? "").split("/")[0].trim();
   if (printed) {
     const key = numberKey(printed);
@@ -163,14 +253,29 @@ async function matchCatalogue(
     const bySet = hits.filter((c) => normalizeForSearch(c.set_name ?? "").includes(set));
     if (bySet.length > 0) hits = bySet;
   }
-  // One survivor, or several records of the same physical card (sibling
-  // sources spelling the set differently) — same name and number means the
-  // same card, so the first is fine. Different numbers means ambiguity.
   if (hits.length === 0) return none;
-  const keys = new Set(hits.map((c) => `${normalizeForSearch(c.name)}|${numberKey(c.number)}`));
+  // Different collector numbers still means ambiguity and still refuses.
+  const keys = new Set(hits.map((c) => numberKey(c.number)));
   if (keys.size > 1) return none;
-  const c = hits[0];
-  return { cardId: c.id, cardName: c.name, cardNumber: c.number, cardSet: c.set_name };
+
+  // Same name and number is no longer one card: the sync creates a row per
+  // printing, so a Poké Ball reverse holo has its own. Pick the one the
+  // photo shows — the named printing when the read saw that ball, the plain
+  // row when it saw none. A machine nobody checks afterwards must not file a
+  // Master Ball reverse as the common version.
+  const picked = pickPrinting(hits, hint);
+  if (!picked) return none;
+  return {
+    cardId: picked.id,
+    cardName: picked.name,
+    cardNumber: picked.number,
+    cardSet: picked.set_name,
+    // In the app's vocabulary, and aware of the card: a printing that only
+    // exists as a reverse holo can't be recorded as a plain one, and a row
+    // that IS the Poké Ball printing takes its own finish rather than the
+    // pattern label.
+    variant: defaultVariantFor(picked, hint),
+  };
 }
 
 export interface PairingResult {
@@ -224,19 +329,19 @@ export async function finalizeJob(admin: SupabaseClient, jobId: string): Promise
       p1?.cardId != null &&
       p2?.cardId != null &&
       p1.cardId === p2.cardId &&
-      (p1.finish ?? "normal") === (p2.finish ?? "normal");
+      (p1.variant ?? p1.finish ?? "normal") === (p2.variant ?? p2.finish ?? "normal");
     const patch = agree
       ? {
           confidence: "verified",
           card_id: p1!.cardId,
-          variant: p1!.finish ?? "normal",
+          variant: p1!.variant ?? p1!.finish ?? "normal",
           review_note: null,
           updated_at: new Date().toISOString(),
         }
       : {
           confidence: "review",
           card_id: p1?.cardId ?? p2?.cardId ?? null,
-          variant: p1?.finish ?? p2?.finish ?? "normal",
+          variant: p1?.variant ?? p1?.finish ?? p2?.variant ?? p2?.finish ?? "normal",
           review_note: !aligned
             ? pass2Count === 0
               ? "single pass — no verification photo"

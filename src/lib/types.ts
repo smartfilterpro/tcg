@@ -299,7 +299,10 @@ export function defaultVariantFor(
   if (hint.includes("friend ball")) return "friendBall";
   if (hint.includes("love ball")) return "loveBall";
   // The scanner explicitly saw NO foil ("matte") — trust it when possible
+  // "matte" is only believable on a card that HAS a plain printing. On a
+  // full art or an ex it is the light, not the card.
   if (hint.includes("matte") && avail.includes("normal")) return "normal";
+  if (hint.includes("matte") && avail.length === 1) return avail[0];
   if (hint.includes("reverse") && avail.includes("reverseHolofoil")) return "reverseHolofoil";
   if (hint.includes("holo") && avail.includes("holofoil")) return "holofoil";
   // Database veto: the scanner saw foil, but this printing only exists as
@@ -309,6 +312,20 @@ export function defaultVariantFor(
   const rarity = (card.rarity ?? "").toLowerCase();
   if (rarity.includes("holo") && !avail.includes("normal") && avail.includes("holofoil"))
     return "holofoil";
+
+  // THE CARD VETOES A FINISH IT DOESN'T COME IN.
+  //
+  // Glare is the scanner's hardest problem: a matte card under a bright
+  // light and a foil card at the wrong angle look alike, and the model is
+  // told to answer 'unknown' rather than guess. But the CARD often settles
+  // it. An ultra rare has no plain printing, so "normal" on one is not a
+  // reading, it is a missing reading — and answering with the only finish
+  // that exists is right for the same reason a Rare Holo can't be normal.
+  //
+  // Only fires where there is exactly one candidate left. Two possible
+  // finishes and an unreadable photo is a genuine question, and it goes to
+  // the member as one.
+  if (avail.length === 1) return avail[0];
   if (avail.includes("normal")) return "normal";
   return avail[0];
 }
