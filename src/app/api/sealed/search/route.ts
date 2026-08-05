@@ -61,11 +61,30 @@ export async function GET(req: Request) {
     const out: SealedSuggestion[] = [];
     const seen = new Set<string>();
 
+    const byKey = new Map<string, SealedSuggestion>();
+    /** First one wins its PLACE in the list; later ones fill its gaps.
+     *
+     *  It used to be first-wins-outright, and that quietly threw away the
+     *  best part of the paid catalogue. A product already in your collection
+     *  is pushed first (correctly — matching an existing row is what stops
+     *  the catalogue splitting), and if that row has no picture then the
+     *  official product shot arriving thirty lines later was dropped on the
+     *  floor because the name was already taken. Which is why a search for
+     *  products you own showed four cardboard-box icons. */
     const push = (s: SealedSuggestion) => {
       const key = s.name.toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      out.push(s);
+      const existing = byKey.get(key);
+      if (!existing) {
+        seen.add(key);
+        byKey.set(key, s);
+        out.push(s);
+        return;
+      }
+      existing.image ??= s.image ?? null;
+      existing.marketPrice ??= s.marketPrice ?? null;
+      existing.setName ??= s.setName ?? null;
+      existing.year ??= s.year ?? null;
+      existing.tcgPlayerId ??= s.tcgPlayerId;
     };
 
     // 1. Products already in the catalogue.
