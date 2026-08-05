@@ -36,6 +36,9 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
   const [suggestions, setSuggestions] = useState<SealedSuggestion[]>([]);
   /** The product picture being looked at full-screen, if any. */
   const [zoom, setZoom] = useState<string | null>(null);
+  /** Set when the product database declined and the list is only what we
+   *  already hold — otherwise an empty answer reads as "no such product". */
+  const [searchNotice, setSearchNotice] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
 
   const load = useCallback(async () => {
@@ -65,7 +68,10 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
       try {
         const res = await fetch(`/api/sealed/search?q=${encodeURIComponent(name)}`);
         const json = await res.json();
-        if (live && res.ok) setSuggestions(json.suggestions ?? []);
+        if (live && res.ok) {
+          setSuggestions(json.suggestions ?? []);
+          setSearchNotice(json.notice ?? null);
+        }
       } catch {
         // Suggestions are a convenience — typing a name still works.
       }
@@ -232,6 +238,12 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
             </label>
             {searching && <span className="text-[11px] text-slate-400">Searching…</span>}
           </div>
+
+          {searchNotice && (
+            <p className="m-0 rounded-lg bg-amber-50 px-2 py-1.5 text-[11.5px] leading-snug text-amber-900">
+              {searchNotice}
+            </p>
+          )}
 
           {suggestions.length > 0 && (
             <div className="max-h-64 divide-y divide-slate-100 overflow-y-auto rounded border border-slate-200">

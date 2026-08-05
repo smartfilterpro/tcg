@@ -81,9 +81,19 @@ function records(json: unknown): Array<Record<string, unknown>> {
 const TTL_MS = 60 * 60 * 1000;
 const cache = new Map<string, { at: number; value: TrackerSealedProduct[] }>();
 
+/** …but an EMPTY answer is remembered for two minutes, not an hour.
+ *
+ *  A search that came back with nothing is usually not a fact about the
+ *  catalogue — it is a spent allowance, a rate limit or a bad minute. Filing
+ *  that under "no such product" for an hour turns a five-minute outage into
+ *  an hour of a search box that has quietly stopped finding new product. */
+const EMPTY_TTL_MS = 2 * 60 * 1000;
+
 function cached(key: string): TrackerSealedProduct[] | null {
   const hit = cache.get(key);
-  if (!hit || Date.now() - hit.at > TTL_MS) return null;
+  if (!hit) return null;
+  const ttl = hit.value.length === 0 ? EMPTY_TTL_MS : TTL_MS;
+  if (Date.now() - hit.at > ttl) return null;
   return hit.value;
 }
 
@@ -96,17 +106,29 @@ function remember(key: string, value: TrackerSealedProduct[]): void {
 
 /** Search sealed product by name.
  *
- *  Empty array on anything going wrong — this feeds a suggestion list, and
- *  a suggestion list that throws is worse than one that is short. */
-export async function searchTrackerSealed(query: string): Promise<TrackerSealedProduct[]> {
+ *  Never throws — this feeds a suggestion list, and a suggestion list that
+ *  throws is worse than one that is short. But it SAYS why it is short.
+ *  Every way this can decline used to look identical from outside: no key,
+ *  a query too short to send, a spent allowance, a rejected request, and a
+ *  catalogue that genuinely has nothing. Five problems wearing one empty
+ *  array, and the one that actually happens — the day's credits are gone —
+ *  reads on screen as "there is no new product". */
+export async function searchTrackerSealed(
+  query: string
+): Promise<{ products: TrackerSealedProduct[]; log: string }> {
   const q = query.trim();
   // Their endpoint requires at least one filter, and a one-character search
   // would return an arbitrary slice of the catalogue for full price.
-  if (!priceTrackerEnabled() || q.length < 3) return [];
+  if (!priceTrackerEnabled()) {
+    return { products: [], log: "NOT asked — no price-tracker key is configured" };
+  }
+  if (q.length < 3) {
+    return { products: [], log: "NOT asked — needs at least three characters" };
+  }
 
   const key = `search:${q.toLowerCase()}`;
   const hit = cached(key);
-  if (hit) return hit;
+  if (hit) return { products: hit, log: `${hit.length} product(s), from the cache` };
 
   try {
     const json = await ptFetch("/sealed-products", {
@@ -119,9 +141,14 @@ export async function searchTrackerSealed(query: string): Promise<TrackerSealedP
       .map(parse)
       .filter((p): p is TrackerSealedProduct => p !== null);
     remember(key, out);
-    return out;
-  } catch {
-    return [];
+    return { products: out, log: `${out.length} product(s) returned` };
+  } catch (err) {
+    return {
+      products: [],
+      log: `the product database couldn't be reached — ${
+        err instanceof Error ? err.message : "request failed"
+      }`,
+    };
   }
 }
 
