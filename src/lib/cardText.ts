@@ -22,6 +22,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { logAiUsage } from "@/lib/usage";
+import { askForJson } from "@/lib/aiJson";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 
@@ -37,7 +38,11 @@ const CARD_READ_SCHEMA = {
     hp: { type: ["integer", "null"] },
     attacks: {
       type: "array",
-      maxItems: 4,
+      // NOT a maxItems constraint. The API rejects that keyword outright —
+      // see lib/aiJson — and a rejected schema is a 400 before the model
+      // ever sees the card. The count belongs in the description below, and
+      // the caller slices what comes back.
+      description: "The card's attacks, at most 4.",
       items: {
         type: "object",
         properties: {
@@ -52,7 +57,7 @@ const CARD_READ_SCHEMA = {
     },
     abilities: {
       type: "array",
-      maxItems: 2,
+      description: "The card's abilities, at most 2.",
       items: {
         type: "object",
         properties: { name: { type: "string" }, text: { type: "string" } },
@@ -62,9 +67,9 @@ const CARD_READ_SCHEMA = {
     },
     rules_text: {
       type: "array",
-      maxItems: 4,
       items: { type: "string" },
-      description: "Trainer/Special Energy effect text, exactly as printed.",
+      description:
+        "Trainer/Special Energy effect text, exactly as printed. At most 4 lines.",
     },
     retreat: { type: ["integer", "null"] },
     weakness_type: { type: ["string", "null"] },
@@ -174,31 +179,7 @@ export async function readCardFromImage(
       ? { type: "base64" as const, media_type: bytes.media_type, data: bytes.data }
       : { type: "url" as const, url: imageUrl };
     const client = anthropic();
-    const response = await client.messages.create({
-      model: SCAN_MODEL,
-      max_tokens: 2000,
-      system: CARD_READ_SYSTEM,
-      output_config: {
-        format: { type: "json_schema", schema: CARD_READ_SCHEMA as unknown as Record<string, unknown> },
-      },
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image", source },
-            { type: "text", text: "Transcribe this card's game data." },
-          ],
-        },
-      ],
-    });
-    if (userId) await logAiUsage(admin, userId, "card_fx", SCAN_MODEL, response.usage);
-    const block = response.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") {
-      console.warn(`card read: no transcription came back for ${imageUrl} (stop: ${response.stop_reason})`);
-      report?.(`the reader returned nothing (stopped: ${response.stop_reason})`);
-      return null;
-    }
-    const read = JSON.parse(block.text) as {
+    const read = await askForJson<{
       readable: boolean;
       category: string;
       stage: string | null;
@@ -209,14 +190,40 @@ export async function readCardFromImage(
       retreat: number | null;
       weakness_type: string | null;
       trainer_type: string | null;
-    };
+    }>(
+      client,
+      {
+        model: SCAN_MODEL,
+        max_tokens: 2000,
+        system: CARD_READ_SYSTEM,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image", source },
+              { type: "text", text: "Transcribe this card's game data." },
+            ],
+          },
+        ],
+      },
+      CARD_READ_SCHEMA as unknown as Record<string, unknown>,
+      {
+        onResponse: (response) => {
+          if (userId) return logAiUsage(admin, userId, "card_fx", SCAN_MODEL, response.usage);
+        },
+        report,
+      }
+    );
+    if (!read) return null;
     if (!read.readable) {
       console.warn(`card read: the model called ${imageUrl} illegible`);
       report?.("the reader said the picture is too small or blurry to transcribe");
       return null;
     }
     return {
-      attacks: (read.attacks ?? []).map((a) => ({
+      // Sliced here, since the schema no longer does it — and it never
+      // really did: a limit the API rejects is a limit that never ran.
+      attacks: (read.attacks ?? []).slice(0, 4).map((a) => ({
         name: a.name,
         cost: Array.from({ length: Math.max(0, Math.min(5, a.cost_count)) }, () => "Colorless"),
         damage: a.damage ?? "",
@@ -225,8 +232,8 @@ export async function readCardFromImage(
       weak: read.weakness_type ? { type: read.weakness_type, value: "×2" } : null,
       resist: null,
       retreat: read.retreat ?? 0,
-      ...(read.rules_text?.length ? { rules: read.rules_text } : {}),
-      ...(read.abilities?.length ? { abilities: read.abilities } : {}),
+      ...(read.rules_text?.length ? { rules: read.rules_text.slice(0, 6) } : {}),
+      ...(read.abilities?.length ? { abilities: read.abilities.slice(0, 3) } : {}),
       stage: read.stage,
       hp: read.hp,
       trainerType: read.trainer_type,
