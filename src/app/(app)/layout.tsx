@@ -9,6 +9,7 @@ import AppNav from "@/components/AppNav";
 import TrainerChat from "@/components/TrainerChat";
 import UpgradeReturn from "@/components/UpgradeReturn";
 import SiteNotice from "@/components/SiteNotice";
+import PwaSetup from "@/components/PwaSetup";
 import { initialsFor } from "@/lib/avatar";
 
 /** The signed-in app shell, per App Screens artboard 02: dark bar with the
@@ -141,6 +142,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <Suspense fallback={null}>
           <UpgradeReturn />
         </Suspense>
+        {/* Registers the service worker and — once, quietly — offers to put
+            the app on the home screen. Inside the signed-in shell on
+            purpose: somebody who hasn't logged in has nothing to install
+            yet. */}
+        <PwaSetup />
         {children}
       </main>
       <TrainerChat />
