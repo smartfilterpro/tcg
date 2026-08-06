@@ -14,7 +14,7 @@ import { estimateCostUsd, logAiUsage } from "@/lib/usage";
 import { numberKey } from "@/lib/pokemontcg";
 import { normalizeForSearch } from "@/lib/text";
 import { pickPrinting } from "@/lib/cardPrinting";
-import { defaultVariantFor } from "@/lib/types";
+import { defaultVariantFor, isSpecificPrinting } from "@/lib/types";
 
 export const BULK_BUCKET = "bulk-scans";
 export const MAX_JOB_CARDS = 8000;
@@ -232,16 +232,26 @@ async function matchCatalogue(
     .ilike("name", `%${name.replace(/[%_]/g, " ")}%`)
     .limit(60);
   const wanted = normalizeForSearch(name);
-  let hits = (
-    (data ?? []) as Array<{
-      id: string;
-      name: string;
-      number: string;
-      set_name: string | null;
-      rarity: string | null;
-      prices: Record<string, number | null> | null;
-    }>
-  ).filter((c) => normalizeForSearch(c.name) === wanted);
+  const rows = (data ?? []) as Array<{
+    id: string;
+    name: string;
+    number: string;
+    set_name: string | null;
+    rarity: string | null;
+    prices: Record<string, number | null> | null;
+  }>;
+  // Exact name, PLUS the printings of it.
+  //
+  // An exact-name filter is what keeps "Charizard" from matching "Charizard
+  // ex", and it also excluded every row this machine was just taught to
+  // look for: "Dragonair (Poké Ball Pattern)" is not "Dragonair". So the
+  // read could report a Master Ball and the matcher had no Master Ball row
+  // to give it. A name that is the read plus a parenthetical is the same
+  // card in a different printing, and belongs in the candidates.
+  let hits = rows.filter((c) => {
+    const n = normalizeForSearch(c.name);
+    return n === wanted || (n.startsWith(wanted) && isSpecificPrinting(c.name));
+  });
   const printed = (read.number ?? "").split("/")[0].trim();
   if (printed) {
     const key = numberKey(printed);
