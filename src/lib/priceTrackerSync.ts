@@ -785,6 +785,29 @@ export async function runPriceSync(
           // A card with no parenthetical qualifier is one both catalogues
           // should have. If those match, the matcher is fine.
           const guardSeen = state.plainSeen ?? 0;
+
+          // A pause has to be able to LIFT.
+          //
+          // addsPaused was written once and only cleared by starting the
+          // whole sync over. That was survivable while the rule never
+          // changed; it isn't now. The guard used to judge on every card
+          // their catalogue sells, including the per-printing products that
+          // are meant not to match, so it tripped on a healthy sync — and
+          // the fix to the rule would have been useless, because the stored
+          // pause outlives the reasoning that caused it. It is re-checked
+          // against the current rule each round: healthy again means adding
+          // resumes, without losing 90 sets of progress to a Start over.
+          if (
+            state.addsPaused != null &&
+            guardSeen >= ADD_GUARD_MIN_SEEN &&
+            (state.plainMatched ?? 0) / guardSeen >= ADD_GUARD_MIN_RATE
+          ) {
+            console.log(
+              `price sync: adds resume — ${state.plainMatched}/${guardSeen} plain cards matched`
+            );
+            state.addsPaused = null;
+          }
+
           if (state.addsPaused == null && guardSeen >= ADD_GUARD_MIN_SEEN) {
             const rate = (state.plainMatched ?? 0) / guardSeen;
             if (rate < ADD_GUARD_MIN_RATE) {
@@ -924,7 +947,21 @@ export async function runPriceSync(
       state.finishedAt = new Date().toISOString();
     }
   } catch (err) {
-    state.error = err instanceof Error ? err.message : String(err);
+    // A SPENT ALLOWANCE IS NOT AN ERROR.
+    //
+    // ptFetch throws when the daily budget is gone, and this caught it and
+    // filed it as a failure — so the loop logged "ERROR: Daily budget of
+    // 20,000 requests is used up" every few minutes, and the panel showed
+    // red for a job that was working exactly as designed and waiting for
+    // midnight. Errors that are really pauses are how real errors stop being
+    // noticed.
+    const message = err instanceof Error ? err.message : String(err);
+    const spent =
+      (err as { status?: number })?.status === 429 || /budget|used up/i.test(message);
+    if (spent) {
+      state.budgetPaused = `${message} Resumes when the daily allowance rolls over.`;
+      state.error = null;
+    } else state.error = message;
   }
 
   state.updatedAt = new Date().toISOString();

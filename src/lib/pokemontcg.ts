@@ -241,9 +241,9 @@ function extractPrice(card: RawCard): number | null {
       if (v?.market != null) return v.market;
     }
   }
-  const cm = card.cardmarket?.prices;
-  if (cm?.averageSellPrice != null) return cm.averageSellPrice;
-  if (cm?.trendPrice != null) return cm.trendPrice;
+  // Cardmarket is NOT read. It quotes euros and this field is spent as
+  // dollars — see tcgdexPrices for the same decision. A missing price is
+  // true; a euro price labelled "$" is not.
   return null;
 }
 

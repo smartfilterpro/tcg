@@ -5,7 +5,15 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { findTcgdexImage } from "@/lib/tcgdex";
 import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
-import { summaryToRow, type CardSummary, type CollectionItem } from "@/lib/types";
+import {
+  summaryToRow,
+  defaultVariantFor,
+  variantLabel,
+  PATTERN_VARIANTS,
+  type CardSummary,
+  type CollectionItem,
+} from "@/lib/types";
+import { patternPrintingFor } from "@/lib/cardPrinting";
 import { fetchAllRows } from "@/lib/fetchAll";
 
 /** GET: the current user's full collection (cards joined). Filtering happens client-side. */
@@ -109,12 +117,45 @@ export async function POST(req: Request) {
     }
 
     // 2) Merge quantities per (card id, finish)
+    //
+    // ONE CARD, ONE WAY OF RECORDING IT. A ball-pattern reverse holo can be
+    // saved two ways: as the plain card wearing a "Poké Ball pattern" finish,
+    // or as the printing's own catalogue row. They are the same object and
+    // they are not equivalent — the row carries that printing's real market
+    // price, the finish falls back to the plain card's, and a collection with
+    // both has the same card in two places at two values.
+    //
+    // So the row wins whenever we hold one. The finish stays for printings
+    // no source lists, which is what it was always for.
     const wanted = new Map<string, { cardId: string; variant: string; qty: number }>();
     for (const i of items) {
-      const variant = i.variant || "normal";
-      const key = `${i.card.id}|${variant}`;
+      let variant = i.variant || "normal";
+      let cardId = i.card.id;
+      if ((PATTERN_VARIANTS as readonly string[]).includes(variant)) {
+        const printing = await patternPrintingFor(
+          supabase,
+          {
+            id: i.card.id,
+            name: i.card.name,
+            number: i.card.number,
+            setName: i.card.setName ?? null,
+          },
+          variantLabel(variant)
+        );
+        if (printing) {
+          cardId = printing.id;
+          // The printing's own default finish, not the pattern label — on a
+          // row that IS the Poké Ball printing, "Poké Ball pattern" would be
+          // a pattern of a pattern.
+          variant = defaultVariantFor(
+            { prices: printing.prices, rarity: printing.rarity, name: printing.name },
+            null
+          );
+        }
+      }
+      const key = `${cardId}|${variant}`;
       const prev = wanted.get(key);
-      wanted.set(key, { cardId: i.card.id, variant, qty: (prev?.qty ?? 0) + i.quantity });
+      wanted.set(key, { cardId, variant, qty: (prev?.qty ?? 0) + i.quantity });
     }
 
     // 3) Increment existing rows or insert new ones

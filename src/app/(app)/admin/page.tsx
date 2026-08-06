@@ -1344,6 +1344,10 @@ export default function AdminPage() {
             <SearchProbePanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🎱 Ball-pattern copies</h2>
+            <PatternConsolidatePanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">⏱️ Recent scans</h2>
             <ScanLogPanel />
           </div>
@@ -3898,6 +3902,100 @@ function SearchProbePanel() {
             </pre>
           </details>
         </>
+      )}
+    </div>
+  );
+}
+
+/** Move ball-pattern copies onto the printing's own card.
+ *
+ *  The same card could be recorded two ways: the plain card wearing a "Poké
+ *  Ball pattern" finish, or the printing's own row. Saving prefers the row
+ *  now, so nothing new splits — this is for everything recorded before that,
+ *  which is otherwise valued as the plain card it isn't. */
+function PatternConsolidatePanel() {
+  const [out, setOut] = useState<{
+    dryRun?: boolean;
+    considered?: number;
+    moved?: number;
+    moves?: Array<{
+      card: string;
+      from: string;
+      to: string;
+      toCard: string;
+      quantity: number;
+      merged: boolean;
+    }>;
+    skipped?: string[];
+    skippedCount?: number;
+    error?: string;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function run(dryRun: boolean) {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/pattern-consolidate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dryRun }),
+      });
+      const json = await res.json();
+      setOut(res.ok ? json : { error: json.error || "Failed" });
+    } catch (e) {
+      setOut({ error: e instanceof Error ? e.message : "Failed" });
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="m-0 text-xs text-brand-ink4">
+        A Poké Ball reverse holo can be recorded as the plain card with a pattern finish, or as
+        the printing&apos;s own card. Only the second carries that printing&apos;s real price.
+        New saves already prefer it; this moves the ones saved before that. Copies whose
+        printing we hold no row for are left alone — the finish is doing its job there.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button className="btn-secondary text-xs" disabled={busy} onClick={() => void run(true)}>
+          {busy ? "Checking…" : "Preview"}
+        </button>
+        <button
+          className="btn-secondary text-xs"
+          disabled={busy || !out || (out.moved ?? 0) === 0}
+          onClick={() => void run(false)}
+        >
+          Move them
+        </button>
+      </div>
+
+      {out?.error && <p className="m-0 text-xs text-brand-negative">{out.error}</p>}
+      {out && !out.error && (
+        <p className="m-0 text-xs text-brand-ink3">
+          {out.dryRun ? "Would move" : "Moved"} {out.moved} of {out.considered} pattern
+          {(out.considered ?? 0) === 1 ? " copy" : " copies"}
+          {(out.skippedCount ?? 0) > 0 && ` · ${out.skippedCount} left alone`}
+        </p>
+      )}
+      {(out?.moves?.length ?? 0) > 0 && (
+        <div className="max-h-56 space-y-0.5 overflow-y-auto text-[11px] text-brand-ink4">
+          {out!.moves!.map((m, i) => (
+            <div key={i} className="font-mono">
+              {m.quantity}× {m.card}: {m.from} → &ldquo;{m.toCard}&rdquo; ({m.to})
+              {m.merged ? " · merged into an existing row" : ""}
+            </div>
+          ))}
+        </div>
+      )}
+      {(out?.skipped?.length ?? 0) > 0 && (
+        <details className="text-[11px] text-brand-ink4">
+          <summary className="cursor-pointer">Left alone</summary>
+          <div className="mt-1 space-y-0.5">
+            {out!.skipped!.map((sk, i) => (
+              <div key={i}>{sk}</div>
+            ))}
+          </div>
+        </details>
       )}
     </div>
   );

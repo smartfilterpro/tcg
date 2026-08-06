@@ -224,3 +224,27 @@ body.admin-dark-body {
     font-size: 16px !important;
   }
 }
+
+/* Installed on a phone, the app draws edge to edge — viewportFit: "cover"
+   in the root viewport is what allows it — so the notch and the home bar
+   sit OVER the page unless something holds content clear of them. These
+   insets are zero in a browser tab, which is why they can be unconditional:
+   env(safe-area-inset-*) resolves to 0px wherever there is no notch. */
+body {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* The bottom one goes on the scroll container rather than the body so a
+   fixed footer or a keyboard doesn't fight it. */
+main {
+  padding-bottom: calc(1.75rem + env(safe-area-inset-bottom));
+}
+
+/* Standalone only: the status bar is translucent over our dark header, so
+   the header needs the height back that iOS is drawing on top of. */
+@media (display-mode: standalone) {
+  header {
+    padding-top: env(safe-area-inset-top);
+  }
+}
