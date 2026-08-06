@@ -282,7 +282,13 @@ export function availableVariants(card: {
 
 /** Best default finish given the card + what the scanner thought it saw. */
 export function defaultVariantFor(
-  card: { prices?: Record<string, number | null> | null; rarity?: string | null },
+  card: {
+    prices?: Record<string, number | null> | null;
+    rarity?: string | null;
+    /** Used only to tell a named printing from a plain card — the manual
+     *  finishes are meaningless on a row that IS one of them. */
+    name?: string;
+  },
   rarityHint?: string | null
 ): string {
   const avail = availableVariants(card);

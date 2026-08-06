@@ -947,7 +947,21 @@ export async function runPriceSync(
       state.finishedAt = new Date().toISOString();
     }
   } catch (err) {
-    state.error = err instanceof Error ? err.message : String(err);
+    // A SPENT ALLOWANCE IS NOT AN ERROR.
+    //
+    // ptFetch throws when the daily budget is gone, and this caught it and
+    // filed it as a failure — so the loop logged "ERROR: Daily budget of
+    // 20,000 requests is used up" every few minutes, and the panel showed
+    // red for a job that was working exactly as designed and waiting for
+    // midnight. Errors that are really pauses are how real errors stop being
+    // noticed.
+    const message = err instanceof Error ? err.message : String(err);
+    const spent =
+      (err as { status?: number })?.status === 429 || /budget|used up/i.test(message);
+    if (spent) {
+      state.budgetPaused = `${message} Resumes when the daily allowance rolls over.`;
+      state.error = null;
+    } else state.error = message;
   }
 
   state.updatedAt = new Date().toISOString();

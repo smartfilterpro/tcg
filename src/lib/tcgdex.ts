@@ -89,13 +89,12 @@ function usable(v: unknown): number | null {
  *  publishes the whole per-finish block; reading it is free and it is the
  *  same TCGplayer data the rest of the app prices in.
  *
- *  TCGPLAYER IS PREFERRED OVER CARDMARKET, which is the other half of the
- *  bug. Cardmarket is the European marketplace and quotes EUR; this app
- *  prints "$" everywhere and totals collections in dollars. The old order
- *  tried cardmarket FIRST, so any card it covered was showing euros labelled
- *  as dollars. Cardmarket is kept only as a last resort — a roughly right
- *  number beats none for a print no US marketplace lists — and it can only
- *  ever set the headline, never a per-finish figure. */
+ *  TCGPLAYER ONLY. Cardmarket is the European marketplace and quotes EUR;
+ *  this app prints "$" everywhere and totals collections in dollars. It was
+ *  read first, then demoted to a last resort, and is now not read at all: a
+ *  euro figure in a dollar field is not an approximation, it is a wrong
+ *  number wearing the right symbol. No price is the honest answer, and the
+ *  app already shows that honestly. */
 export function tcgdexPrices(pricing: Record<string, unknown> | undefined): {
   market: number | null;
   prices: Record<string, number | null> | null;
@@ -125,12 +124,17 @@ export function tcgdexPrices(pricing: Record<string, unknown> | undefined): {
     }
   }
 
-  // Nothing from TCGplayer. Cardmarket, in euros, as the last thing standing.
-  const cm = pricing.cardmarket as Record<string, unknown> | undefined;
-  for (const key of ["avg30", "avg", "trendPrice", "trend", "low"]) {
-    const v = usable(cm?.[key]);
-    if (v != null) return { market: v, prices: null };
-  }
+  // NOTHING FROM CARDMARKET. It was the last resort here, on the reasoning
+  // that a roughly right number beats none for a print no US marketplace
+  // lists. That reasoning was wrong: Cardmarket quotes EUROS, the app prints
+  // "$" everywhere and adds collections up in dollars, so what it bought was
+  // not a rough number — it was a wrong number wearing the right symbol, and
+  // silently wrong at whatever today's exchange rate is.
+  //
+  // A blank price says "we don't know", which is true and which the app
+  // already displays honestly. Converting would need a live FX rate and a
+  // label; until there is a reason to build that, no price is the accurate
+  // answer.
   return { market: null, prices: null };
 }
 
