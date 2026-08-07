@@ -48,7 +48,18 @@ export interface ResilientOptions {
   onRetry?: (attempt: number) => void;
   /** Checked before each retry; true abandons the loop. */
   stopped?: () => boolean;
+  /** Abandon a single attempt after this long and retry it.
+   *
+   *  The default sits just above the longest maxDuration in the app, so it
+   *  can only ever fire on a request the server has already given up on —
+   *  which is exactly the case it exists for: a socket that died quietly
+   *  and would otherwise leave the panel waiting forever. Lower it for a
+   *  route you know is quick. */
+  timeoutMs?: number;
 }
+
+/** Just past the 300s ceiling the long admin routes declare. */
+const DEFAULT_TIMEOUT_MS = 330_000;
 
 /** fetch that survives the screen going off.
  *
@@ -65,7 +76,10 @@ export async function resilientFetch(
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.stopped?.()) throw new Error("Stopped");
     try {
-      return await fetch(input, init);
+      // A caller's own signal wins — it usually means "the user pressed
+      // stop", which is not something to override with a deadline.
+      const signal = init?.signal ?? AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      return await fetch(input, { ...init, signal });
     } catch (err) {
       if (!isTransport(err)) throw err;
       lastError = err;
