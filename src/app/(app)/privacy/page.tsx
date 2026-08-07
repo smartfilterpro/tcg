@@ -82,7 +82,28 @@ export default function PrivacyPage() {
           </p>
           <p>
             We do not use advertising trackers, analytics pixels, or any third-party profiling
-            of any kind. The only cookies set are the ones that keep you signed in.
+            of any kind.
+          </p>
+        </Section>
+
+        <Section title="What is stored on your device">
+          <p>
+            <b>Cookies: your session, and nothing else.</b> Signing in sets an authentication
+            cookie, and during sign-in a short-lived one that completes the exchange. They
+            exist solely to keep you signed in. We set no analytics, advertising or profiling
+            cookies, which is also why this app has no cookie banner — a session cookie is
+            strictly necessary and exempt from consent requirements.
+          </p>
+          <p>
+            <b>Local storage: three preferences.</b> Whether you dismissed the &ldquo;add to
+            your home screen&rdquo; offer, which announcements you have already closed, and the
+            identifier of a scan still running — so reloading the page mid-scan does not lose
+            work you have paid for. None of it is personal and none of it is sent anywhere.
+          </p>
+          <p>
+            <b>Other people&apos;s cookies.</b> Going to the payment processor&apos;s checkout
+            puts you on their site, where their cookies apply. Card pictures are loaded from
+            the card databases&apos; own image servers, which we neither control nor read.
           </p>
         </Section>
 
