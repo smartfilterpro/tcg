@@ -15,6 +15,7 @@ import {
 } from "@/lib/types";
 import { patternPrintingFor } from "@/lib/cardPrinting";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { errorJson } from "@/lib/apiError";
 
 /** GET: the current user's full collection (cards joined). Filtering happens client-side. */
 export async function GET() {
@@ -292,8 +293,5 @@ function errorResponse(err: unknown) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   console.error("collection error", err);
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

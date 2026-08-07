@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, AuthError } from "@/lib/auth";
 import { SEALED_CONDITIONS, SEALED_KINDS, priceProduct } from "@/lib/sealed";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 60;
 
@@ -164,6 +165,10 @@ function errorResponse(err: unknown) {
   if (err instanceof AuthError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
-  const msg = err instanceof Error ? err.message : "Request failed";
-  return NextResponse.json({ error: missingTable(msg) ? NOT_SET_UP : msg }, { status: 500 });
+  // The missing-table case is read off the raw message and answered with
+  // our own sentence, which is the one thing worth telling apart here; every
+  // other database complaint is for the log, not for the client.
+  const raw = err instanceof Error ? err.message : "";
+  if (missingTable(raw)) return NextResponse.json({ error: NOT_SET_UP }, { status: 500 });
+  return errorJson(err, "Request failed");
 }

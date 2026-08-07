@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { errorJson } from "@/lib/apiError";
 
 // Deciding a held price. The nightly refresh refuses to auto-apply any
 // price that moved more than 5× and parks it in the run summary; this is
@@ -61,9 +62,6 @@ export async function POST(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Review failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Review failed");
   }
 }

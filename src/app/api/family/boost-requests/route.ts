@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { BOOST_PACKS } from "@/lib/boosts";
 import { ensureCustomer, stripeEnabled, stripeFetch, StripeError } from "@/lib/stripe";
 import { requestOrigin } from "@/lib/requestOrigin";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 30;
 
@@ -272,8 +273,5 @@ function errorResponse(err: unknown) {
   if (err instanceof StripeError) {
     return NextResponse.json({ error: err.message }, { status: 502 });
   }
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

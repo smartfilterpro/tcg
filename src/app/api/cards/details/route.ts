@@ -5,6 +5,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { ensureCardText } from "@/lib/cardText";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 60;
 
@@ -203,9 +204,6 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { DumpUnavailable, exportsEnabled, runPriceDump, type DumpType } from "@/lib/priceDump";
+import { errorJson } from "@/lib/apiError";
 
 // Downloading a dump is slow — a whole catalogue of gzipped CSV.
 export const maxDuration = 300;
@@ -52,9 +53,6 @@ export async function POST(req: Request) {
         { status: 503 }
       );
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Dump failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Dump failed");
   }
 }

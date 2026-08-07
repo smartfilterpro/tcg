@@ -9,6 +9,8 @@ import { GRADING_SYSTEM, GRADE_SCHEMA, type GradeReport } from "@/lib/grading";
 import { centeringCapBack, type CenteringMeasurement } from "@/lib/cardGeometry";
 import { computeGradeValue, parseRange, type GradedPrices, type GradeValue } from "@/lib/gradeValue";
 import { normalizeForSearch } from "@/lib/text";
+import { errorJson, safeMessage } from "@/lib/apiError";
+import { PublicError } from "@/lib/apiError";
 
 export const maxDuration = 180;
 
@@ -225,17 +227,17 @@ async function runGrade(opts: {
     await logAiUsage(supabase, userId, "grade", MODEL, response.usage);
 
     if (response.stop_reason === "refusal") {
-      throw new Error("Those photos couldn't be processed — try different ones.");
+      throw new PublicError("Those photos couldn't be processed — try different ones.");
     }
     const textBlock = response.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") {
-      throw new Error("The grading ran out of room — please try again.");
+      throw new PublicError("The grading ran out of room — please try again.");
     }
     let report: GradeReport;
     try {
       report = JSON.parse(textBlock.text) as GradeReport;
     } catch {
-      throw new Error("The grading came back malformed — please try again.");
+      throw new PublicError("The grading came back malformed — please try again.");
     }
     if (!report.is_card) {
       throw new Error(
@@ -315,7 +317,7 @@ export async function POST(req: Request) {
           .from("grade_jobs")
           .update({
             status: "error",
-            error: err instanceof Error ? err.message : "Grading failed",
+            error: safeMessage(err, "Grading failed"),
             updated_at: new Date().toISOString(),
           })
           .eq("id", jobId);
@@ -327,10 +329,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("grade error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Grading failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Grading failed");
   }
 }
 

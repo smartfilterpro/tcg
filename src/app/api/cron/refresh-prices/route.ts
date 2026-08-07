@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { refreshStalePrices } from "@/lib/priceRefresh";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 300;
 
@@ -50,10 +51,7 @@ async function run(req: Request) {
     const summary = await refreshStalePrices(400, { ptBudget: 150, textBudget: 120 });
     return NextResponse.json({ started: true, summary });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Refresh failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Refresh failed");
   } finally {
     running.__cronPriceRefreshRunning = false;
   }

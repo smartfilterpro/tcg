@@ -3,6 +3,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { mirrorCard, type MirrorRow } from "@/lib/artMirror";
 import { signCardPhoto } from "@/lib/photoAccess";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 60;
 
@@ -75,9 +76,6 @@ export async function GET(req: Request, { params }: Params) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Art failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Art failed");
   }
 }

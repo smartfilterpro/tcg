@@ -54,6 +54,10 @@ All findings below are from manual review.
 
 **Summary: 0 CRITICAL · 2 HIGH · 5 MEDIUM · 4 LOW · 3 INFO**
 
+**Status, 7 August 2026: H1, H2, M1, M2, M4 and M5 are fixed** — see each finding. M3 and
+the four LOW findings are open. Migrations 054, 055 and 056 must be run for the fixes to
+take effect.
+
 ### HIGH
 
 #### H1 — No rate limiting on sign-in
@@ -121,7 +125,7 @@ The bulk-scan bucket is genuinely private; grading was never separated from card
 
 ### MEDIUM
 
-#### M1 — Internal error messages returned to the client
+#### M1 — Internal error messages returned to the client — **FIXED**
 **Files:** 104 occurrences of `err instanceof Error ? err.message : "…"` across
 `src/app/api/**/route.ts`
 
@@ -133,14 +137,26 @@ occasionally query strings.
 misconfigured upstream ends up printing a request URL — which for the paid price API
 includes query parameters — into a browser.
 
-**Fix:** keep the detail server-side. Log `err` with a correlation id, return
-`{ error: "Something went wrong", ref: "<id>" }`. Where a message is genuinely useful to
-the member (the card-refresh explanations, for instance) it should be a message the code
-*chose*, not an exception's `.message`.
+**Fixed.** `src/lib/apiError.ts` introduces `PublicError` — an error whose message was
+written for a person — and `errorJson(err, fallback)`, which shows the message only for
+`PublicError` and `AuthError` and logs everything else in full on the server. The 85
+canonical sites (all status 500) now call it, keeping the specific sentence each author
+had already written as the fallback, which until now was the branch that almost never ran.
+The eleven throws whose text is genuinely for a member — the daily download limit, "try a
+different photo", "run the card catalogue import first" — became `PublicError` so they
+still read as before.
+
+The five background jobs that *record* a failure for a member to read later (scan, grade,
+chat, deck build, coach) go through `safeMessage()`, on the grounds that a job row someone
+opens is exactly as public as a response body.
+
+14 sites remain and are deliberate: eight admin-only upstream probes, `find-image`'s
+attempt log (admin-gated inside the route), and two server-side `console.error` calls.
+Showing an admin what an upstream actually said is the purpose of those routes.
 
 ---
 
-#### M2 — Two outbound clients have no request timeout
+#### M2 — Two outbound clients have no request timeout — **FIXED**
 **Files:** `src/lib/tcgdex.ts:41-49` (`get<T>`), `src/lib/clientLoop.ts`
 
 `tcgdex.ts`'s fetch helper sets `cache: "no-store"` and no `AbortSignal`. Every other
@@ -152,7 +168,14 @@ A hung connection there holds a Node request handler until the platform kills it
 the same class of fault that produced a 39.5-second single-card scan earlier this week,
 which is documented in the scan timing panel.
 
-**Fix:** `signal: AbortSignal.timeout(10_000)` in `get()`, matching the others.
+**Fixed.** TCGdex gives up after ten seconds. `resilientFetch` now aborts an attempt at
+330s — just past the 300s ceiling the longest admin routes declare, so it can only fire on
+a request the server has already abandoned. Its retry loop already classified an abort as
+a transport failure, so recovery needed no further change; a caller's own signal still
+wins, since that usually means somebody pressed stop.
+
+A recount while fixing this: only these two lacked a timeout. Every other outbound call in
+the repo already had one — the audit's phrasing implied a wider gap than exists.
 
 ---
 
@@ -172,7 +195,7 @@ blast radius to abuse by an existing member.
 
 ---
 
-#### M4 — Export token travels in the query string
+#### M4 — Export token travels in the query string — **FIXED**
 **Files:** `src/app/api/export/route.ts:9`, `src/app/api/export/token/route.ts`
 
 `GET /api/export?token=…` authenticates with a 48-hex-character token from
@@ -183,14 +206,24 @@ the member's **email address** alongside their whole collection.
 referrer headers, screenshots, shell history. The token never expires (no `expires_at`
 column, no `last_used_at`), so a leaked one is valid until manually rotated.
 
-**Fix:** accept `Authorization: Bearer <token>` as well and prefer it; add `expires_at`
-and `last_used_at` to `api_tokens`; drop `email` from the payload unless a consumer needs
-it. Rotation already exists (`POST /api/export/token`) — surface it in Settings with the
-token's last-used time so a leak is noticeable.
+**Fixed**, with one deliberate departure from the suggested fix. `Authorization: Bearer`
+is accepted and preferred, the email is gone from the payload, and the response carries
+`Cache-Control: no-store` and `X-Robots-Tag: noindex`.
+
+No `expires_at`. This link exists to be pasted into a tool that fetches a URL, and a
+credential that stops working next Tuesday is one nobody trusts — the failure mode is a
+member who assumes the app is broken. Migration 056 adds `last_used_at` instead: not an
+expiry but a witness.
+
+That only helps if somebody can see it, and the token had **no UI at all** — no way to
+read it, no way to rotate it, despite `POST /api/export/token` having existed the whole
+time. Settings → Account now shows the link, when it was last used, and a Replace button.
+A date you do not recognise is the only signal a member will ever get that the link got
+out.
 
 ---
 
-#### M5 — No security headers
+#### M5 — No security headers — **FIXED**
 **File:** `next.config.mjs`
 
 No `headers()` block. The app ships without Content-Security-Policy,
@@ -202,10 +235,15 @@ default-referrer request from a page whose URL contains a token hands that token
 third-party host. Clickjacking is the other realistic gap, since the app has
 state-changing buttons (delete account, apply deck edit).
 
-**Fix:** add a `headers()` block with at least
-`Referrer-Policy: strict-origin-when-cross-origin`, `X-Content-Type-Options: nosniff`,
-`X-Frame-Options: DENY` and HSTS. A full CSP is more work because the app inlines Next's
-bootstrap and loads images from several CDNs — treat it as a follow-up, not a blocker.
+**Fixed.** `next.config.mjs` sets `Referrer-Policy: strict-origin-when-cross-origin`,
+`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, a year of HSTS, and a
+`Permissions-Policy` granting the camera to the app itself and nothing to an embedded
+frame.
+
+No CSP yet, and not by oversight: Next injects inline scripts for hydration, so a useful
+policy needs per-request nonces threaded through the middleware, and one written without
+them is either `unsafe-inline` (which buys nothing) or a blank page. It belongs in its own
+change, with something rendering to test against.
 
 ---
 
@@ -288,14 +326,16 @@ input. RLS is enabled on all 22 tables.
 
 1. ~~**H2** — private bucket + signed URLs for `card-photos`.~~ **Done** — migration 054
    and `/api/photo`. See the finding for what shipped.
-2. **H1** — a login attempt counter. Cheap, and removes a silent dependency on a
-   provider default.
-3. **M1** — stop returning `err.message` to clients. 104 sites, but it is one shared
-   helper away from being a single change.
-4. **M2** — a timeout on the TCGdex client. One line, and it removes a known hang path
-   from the scan flow.
-5. **M4/M5 together** — `Referrer-Policy` plus moving the export token to a header. They
-   are the same leak from two directions.
+2. ~~**H1** — a login attempt counter.~~ **Done** — migration 055 and
+   `src/lib/loginThrottle.ts`.
+3. ~~**M1** — stop returning `err.message` to clients.~~ **Done** — `src/lib/apiError.ts`.
+4. ~~**M2** — a timeout on the TCGdex client.~~ **Done**.
+5. ~~**M4/M5 together**.~~ **Done** — migration 056, the Settings panel, and a `headers()`
+   block.
+
+**Still open: M3, and the four LOW findings.** M3 (no request-size limit on the scan and
+grade uploads) is the only MEDIUM left; both endpoints require a session and spend
+credits, so the exposure is abuse by an existing member rather than by a stranger.
 
 ## Requires manual verification
 

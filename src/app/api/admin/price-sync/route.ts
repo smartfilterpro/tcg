@@ -3,6 +3,7 @@ import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { budgetState, hydrateBudget, priceTrackerEnabled } from "@/lib/priceTracker";
 import { readSyncState, runPriceSync } from "@/lib/priceTrackerSync";
+import { errorJson } from "@/lib/apiError";
 
 // A slice of sets is a lot of HTTP and a lot of row updates.
 export const maxDuration = 300;
@@ -60,9 +61,6 @@ export async function POST(req: Request) {
     }
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ error: err.message }, { status: err.status });
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Sync failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Sync failed");
   }
 }

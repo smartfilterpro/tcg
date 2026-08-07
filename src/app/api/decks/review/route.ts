@@ -8,6 +8,7 @@ import type { DeckCardEntry } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { legalityBriefing } from "@/lib/deckLegality";
 import { completeWithRoom, answerText, noAnswerReply } from "@/lib/aiAnswer";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
@@ -129,9 +130,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("deck review error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Review failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Review failed");
   }
 }

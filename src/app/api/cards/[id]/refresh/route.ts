@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, AuthError } from "@/lib/auth";
 import { refreshCard } from "@/lib/cardRefresh";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 60;
 
@@ -58,9 +59,6 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Refresh failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Refresh failed");
   }
 }

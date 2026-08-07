@@ -70,8 +70,14 @@ async function checkoutUrl(req: Request, plan: string | null): Promise<string> {
 function refusalStatus(err: unknown): { message: string; status: number } {
   if (err instanceof AuthError) return { message: err.message, status: err.status };
   if (err instanceof CheckoutRefused) return { message: err.message, status: err.status };
-  if (err instanceof StripeError) return { message: err.message, status: 502 };
-  return { message: err instanceof Error ? err.message : "Checkout failed", status: 500 };
+  // Stripe's message is written for a developer reading a dashboard, not
+  // for somebody trying to pay — and it names our own account objects.
+  if (err instanceof StripeError) {
+    console.error("checkout: stripe refused", err);
+    return { message: "The payment provider refused the request. Try again shortly.", status: 502 };
+  }
+  console.error("checkout failed", err);
+  return { message: "Checkout failed", status: 500 };
 }
 
 /** POST { plan } → { url }. What the in-app upgrade buttons call. */

@@ -5,6 +5,7 @@ import { fetchAllRows } from "@/lib/fetchAll";
 import { applyChanges, validateEdit, type DeckEditChange } from "@/lib/deckEdit";
 import { categoryLookup } from "@/lib/deckEditTool";
 import type { DeckEntry } from "@/lib/deckLegality";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 60;
 
@@ -123,9 +124,6 @@ export async function POST(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Couldn't apply that edit" },
-      { status: 500 }
-    );
+    return errorJson(err, "Couldn't apply that edit");
   }
 }

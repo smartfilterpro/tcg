@@ -3,6 +3,7 @@
 // Entirely optional: no POKETRACE_API_KEY env var → feature off.
 import { numberKey } from "@/lib/pokemontcg";
 import { setsAgree } from "@/lib/setName";
+import { PublicError } from "@/lib/apiError";
 
 const BASE = "https://api.poketrace.com/v1";
 
@@ -52,7 +53,7 @@ async function ptGet(path: string): Promise<unknown | null> {
         res = await ptFetch(path);
       } else {
         // Daily cap reached — stop the whole run's PokeTrace usage.
-        throw new Error("PokeTrace daily limit reached — resumes tomorrow");
+        throw new PublicError("PokeTrace daily limit reached — resumes tomorrow");
       }
     }
     if (!res.ok) {

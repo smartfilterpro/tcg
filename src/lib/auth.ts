@@ -62,6 +62,10 @@ export class AuthError extends Error {
   status: number;
   constructor(message: string, status = 401) {
     super(message);
+    // Named so apiError can recognise it without importing this module —
+    // which would drag next/headers into every library that reports a
+    // failure, including ones that never see a request.
+    this.name = "AuthError";
     this.status = status;
   }
 }

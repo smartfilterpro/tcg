@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { summaryToRow, defaultVariantFor, type CardSummary } from "@/lib/types";
 import { recordFinishFeedback } from "@/lib/finishFeedback";
+import { errorJson } from "@/lib/apiError";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -153,8 +154,5 @@ function errorResponse(err: unknown) {
   if (err instanceof AuthError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

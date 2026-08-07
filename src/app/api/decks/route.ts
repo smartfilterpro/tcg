@@ -5,6 +5,7 @@ import { isFreeTier } from "@/lib/credits";
 import { FREE_DECK_LIMIT } from "@/lib/limits";
 import { nameAllowed, recordNameAttempt } from "@/lib/moderation";
 import type { DeckCardEntry, DeckSuggestion } from "@/lib/types";
+import { errorJson } from "@/lib/apiError";
 
 export async function GET() {
   try {
@@ -100,8 +101,5 @@ function errorResponse(err: unknown) {
   if (err instanceof AuthError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

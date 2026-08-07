@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { BULK_BUCKET, MAX_JOB_CARDS, identifyPhoto } from "@/lib/bulkScan";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
@@ -143,9 +144,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, pass, seq: targetSeq, ordinal });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Photo intake failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Photo intake failed");
   }
 }

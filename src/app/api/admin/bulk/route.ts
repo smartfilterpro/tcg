@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { errorJson } from "@/lib/apiError";
 
 /** GET: every bulk job with its counts — the service's job board. */
 export async function GET() {
@@ -84,8 +85,5 @@ function errorResponse(err: unknown) {
   if (err instanceof AuthError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

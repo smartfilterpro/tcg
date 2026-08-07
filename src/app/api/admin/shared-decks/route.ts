@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireModerator, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { errorJson } from "@/lib/apiError";
 
 // Moderation over shared decks — the deck names every member can see on the
 // Friends page. The admin sees ALL shared decks here (service role), not
@@ -89,8 +90,5 @@ function errorResponse(err: unknown) {
   if (err instanceof AuthError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

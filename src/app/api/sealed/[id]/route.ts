@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { priceProduct } from "@/lib/sealed";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 60;
 
@@ -105,8 +106,5 @@ function errorResponse(err: unknown) {
   if (err instanceof AuthError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

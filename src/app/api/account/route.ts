@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, AuthError } from "@/lib/auth";
 import { nameAllowed, recordNameAttempt } from "@/lib/moderation";
+import { errorJson } from "@/lib/apiError";
 
 /** GET: everything the account page shows about you. */
 export async function GET() {
@@ -180,8 +181,5 @@ function errorResponse(err: unknown) {
   if (err instanceof AuthError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

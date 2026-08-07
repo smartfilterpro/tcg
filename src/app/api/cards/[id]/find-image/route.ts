@@ -8,6 +8,7 @@ import { checkCredits } from "@/lib/credits";
 import { getTcgdexImageById } from "@/lib/tcgdex";
 import { getCardById } from "@/lib/pokemontcg";
 import { findCard, priceTrackerEnabled } from "@/lib/priceTracker";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
@@ -307,9 +308,6 @@ export async function POST(req: Request, { params }: Params) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("find-image error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Image search failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Image search failed");
   }
 }

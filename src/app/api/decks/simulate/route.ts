@@ -4,6 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { analyzeDeck, isDrawTrainer, type DeckMathEntry } from "@/lib/deckMath";
 import type { CardBattleData } from "@/lib/pokemontcg";
 import type { DeckCardEntry } from "@/lib/types";
+import { errorJson } from "@/lib/apiError";
 
 /** POST: deal thousands of simulated opening hands from a deck list and
  *  report how it actually starts. Pure code — free, instant, no AI.
@@ -107,9 +108,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("simulate error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Simulation failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Simulation failed");
   }
 }

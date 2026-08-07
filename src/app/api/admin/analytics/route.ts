@@ -5,6 +5,7 @@ import { estimateCostUsd } from "@/lib/usage";
 import { itemPrice } from "@/lib/types";
 import { lastPriceRefresh } from "@/lib/priceRefresh";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { errorJson } from "@/lib/apiError";
 
 export interface ScanStats {
   scans: number;
@@ -250,9 +251,6 @@ export async function GET() {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("analytics error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }

@@ -3,6 +3,7 @@ import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { mergePrices } from "@/lib/cardWrite";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 300;
 
@@ -341,9 +342,6 @@ export async function POST(req: Request) {
     });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ error: err.message }, { status: err.status });
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Dedupe failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Dedupe failed");
   }
 }

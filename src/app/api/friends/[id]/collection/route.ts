@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import type { CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { errorJson } from "@/lib/apiError";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -45,9 +46,6 @@ export async function GET(_req: Request, { params }: Params) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("friend collection error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }

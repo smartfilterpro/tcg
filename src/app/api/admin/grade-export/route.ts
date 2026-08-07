@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { writeZip, type ZipEntry } from "@/lib/zip";
 import { signCardPhotos } from "@/lib/photoAccess";
 import type { GradeReport } from "@/lib/grading";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
@@ -316,9 +317,6 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("grade export error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Export failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Export failed");
   }
 }

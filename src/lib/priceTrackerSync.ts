@@ -38,6 +38,7 @@ import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
 import { gapFill, CARD_COMPANIONS, keepsItsImage, mergePrices } from "@/lib/cardWrite";
 import { setsAgree } from "@/lib/setName";
 import type { CardSummaryRow } from "@/lib/types";
+import { PublicError } from "@/lib/apiError";
 
 export const SYNC_STATE_KEY = "price_tracker_sync";
 
@@ -652,7 +653,7 @@ export async function runPriceSync(
       );
     }
     if (ours.length === 0) {
-      throw new Error("Our cards table is empty — run the card catalogue import first.");
+      throw new PublicError("Our cards table is empty — run the card catalogue import first.");
     }
     const { byKey, ambiguous } = buildIndex(ours);
     state.indexedCards = byKey.size;

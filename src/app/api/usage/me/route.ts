@@ -4,6 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { estimateCostUsd } from "@/lib/usage";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { creditSummary } from "@/lib/credits";
+import { errorJson } from "@/lib/apiError";
 
 /** GET: the current user's TrainerAI usage for this month, as a share of
  *  their allowance — deliberately no dollar amounts (that's admin-only).
@@ -109,9 +110,6 @@ export async function GET() {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }
