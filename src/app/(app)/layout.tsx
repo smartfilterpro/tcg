@@ -155,6 +155,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           {APP_NAME} ·{" "}
           <Link href="/terms" className="hover:underline">
             Terms of Service
+          </Link>{" "}
+          ·{" "}
+          <Link href="/privacy" className="hover:underline">
+            Privacy Policy
           </Link>
         </div>
         <p className="mx-auto mt-1.5 max-w-lg leading-snug">{FAN_DISCLAIMER}</p>

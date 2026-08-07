@@ -78,6 +78,7 @@ const FOOTER_COLS: Array<{ title: string; links: Array<{ label: string; href: st
     title: "Legal",
     links: [
       { label: "Terms of Service", href: "/terms" },
+      { label: "Privacy Policy", href: "/privacy" },
       { label: "Fan-content notice", href: "/terms" },
     ],
   },
