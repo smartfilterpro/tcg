@@ -28,17 +28,27 @@ import {
 type SortKey = "newest" | "name" | "price" | "set";
 
 export default function CollectionPage({
-  plan = "free",
   isAdmin = false,
 }: {
+  /** Accepted and unread: the page no longer varies by plan now that export
+   *  is for everyone. Kept in the signature so the server component that
+   *  renders this doesn't have to change, and so re-gating something later
+   *  is a one-line decision rather than a plumbing job. */
   plan?: string;
   isAdmin?: boolean;
 }) {
-  // The export itself is built in the browser from data the page already
-  // holds, so this gate is a product decision made visible — not a security
-  // boundary. Anyone who wants the same rows can still read them from
-  // /api/collection. Enforce it server-side only if that ever matters.
-  const canExport = isAdmin || plan !== "free";
+  // EXPORT IS FOR EVERYONE.
+  //
+  // It was Pro-only, which was never a security boundary — the file is built
+  // in the browser from data the page already holds, and anyone who wanted
+  // the same rows could read them from /api/collection. So it defended no
+  // revenue; it just made the door out narrower.
+  //
+  // And it made the privacy policy untrue. That page tells people the way to
+  // get a copy of their data is to export the collection from this page,
+  // which was a promise a free account couldn't keep — at exactly the moment
+  // somebody cancelling most wants to take their cards with them. "You can
+  // leave with your data" is worth more as a promise than as an upsell.
   const [items, setItems] = useState<CollectionItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -761,22 +771,11 @@ export default function CollectionPage({
           {grouped.length} card{grouped.length === 1 ? "" : "s"} shown
           {filtered.length !== grouped.length && ` · ${filtered.length} finishes`}
         </span>
-        {filtered.length > 0 &&
-          (canExport ? (
-            <button className="text-brand-accent hover:underline" onClick={exportCsv}>
-              ⬇ Export CSV
-            </button>
-          ) : (
-            // A pitch, not a wall: it says what it is and where to get it,
-            // and nothing else on the page changes.
-            <Link
-              href="/pricing"
-              className="text-brand-ink4 hover:text-brand-ink hover:underline"
-              title="CSV export is part of Pro — everything else on this page stays free"
-            >
-              🔒 Export CSV · Pro
-            </Link>
-          ))}
+        {filtered.length > 0 && (
+          <button className="text-brand-accent hover:underline" onClick={exportCsv}>
+            ⬇ Export CSV
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
