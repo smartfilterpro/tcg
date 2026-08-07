@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, requireModerator, AuthError } from "@/lib/auth";
+import { errorJson } from "@/lib/apiError";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -123,10 +124,7 @@ export async function PATCH(req: Request, { params }: Params) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }
 
@@ -146,9 +144,6 @@ export async function DELETE(_req: Request, { params }: Params) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }

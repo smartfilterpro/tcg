@@ -14,6 +14,8 @@ import { setsAgree } from "@/lib/setName";
 import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
 import { loadFinishOverrides } from "@/lib/finishFeedback";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { errorJson, PublicError, safeMessage } from "@/lib/apiError";
+import { readJson, SCAN_BODY_LIMIT } from "@/lib/requestBody";
 
 export const maxDuration = 120; // vision + N lookups can take a while
 
@@ -356,7 +358,7 @@ async function runScan(opts: {
     // Thrown, not returned: nothing is listening to this call any more, so
     // the failure has to land on the job where the client will find it.
     if (response.stop_reason === "refusal") {
-      throw new Error("The image could not be processed. Try a different photo.");
+      throw new PublicError("The image could not be processed. Try a different photo.");
     }
 
     const textBlock = response.content.find((b) => b.type === "text");
@@ -605,10 +607,10 @@ async function runScan(opts: {
 export async function POST(req: Request) {
   try {
     const { user, profile } = await requireUser();
-    const { image, mediaType } = (await req.json()) as {
+    const { image, mediaType } = await readJson<{
       image?: string;
       mediaType?: string;
-    };
+    }>(req, SCAN_BODY_LIMIT);
     if (!image) {
       return NextResponse.json({ error: "Missing image" }, { status: 400 });
     }
@@ -669,7 +671,7 @@ export async function POST(req: Request) {
           .from("scan_jobs")
           .update({
             status: "error",
-            error: err instanceof Error ? err.message : "Scan failed",
+            error: safeMessage(err, "Scan failed"),
             updated_at: new Date().toISOString(),
           })
           .eq("id", jobId);
@@ -681,10 +683,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("scan error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Scan failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Scan failed");
   }
 }
 

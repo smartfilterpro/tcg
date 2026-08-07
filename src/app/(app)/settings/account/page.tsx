@@ -27,6 +27,12 @@ interface Account {
   ownsFamilyWith: number;
 }
 
+interface ExportToken {
+  token: string;
+  createdAt: string | null;
+  lastUsedAt: string | null;
+}
+
 const PANEL = "rounded-[18px] border border-brand-line bg-white p-[22px]";
 const TITLE = "font-display text-[17px] font-bold";
 const FIELD =
@@ -86,6 +92,10 @@ export default function AccountPage() {
   const [pwBusy, setPwBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [exportToken, setExportToken] = useState<ExportToken | null>(null);
+  const [tokenShown, setTokenShown] = useState(false);
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -102,6 +112,32 @@ export default function AccountPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Fetched separately and never blocking: the export link is a convenience,
+  // and a failure here should not stop somebody changing their password.
+  useEffect(() => {
+    fetch("/api/export/token")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j?.token && setExportToken(j))
+      .catch(() => {});
+  }, []);
+
+  async function rotateToken() {
+    if (!confirm("Replace the export link? The old one stops working immediately.")) return;
+    setTokenBusy(true);
+    try {
+      const res = await fetch("/api/export/token", { method: "POST" });
+      const json = await res.json();
+      if (res.ok && json.token) {
+        setExportToken(json);
+        setTokenShown(true);
+        setNotice("New export link created — the old one no longer works.");
+      }
+    } catch {
+      setError("Couldn't create a new link.");
+    }
+    setTokenBusy(false);
+  }
 
   async function send(input: string, init: RequestInit, ok: string): Promise<boolean> {
     setBusy(true);
@@ -365,6 +401,60 @@ export default function AccountPage() {
           </Link>
         )}
       </div>
+
+      {/* ---- export link ---- */}
+      {exportToken && (
+        <div className={PANEL}>
+          <div className={`${TITLE} mb-1`}>Export link</div>
+          <p className="mb-2.5 text-[13px] leading-[1.55] text-brand-ink2">
+            A private web address that returns your whole collection as data — for the{" "}
+            {AI_NAME} deck builder, a spreadsheet, or anything else that can read a link.
+            Anyone holding it can read your collection, so treat it like a password.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-[11px] bg-brand-sunken px-3 py-2 font-mono text-[12px] text-brand-ink2">
+              {tokenShown
+                ? `${typeof window === "undefined" ? "" : window.location.origin}/api/export?token=${exportToken.token}`
+                : "•".repeat(48)}
+            </code>
+            <button className={PILL_QUIET} onClick={() => setTokenShown((v) => !v)}>
+              {tokenShown ? "Hide" : "Show"}
+            </button>
+            <button
+              className={PILL}
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(
+                    `${window.location.origin}/api/export?token=${exportToken.token}`
+                  );
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                } catch {
+                  setTokenShown(true);
+                }
+              }}
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <div className="mt-2.5 flex flex-wrap items-center gap-3 text-[12.5px] text-brand-ink4">
+            <span>
+              {/* The whole reason this is on screen: a date you don't recognise
+                  is the only signal a member will ever get that the link got out. */}
+              {exportToken.lastUsedAt
+                ? `Last used ${new Date(exportToken.lastUsedAt).toLocaleString()}`
+                : "Never used"}
+            </span>
+            <button
+              className="ml-auto text-brand-accent hover:underline disabled:opacity-50"
+              disabled={tokenBusy}
+              onClick={rotateToken}
+            >
+              {tokenBusy ? "Replacing…" : "Replace link"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ---- delete ---- */}
       <div className="rounded-[18px] border border-brand-line bg-brand-sunken p-[22px]">

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { boardEnabled, BOARD_OFF_ERROR, tradingOff, TRADING_OFF_ERROR } from "@/lib/tradeBoard";
+import { errorJson } from "@/lib/apiError";
 
 /** Lightweight card reference attached to a post, for showing pictures. */
 export interface PostCardRef {
@@ -209,8 +210,5 @@ function errorResponse(err: unknown) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   console.error("market error", err);
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

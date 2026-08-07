@@ -1,5 +1,30 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  clearLoginFailures,
+  clientIp,
+  loginRetryAfter,
+  noteLoginFailure,
+} from "@/lib/loginThrottle";
+
+/** What to say about a refused sign-in. Security audit finding L4.
+ *
+ *  Only the two states a person can act on get their own sentence. Every
+ *  other message the auth provider produces — its own rate-limit prose, its
+ *  internal states, whatever a future version starts returning — becomes the
+ *  neutral one, because a sign-in failure is the last place to be
+ *  improvising text at somebody who might not own the account. */
+function signInMessage(providerMessage: string): string {
+  const m = providerMessage.toLowerCase();
+  if (m.includes("email not confirmed")) {
+    return "Check your email and confirm your address before signing in.";
+  }
+  if (m.includes("rate limit") || m.includes("too many")) {
+    return "Too many attempts just now. Wait a minute and try again.";
+  }
+  return "Wrong email or password.";
+}
 
 /** Email + password sign-in. Account creation lives at /signup. */
 export async function POST(req: Request) {
@@ -38,18 +63,37 @@ export async function POST(req: Request) {
     );
   }
 
+  // Too many recent failures against this email or from this address?
+  // Checked before the password is spent, so a locked key costs one cheap
+  // read rather than a round trip to the auth provider.
+  const admin = createAdminClient();
+  const keys = { email: normalized, ip: clientIp(req) };
+  const retryAfter = await loginRetryAfter(admin, keys);
+  if (retryAfter > 0) {
+    const minutes = Math.max(1, Math.ceil(retryAfter / 60));
+    return NextResponse.json(
+      {
+        error: `Too many sign-in attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}, or reset your password.`,
+      },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } }
+    );
+  }
+
   // Sign in (for both modes) — sets the session cookies on the response.
   const { error: signInErr } = await supabase.auth.signInWithPassword({
     email: normalized,
     password,
   });
   if (signInErr) {
-    const msg =
-      signInErr.message === "Invalid login credentials"
-        ? "Wrong email or password."
-        : signInErr.message;
-    return NextResponse.json({ error: msg }, { status: 401 });
+    const locked = await noteLoginFailure(admin, keys);
+    if (locked) {
+      // The one moment worth a line in the log: either somebody is being
+      // attacked or somebody is stuck, and neither is visible otherwise.
+      console.warn(`login locked out: ${normalized} from ${keys.ip ?? "unknown address"}`);
+    }
+    return NextResponse.json({ error: signInMessage(signInErr.message) }, { status: 401 });
   }
+  await clearLoginFailures(admin, keys);
 
   // Suspended members can't sign in (column exists after migration 011).
   const { data: prof } = await supabase

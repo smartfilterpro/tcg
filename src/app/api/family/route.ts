@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { cycleStart, MONTHLY_GRANT } from "@/lib/credits";
+import { errorJson } from "@/lib/apiError";
 
 // Family management. All writes go through here with the service role —
 // the tables are read-only to clients by design, so a kid can't PATCH their
@@ -101,7 +102,7 @@ export async function GET() {
     });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ error: err.message }, { status: err.status });
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Request failed" }, { status: 500 });
+    return errorJson(err, "Request failed");
   }
 }
 
@@ -238,7 +239,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unknown action." }, { status: 400 });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ error: err.message }, { status: err.status });
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Request failed" }, { status: 500 });
+    return errorJson(err, "Request failed");
   }
 }
 
@@ -292,7 +293,7 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ error: err.message }, { status: err.status });
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Request failed" }, { status: 500 });
+    return errorJson(err, "Request failed");
   }
 }
 
@@ -323,6 +324,6 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ error: err.message }, { status: err.status });
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Request failed" }, { status: 500 });
+    return errorJson(err, "Request failed");
   }
 }

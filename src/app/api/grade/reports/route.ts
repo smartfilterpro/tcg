@@ -4,6 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import type { GradeReport } from "@/lib/grading";
 import type { CenteringMeasurement } from "@/lib/cardGeometry";
 import type { GradeValue } from "@/lib/gradeValue";
+import { errorJson } from "@/lib/apiError";
 
 export interface SavedGrade {
   id: string;
@@ -175,10 +176,7 @@ export async function PATCH(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Couldn't save the outcome" },
-      { status: 500 }
-    );
+    return errorJson(err, "Couldn't save the outcome");
   }
 }
 
@@ -205,8 +203,5 @@ function fail(err: unknown) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   console.error("grade reports error", err);
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

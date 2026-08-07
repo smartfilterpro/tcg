@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { parseCsv } from "@/lib/priceDump";
 import { numberKey } from "@/lib/pokemontcg";
 import { normalizeForSearch } from "@/lib/text";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
@@ -252,9 +253,6 @@ export async function POST(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Import failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Import failed");
   }
 }

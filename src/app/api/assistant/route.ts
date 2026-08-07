@@ -15,6 +15,7 @@ import { buildContext } from "@/lib/assistantContext";
 import { ASSISTANT_SYSTEM, OFF_TOPIC_REPLY, isClearlyOffTopic } from "@/lib/assistantScope";
 import { completeWithRoom, answerText, noAnswerReply, addFinalRoundNote } from "@/lib/aiAnswer";
 import { setsAgree } from "@/lib/setName";
+import { errorJson, safeMessage } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
@@ -605,7 +606,7 @@ export async function POST(req: Request) {
           .from("assistant_jobs")
           .update({
             status: "error",
-            error: err instanceof Error ? err.message : "The chat failed",
+            error: safeMessage(err, "The chat failed"),
             updated_at: new Date().toISOString(),
           })
           .eq("id", jobId);
@@ -638,8 +639,5 @@ function errorResponse(err: unknown) {
     return NextResponse.json({ error: MIGRATION_MSG }, { status: 400 });
   }
   console.error("assistant error", err);
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "The chat failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "The chat failed");
 }

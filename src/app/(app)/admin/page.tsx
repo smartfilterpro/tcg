@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { resilientFetch } from "@/lib/clientLoop";
 import type { Profile } from "@/lib/types";
 import { uploadCardPhoto } from "@/lib/photos";
-import { artSrc } from "@/lib/art";
+import { artSrc, photoSrc } from "@/lib/art";
 
 interface ScanStats {
   scans: number;
@@ -1245,7 +1245,7 @@ export default function AdminPage() {
                             <div className="overflow-hidden rounded aspect-[63/88] bg-slate-100">
                               {/* eslint-disable-next-line @next/next/no-img-element */}
                               <img
-                                src={cand.url}
+                                src={photoSrc(cand.url)!}
                                 alt="candidate"
                                 className="h-full w-full object-cover"
                               />

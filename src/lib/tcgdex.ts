@@ -38,9 +38,21 @@ interface TcgdexCard extends TcgdexBrief {
   pricing?: Record<string, unknown>;
 }
 
+/** How long to wait on TCGdex before giving up on it.
+ *
+ *  It is a free service consulted as a fallback, never the thing the answer
+ *  depends on — so ten seconds is generous. Without a limit a single hung
+ *  connection held a scan open for as long as the platform allowed, and a
+ *  card lookup that returns nothing after ten seconds is worth exactly as
+ *  much as one that returns nothing after five minutes. */
+const TCGDEX_TIMEOUT_MS = 10_000;
+
 async function get<T>(url: string): Promise<T | null> {
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(url, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(TCGDEX_TIMEOUT_MS),
+    });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { BULK_BUCKET, MAX_JOB_CARDS, identifyPhoto } from "@/lib/bulkScan";
+import { errorJson } from "@/lib/apiError";
+import { secretMatches } from "@/lib/secretCompare";
 
 export const maxDuration = 120;
 
@@ -41,7 +43,7 @@ export async function POST(req: Request) {
       .select("id, status, device_key, created_by")
       .eq("id", jobId)
       .maybeSingle();
-    if (!job || job.device_key !== key) {
+    if (!job || !secretMatches(key, job.device_key as string | null)) {
       // One answer for wrong job and wrong key: no probing which is which.
       return NextResponse.json({ error: "Unknown job or wrong device key." }, { status: 403 });
     }
@@ -143,9 +145,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, pass, seq: targetSeq, ordinal });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Photo intake failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Photo intake failed");
   }
 }

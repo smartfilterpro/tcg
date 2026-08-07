@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { recentLogs, logsAsText } from "@/lib/logBuffer";
+import { errorJson } from "@/lib/apiError";
 
 /** GET: the recent server log this process has kept.
  *
@@ -30,9 +31,6 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Couldn't read the log" },
-      { status: 500 }
-    );
+    return errorJson(err, "Couldn't read the log");
   }
 }

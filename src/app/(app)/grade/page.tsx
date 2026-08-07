@@ -17,6 +17,7 @@ import {
   type SidePreview,
 } from "@/lib/cardImage";
 import { uploadCardPhoto } from "@/lib/photos";
+import { photoSrc } from "@/lib/art";
 import CardCropper from "@/components/CardCropper";
 import CenteringDiagram from "@/components/CenteringDiagram";
 import GradeReportView, { gradeColor } from "@/components/GradeReportView";
@@ -378,8 +379,8 @@ function SavedGradeModal({
           report={grade.report}
           value={grade.value}
           measurement={grade.measurement}
-          cardImage={grade.frontUrl}
-          backImage={grade.backUrl}
+          cardImage={photoSrc(grade.frontUrl)}
+          backImage={photoSrc(grade.backUrl)}
           meta={`saved ${new Date(grade.createdAt).toLocaleDateString()}`}
           headerActions={
             <button className={OUTLINE_PILL} onClick={onClose}>
@@ -832,7 +833,7 @@ export default function GradePage() {
                   <span className="block aspect-[63/88] w-[34px] shrink-0 overflow-hidden rounded bg-brand-sunken">
                     {g.frontUrl && (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={g.frontUrl} alt="" className="h-full w-full object-cover" />
+                      <img src={photoSrc(g.frontUrl)!} alt="" className="h-full w-full object-cover" />
                     )}
                   </span>
                   <span className="min-w-0 flex-1">

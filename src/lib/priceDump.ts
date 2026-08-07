@@ -25,6 +25,7 @@
 import { gunzipSync } from "node:zlib";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { mergePrices } from "@/lib/cardWrite";
+import { PublicError } from "@/lib/apiError";
 
 export type DumpType = "cards" | "printings" | "sealed" | "ebay" | "population";
 
@@ -150,10 +151,10 @@ export async function downloadDump(type: DumpType): Promise<{
     );
   }
   if (res.status === 403) {
-    throw new Error("403 — the bulk export is a Business-plan endpoint.");
+    throw new PublicError("403 — the bulk export is a Business-plan endpoint.");
   }
   if (res.status === 429) {
-    throw new Error("429 — both of today's two downloads are used.");
+    throw new PublicError("429 — both of today's two downloads are used.");
   }
   if (!res.ok) {
     throw new Error(`export ${res.status}: ${(await res.text()).slice(0, 200)}`);

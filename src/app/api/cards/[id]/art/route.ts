@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { mirrorCard, type MirrorRow } from "@/lib/artMirror";
+import { signCardPhoto } from "@/lib/photoAccess";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 60;
 
@@ -41,8 +43,12 @@ export async function GET(req: Request, { params }: Params) {
     const url = pick(card, size);
     if (!card || !url) return NextResponse.json({ error: "No image" }, { status: 404 });
     if (url.startsWith(ours)) {
-      return NextResponse.redirect(url, {
-        headers: { "Cache-Control": "private, max-age=3600" },
+      // A card whose picture is a member's photograph lives in the private
+      // bucket, so the stored address is not a link. artSrc sends those to
+      // /api/photo directly; this is for anything that still comes here.
+      const signed = (await signCardPhoto(admin, url)) ?? url;
+      return NextResponse.redirect(signed, {
+        headers: { "Cache-Control": "private, max-age=1800" },
       });
     }
 
@@ -70,9 +76,6 @@ export async function GET(req: Request, { params }: Params) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Art failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Art failed");
   }
 }

@@ -2,7 +2,9 @@ import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 import { writeZip, type ZipEntry } from "@/lib/zip";
+import { signCardPhotos } from "@/lib/photoAccess";
 import type { GradeReport } from "@/lib/grading";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
@@ -170,6 +172,22 @@ export async function GET(req: Request) {
     const examples = ((data ?? []) as unknown as Row[]).map(toExample);
     const stamp = new Date().toISOString().slice(0, 10);
 
+    // The photos are in a private bucket (054), so the stored addresses no
+    // longer resolve — which matters for the zip, which downloads them, and
+    // for the CSV, where the link is the only way back to the picture. A
+    // week is long enough to work through an export and short enough that a
+    // mislaid spreadsheet is not a standing key to members' photographs.
+    const EXPORT_TTL_SECONDS = 7 * 24 * 3600;
+    const links = await signCardPhotos(
+      admin,
+      examples.flatMap((e) => [e.images.front, e.images.back]),
+      EXPORT_TTL_SECONDS
+    );
+    examples.forEach((e, i) => {
+      e.images.front = links[i * 2];
+      e.images.back = links[i * 2 + 1];
+    });
+
     if (format === "csv") {
       const header = [
         "id", "graded_at", "submitter", "card_name", "card_id",
@@ -299,9 +317,6 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("grade export error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Export failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Export failed");
   }
 }

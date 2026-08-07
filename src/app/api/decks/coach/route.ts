@@ -12,6 +12,7 @@ import { completeWithRoom, answerText, noAnswerReply, addFinalRoundNote } from "
 import { DECK_EDIT_TOOL, runDeckEditProposal } from "@/lib/deckEditTool";
 import type { DeckEditProposal } from "@/lib/deckEdit";
 import type Anthropic from "@anthropic-ai/sdk";
+import { errorJson, safeMessage } from "@/lib/apiError";
 
 // Raised from 120 when the tool loop landed. A question that ends in a
 // proposed edit is no longer one model call — it is the proposal, then the
@@ -383,7 +384,7 @@ export async function POST(req: Request) {
         console.error("coach job failed", err);
         return finish({
           status: "error",
-          error: err instanceof Error ? err.message : "The coach failed",
+          error: safeMessage(err, "The coach failed"),
         });
       });
 
@@ -398,8 +399,5 @@ function errorResponse(err: unknown) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   console.error("coach error", err);
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Coach failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Coach failed");
 }

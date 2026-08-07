@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { APP_NAME } from "@/lib/branding";
 import { TRADING_ENABLED } from "@/lib/features";
-import { artSrc } from "@/lib/art";
+import { artSrc, photoSrc } from "@/lib/art";
 import { avatarColor, initialsFor } from "@/lib/avatar";
 import { matchesSearch, shortAgo } from "@/lib/text";
 import {
@@ -791,7 +791,7 @@ function AttachFromCollection({
                           {it.card.image_small && (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
-                              src={it.card.image_small}
+                              src={photoSrc(it.card.image_small)!}
                               alt=""
                               className="h-full w-full object-cover"
                             />
@@ -925,7 +925,7 @@ function AttachCards({
                     <div className="h-9 w-6 shrink-0 overflow-hidden rounded bg-brand-sunken">
                       {c.imageSmall && (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={c.imageSmall} alt="" className="h-full w-full object-cover" />
+                        <img src={photoSrc(c.imageSmall)!} alt="" className="h-full w-full object-cover" />
                       )}
                     </div>
                     <div className="min-w-0">

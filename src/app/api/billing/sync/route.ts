@@ -3,6 +3,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ensureCustomer, stripeEnabled, stripeFetch, StripeError } from "@/lib/stripe";
 import { expirePlanCredits } from "@/lib/credits";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 30;
 
@@ -124,9 +125,6 @@ export async function POST() {
       return NextResponse.json({ error: err.message }, { status: 502 });
     }
     console.error("billing sync error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Couldn't sync with Stripe" },
-      { status: 500 }
-    );
+    return errorJson(err, "Couldn't sync with Stripe");
   }
 }

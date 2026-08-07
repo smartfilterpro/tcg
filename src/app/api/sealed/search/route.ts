@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { sealedKindLabel, type SealedSuggestion } from "@/lib/sealed";
 import { searchTrackerSealed } from "@/lib/sealedTracker";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 30;
 
@@ -209,9 +210,6 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Search failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Search failed");
   }
 }

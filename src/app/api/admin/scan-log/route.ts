@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { errorJson } from "@/lib/apiError";
 
 // Recent scans, with where their time went.
 //
@@ -78,9 +79,6 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Failed");
   }
 }

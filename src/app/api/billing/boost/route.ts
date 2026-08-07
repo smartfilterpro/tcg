@@ -3,6 +3,7 @@ import { requestOrigin } from "@/lib/requestOrigin";
 import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { BOOST_PACKS, ensureCustomer, stripeEnabled, stripeFetch, StripeError } from "@/lib/stripe";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 30;
 
@@ -88,9 +89,6 @@ export async function POST(req: Request) {
     if (err instanceof StripeError) {
       return NextResponse.json({ error: err.message }, { status: 502 });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Boost checkout failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Boost checkout failed");
   }
 }

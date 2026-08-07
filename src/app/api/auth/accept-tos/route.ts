@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getUserAndProfile, AuthError } from "@/lib/auth";
+import { errorJson } from "@/lib/apiError";
 
 /** POST: record that the signed-in user accepted the Terms of Service.
  *  Uses getUserAndProfile directly — requireUser rejects users who haven't
@@ -24,9 +25,6 @@ export async function POST() {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }

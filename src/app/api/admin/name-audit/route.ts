@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireModerator, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { errorJson } from "@/lib/apiError";
 
 /** GET ?refused=1 — what people have tried to call themselves and their
  *  decks. Refusals are the evidence of intent; acceptances are what the
@@ -69,9 +70,6 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }

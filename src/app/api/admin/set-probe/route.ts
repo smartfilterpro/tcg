@@ -5,6 +5,7 @@ import { setNameClause } from "@/lib/pokemontcg";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { priceTrackerEnabled, effectiveRemaining } from "@/lib/priceTracker";
 import { readSyncState, trackerSetCards } from "@/lib/priceTrackerSync";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
@@ -307,9 +308,6 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Probe failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Probe failed");
   }
 }

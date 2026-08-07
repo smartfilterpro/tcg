@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { patternPrintingFor } from "@/lib/cardPrinting";
 import { defaultVariantFor, variantLabel, PATTERN_VARIANTS } from "@/lib/types";
+import { errorJson } from "@/lib/apiError";
 
 // Moving ball-pattern copies onto the printing's own card.
 //
@@ -127,9 +128,6 @@ export async function POST(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Failed");
   }
 }

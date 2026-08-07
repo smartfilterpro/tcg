@@ -8,6 +8,7 @@ import { itemPrice, variantLabel, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { tradingOff, TRADING_OFF_ERROR } from "@/lib/tradeBoard";
 import { completeWithRoom, answerText, noAnswerReply } from "@/lib/aiAnswer";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
@@ -204,9 +205,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("trade chat error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Trade chat failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Trade chat failed");
   }
 }

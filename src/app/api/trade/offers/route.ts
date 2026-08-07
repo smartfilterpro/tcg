@@ -5,6 +5,7 @@ import { numberKey } from "@/lib/pokemontcg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { tradingOff, TRADING_OFF_ERROR } from "@/lib/tradeBoard";
+import { errorJson } from "@/lib/apiError";
 
 export interface OfferLine {
   label: string;
@@ -218,8 +219,5 @@ function errorResponse(err: unknown) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   console.error("trade offers error", err);
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

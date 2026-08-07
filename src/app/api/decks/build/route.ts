@@ -13,6 +13,7 @@ import { analyzeDeck, analysisSummary, type DeckMathEntry } from "@/lib/deckMath
 import { normalizeForSearch } from "@/lib/text";
 import { fetchAllRows } from "@/lib/fetchAll";
 import type { CardSummary, CardSummaryRow, DeckCardEntry } from "@/lib/types";
+import { errorJson, safeMessage } from "@/lib/apiError";
 
 export const maxDuration = 300;
 
@@ -917,7 +918,7 @@ export async function POST(req: Request) {
         jobs.set(jobId, {
           userId: user.id,
           status: "error",
-          error: err instanceof Error ? err.message : "Deck build failed",
+          error: safeMessage(err, "Deck build failed"),
           created: Date.now(),
         });
       }
@@ -929,10 +930,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("deck build error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Deck build failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Deck build failed");
   }
 }
 

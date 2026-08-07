@@ -6,6 +6,7 @@ import { priceTrackerEnabled, priceTrackerCard } from "@/lib/priceTracker";
 import { findTcgdexImage } from "@/lib/tcgdex";
 import { attachTcgPlayerId } from "@/lib/tcgPlayerId";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
@@ -134,9 +135,6 @@ export async function POST() {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Refresh failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Refresh failed");
   }
 }

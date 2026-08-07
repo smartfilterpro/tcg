@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { isFreeTier } from "@/lib/credits";
 import { nameAllowed, recordNameAttempt } from "@/lib/moderation";
+import { errorJson } from "@/lib/apiError";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -49,10 +50,7 @@ export async function GET(_req: Request, { params }: Params) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }
 
@@ -238,10 +236,7 @@ export async function PATCH(req: Request, { params }: Params) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }
 
@@ -257,9 +252,6 @@ export async function DELETE(_req: Request, { params }: Params) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }

@@ -3,10 +3,20 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
 
 /** Token-authenticated collection export for Claude Cowork / external tools.
- *  GET /api/export?token=... — no session required (the token IS the auth). */
+ *
+ *  GET /api/export — no session required (the token IS the auth), supplied
+ *  either as `Authorization: Bearer <token>` or as `?token=…`.
+ *
+ *  The header is preferred and the query string is kept because it has to
+ *  be: this link's whole purpose is to be pasted into a tool that fetches a
+ *  URL, and such a tool has nowhere to put a header. A credential in a query
+ *  string is written into logs and, historically, into Referer — the latter
+ *  now closed by the Referrer-Policy header, the former the reason anything
+ *  that can send a header should. Security audit finding M4. */
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const token = url.searchParams.get("token");
+  const bearer = req.headers.get("authorization")?.match(/^Bearer\s+(\S+)$/i)?.[1];
+  const token = bearer ?? url.searchParams.get("token");
   if (!token || token.length < 20) {
     return NextResponse.json({ error: "Missing or invalid token" }, { status: 401 });
   }
@@ -21,8 +31,21 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Invalid token" }, { status: 401 });
   }
 
+  // Leave a trace. Not for us — for the member, whose Settings page shows
+  // this and is the only way they would ever notice a link being used from
+  // somewhere they have never been.
+  void admin
+    .from("api_tokens")
+    .update({ last_used_at: new Date().toISOString() })
+    .eq("token", token)
+    .then(() => {});
+
   const [{ data: profile }, { data: items }, { data: playProfile }] = await Promise.all([
-    admin.from("profiles").select("display_name, email").eq("id", tokenRow.user_id).single(),
+    // Display name only. The email used to be the fallback here, which put
+    // an address into a payload that travels to whatever tool holds the
+    // link — and the deck builder on the other end needs a name to greet
+    // somebody by, not a way to reach them.
+    admin.from("profiles").select("display_name").eq("id", tokenRow.user_id).single(),
     fetchAllRows(() =>
       admin
         .from("collection_items")
@@ -62,12 +85,22 @@ export async function GET(req: Request) {
     };
   });
 
-  return NextResponse.json({
-    owner: profile?.display_name || profile?.email || "unknown",
-    exported_at: new Date().toISOString(),
-    play_style: playProfile?.style_notes ?? null,
-    total_cards: collection.reduce((s, c) => s + (c.quantity as number), 0),
-    unique_cards: collection.length,
-    collection,
-  });
+  return NextResponse.json(
+    {
+      owner: profile?.display_name || "unknown",
+      exported_at: new Date().toISOString(),
+      play_style: playProfile?.style_notes ?? null,
+      total_cards: collection.reduce((s, c) => s + (c.quantity as number), 0),
+      unique_cards: collection.length,
+      collection,
+    },
+    {
+      headers: {
+        // Somebody's whole collection, reachable with a URL: not a thing to
+        // leave in a shared cache or a search index.
+        "Cache-Control": "no-store, private",
+        "X-Robots-Tag": "noindex, nofollow",
+      },
+    }
+  );
 }

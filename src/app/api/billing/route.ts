@@ -3,6 +3,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { creditSummary } from "@/lib/credits";
 import { stripeEnabled } from "@/lib/stripe";
+import { errorJson } from "@/lib/apiError";
 
 /** GET: everything the billing settings page shows. The charge history is
  *  assembled from OUR ledger and boost rows, not a Stripe API call — the
@@ -72,9 +73,6 @@ export async function GET() {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Request failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Request failed");
   }
 }

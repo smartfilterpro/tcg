@@ -7,6 +7,7 @@ import {
   priceTrackerEnabled,
   ptFetch,
 } from "@/lib/priceTracker";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 60;
 
@@ -73,9 +74,6 @@ export async function GET(req: Request) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Check failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Check failed");
   }
 }

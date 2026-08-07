@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireModerator, AuthError } from "@/lib/auth";
 import { estimateCostUsd } from "@/lib/usage";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { errorJson } from "@/lib/apiError";
 
 export interface UserUsage {
   calls: number;
@@ -97,8 +98,5 @@ function errorResponse(err: unknown) {
   if (err instanceof AuthError) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
-  return NextResponse.json(
-    { error: err instanceof Error ? err.message : "Request failed" },
-    { status: 500 }
-  );
+  return errorJson(err, "Request failed");
 }

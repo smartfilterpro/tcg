@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { stripeFetch, verifyStripeSignature } from "@/lib/stripe";
 import { expirePlanCredits } from "@/lib/credits";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 60;
 
@@ -243,9 +244,6 @@ export async function POST(req: Request) {
     // A 500 makes Stripe retry — which is exactly right for a transient
     // database failure, and harmless for everything else because every
     // handler is idempotent.
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Webhook handling failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Webhook handling failed");
   }
 }

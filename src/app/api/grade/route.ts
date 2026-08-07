@@ -9,6 +9,8 @@ import { GRADING_SYSTEM, GRADE_SCHEMA, type GradeReport } from "@/lib/grading";
 import { centeringCapBack, type CenteringMeasurement } from "@/lib/cardGeometry";
 import { computeGradeValue, parseRange, type GradedPrices, type GradeValue } from "@/lib/gradeValue";
 import { normalizeForSearch } from "@/lib/text";
+import { errorJson, PublicError, safeMessage } from "@/lib/apiError";
+import { GRADE_BODY_LIMIT, readJson } from "@/lib/requestBody";
 
 export const maxDuration = 180;
 
@@ -225,17 +227,17 @@ async function runGrade(opts: {
     await logAiUsage(supabase, userId, "grade", MODEL, response.usage);
 
     if (response.stop_reason === "refusal") {
-      throw new Error("Those photos couldn't be processed — try different ones.");
+      throw new PublicError("Those photos couldn't be processed — try different ones.");
     }
     const textBlock = response.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") {
-      throw new Error("The grading ran out of room — please try again.");
+      throw new PublicError("The grading ran out of room — please try again.");
     }
     let report: GradeReport;
     try {
       report = JSON.parse(textBlock.text) as GradeReport;
     } catch {
-      throw new Error("The grading came back malformed — please try again.");
+      throw new PublicError("The grading came back malformed — please try again.");
     }
     if (!report.is_card) {
       throw new Error(
@@ -267,7 +269,10 @@ async function runGrade(opts: {
 export async function POST(req: Request) {
   try {
     const { user, profile } = await requireUser();
-    const body = (await req.json()) as { front?: SideInput; back?: SideInput; fee?: number };
+    const body = await readJson<{ front?: SideInput; back?: SideInput; fee?: number }>(
+      req,
+      GRADE_BODY_LIMIT
+    );
     const front = normalizeSide(body.front);
     const back = normalizeSide(body.back);
     if (!front.card?.data || !back.card?.data) {
@@ -315,7 +320,7 @@ export async function POST(req: Request) {
           .from("grade_jobs")
           .update({
             status: "error",
-            error: err instanceof Error ? err.message : "Grading failed",
+            error: safeMessage(err, "Grading failed"),
             updated_at: new Date().toISOString(),
           })
           .eq("id", jobId);
@@ -327,10 +332,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("grade error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Grading failed" },
-      { status: 500 }
-    );
+    return errorJson(err, "Grading failed");
   }
 }
 

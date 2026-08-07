@@ -8,6 +8,7 @@ import {
   ebayFetch,
   probeAccess,
 } from "@/lib/ebay";
+import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 30;
 
@@ -102,9 +103,6 @@ export async function GET() {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     console.error("ebay status error", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Couldn't check eBay" },
-      { status: 500 }
-    );
+    return errorJson(err, "Couldn't check eBay");
   }
 }

@@ -16,6 +16,8 @@
 // export size well below any of those, and a silently-wrong archive would be
 // worse than a refusal — so writeZip throws rather than truncating.
 
+import { PublicError } from "@/lib/apiError";
+
 const MAX_ENTRIES = 65_535;
 const MAX_BYTES = 0xffffffff;
 
@@ -66,7 +68,7 @@ function dosDateTime(d: Date): { time: number; date: number } {
  *  read here so the output is reproducible when a caller wants that). */
 export function writeZip(entries: ZipEntry[], at: Date = new Date()): Uint8Array {
   if (entries.length > MAX_ENTRIES) {
-    throw new Error(`A zip holds at most ${MAX_ENTRIES} files without ZIP64 (${entries.length} given).`);
+    throw new PublicError(`A zip holds at most ${MAX_ENTRIES} files without ZIP64 (${entries.length} given).`);
   }
 
   const encoder = new TextEncoder();
@@ -124,7 +126,7 @@ export function writeZip(entries: ZipEntry[], at: Date = new Date()): Uint8Array
 
     offset += local.length;
     if (offset > MAX_BYTES) {
-      throw new Error("Archive exceeds 4 GiB — export in smaller batches.");
+      throw new PublicError("Archive exceeds 4 GiB — export in smaller batches.");
     }
   }
 
