@@ -107,17 +107,24 @@ export default function PrivacyPage() {
           </p>
         </Section>
 
-        <Section title="3. Photographs, and one thing worth knowing">
+        <Section title="3. Photographs">
           <p>
-            Photographs you upload as a card&apos;s picture are stored in a public storage
-            bucket. The web address is long and effectively unguessable, and nothing in the
-            app lists other people&apos;s photos — but anyone who has the address can open it
-            without signing in. Do not photograph anything you would mind being seen: keep the
-            card in the frame and your surroundings out of it.
+            Every photograph you take — a card&apos;s picture, the front and back you submit
+            for grading, anything the bulk scanner processes — is stored privately. None of it
+            can be opened by web address. Each view is authorised first and then served
+            through a link that stops working within the hour, so a link that leaves the app
+            is worthless by the time anyone follows it.
           </p>
           <p>
-            Photos submitted for grading and photos processed by the bulk scanner are stored
-            privately and served through short-lived signed links.
+            One photograph is shared on purpose: if you photograph a card no card database has
+            a picture of, and that photo becomes the card&apos;s picture, everyone who owns
+            that card sees it. That is what the feature is for. Photos you submit for grading
+            are never shared this way — they are yours and the administrator&apos;s.
+          </p>
+          <p>
+            Until August 2026 the card-picture bucket was readable by anyone holding the web
+            address. This section used to say so. It no longer applies, and the change was
+            applied to photographs already stored, not only to new ones.
           </p>
         </Section>
 

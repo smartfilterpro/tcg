@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { uploadCardPhoto } from "@/lib/photos";
+import { photoSrc } from "@/lib/art";
 import type { CardSummary } from "@/lib/types";
 
 const ENERGY_TYPES = [
@@ -309,7 +310,7 @@ export default function CardPickerModal({
             >
               {card.imageSmall ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={card.imageSmall} alt={card.name} className="w-full rounded" loading="lazy" />
+                <img src={photoSrc(card.imageSmall)!} alt={card.name} className="w-full rounded" loading="lazy" />
               ) : (
                 <div className="flex aspect-[63/88] items-center justify-center rounded bg-slate-100 text-xs text-slate-400">
                   No image

@@ -7,6 +7,7 @@ import { CreditLock } from "@/components/CreditLock";
 import { useCredits } from "@/components/useCredits";
 import { AI_NAME } from "@/lib/branding";
 import { uploadCardPhoto } from "@/lib/photos";
+import { photoSrc } from "@/lib/art";
 import {
   availableVariants,
   defaultVariantFor,
@@ -560,7 +561,7 @@ export default function ScanPage() {
                   <div className="aspect-[63/88] w-20 shrink-0 self-start overflow-hidden rounded">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={row.card?.imageSmall ?? row.photoUrl!}
+                      src={photoSrc(row.card?.imageSmall ?? row.photoUrl)!}
                       alt={row.card?.name ?? "your photo"}
                       className="h-full w-full object-cover"
                     />

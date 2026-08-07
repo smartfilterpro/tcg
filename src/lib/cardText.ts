@@ -25,6 +25,7 @@ import { logAiUsage } from "@/lib/usage";
 import { askForJson } from "@/lib/aiJson";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
+import { signCardPhotos } from "@/lib/photoAccess";
 
 const CARD_READ_SCHEMA = {
   type: "object",
@@ -173,11 +174,17 @@ export async function readCardFromImage(
   altUrl?: string | null
 ): Promise<CardBattleData | null> {
   try {
-    let bytes = await imageBytes(imageUrl, report);
-    if (!bytes && altUrl && altUrl !== imageUrl) bytes = await imageBytes(altUrl, report);
+    // A card whose picture is a member's photograph is in the private
+    // bucket, so the stored URL downloads nothing. Sign it first — and note
+    // that such a card can only ever be read from the bytes, never from the
+    // url form below, which is why the fallback keeps the signed address.
+    const [primary, secondary] = await signCardPhotos(admin, [imageUrl, altUrl]);
+    const first = primary ?? imageUrl;
+    let bytes = await imageBytes(first, report);
+    if (!bytes && secondary && secondary !== first) bytes = await imageBytes(secondary, report);
     const source = bytes
       ? { type: "base64" as const, media_type: bytes.media_type, data: bytes.data }
-      : { type: "url" as const, url: imageUrl };
+      : { type: "url" as const, url: first };
     const client = anthropic();
     const read = await askForJson<{
       readable: boolean;

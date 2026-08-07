@@ -78,7 +78,7 @@ single Railway instance, a `login_attempts` table if you want it durable — and
 
 ---
 
-#### H2 — Member photo bucket is world-readable
+#### H2 — Member photo bucket is world-readable — **FIXED**
 **Files:** `src/lib/photos.ts:32-35`, `src/app/api/cards/[id]/find-image/route.ts:141`
 
 Card photographs are uploaded to the `card-photos` Supabase bucket and served via
@@ -91,12 +91,31 @@ a shared screenshot, a referrer header, a browser sync — exposes an image that
 never intended to be public. The grading and bulk-scan buckets already do this properly
 with signed URLs, so the pattern exists in the codebase.
 
-**Note:** this is now documented in the privacy policy (`/privacy`), which is the honest
-interim position, but documenting a weakness is not fixing it.
+**Worse than first reported.** The initial write-up said grading photos were stored
+privately. They are not: `src/app/(app)/grade/page.tsx:524-527` saves the cropped front
+and back of a graded card into `card-photos` as well. Those are the photographs most
+likely to include a room, a hand or a desk, and they were the ones publicly readable.
+The bulk-scan bucket is genuinely private; grading was never separated from card art.
 
-**Fix:** make the bucket private and serve through `createSignedUrl(path, 3600)` the way
-`src/app/api/admin/bulk/[id]/route.ts:36` already does. Existing rows keep working if the
-public URL is rewritten to a signed one at read time.
+**Fixed** (migration `054_private_card_photos.sql` and the code around it):
+
+- The bucket is now `public = false`, the blanket read policy is dropped, and the
+  replacement policy scopes a direct client read to the member's own folder.
+- Stored URLs are unchanged and now function as identifiers rather than links — which
+  keeps the dozen `includes("/card-photos/")` provenance checks in `cardWrite`,
+  `cardRefresh` and `priceTrackerSync` working exactly as before.
+- `GET /api/photo?u=<stored url>` is the only way in. It authenticates, authorises, and
+  redirects to a link signed for one hour. The rule lives in `src/lib/photoAccess.ts`:
+  your own folder is yours; a photo that became a card's picture in the shared catalogue
+  is visible to any signed-in member, because that is the point of the feature; admins
+  see everything for the image-review queue; everything else is 403 — which is what now
+  covers another member's grading photos.
+- Server-side readers sign first: `cardText.ts` before downloading a card's picture for
+  transcription, and the grading export before fetching photos into its zip or emitting
+  links into a CSV (seven-day expiry there, so a mislaid spreadsheet is not a permanent
+  key).
+- The privacy policy section that disclosed the weakness has been replaced with what is
+  now true, including a note that the old text no longer applies.
 
 ---
 
@@ -267,8 +286,8 @@ input. RLS is enabled on all 22 tables.
 
 ## Fix first
 
-1. **H2** — private bucket + signed URLs for `card-photos`. The pattern already exists in
-   the bulk-scan route; this is the finding with real user-data exposure.
+1. ~~**H2** — private bucket + signed URLs for `card-photos`.~~ **Done** — migration 054
+   and `/api/photo`. See the finding for what shipped.
 2. **H1** — a login attempt counter. Cheap, and removes a silent dependency on a
    provider default.
 3. **M1** — stop returning `err.message` to clients. 104 sites, but it is one shared
@@ -280,8 +299,9 @@ input. RLS is enabled on all 22 tables.
 
 ## Requires manual verification
 
-- Supabase Storage bucket policies were read from migrations and code; confirm in the
-  Supabase dashboard that `card-photos` is public and `grades`/`bulk` are not.
+- Supabase Storage bucket policies were read from migrations and code. After running
+  migration 054, confirm in the Supabase dashboard that `card-photos` shows as private
+  and that `card-art` is still public — card art is meant to be.
 - Supabase Auth's own rate limits (relevant to H1) are provider defaults — check the
   project's Auth settings for the actual thresholds.
 - Railway environment variables were not readable from here; confirm no secret is set as

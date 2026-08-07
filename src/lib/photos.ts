@@ -17,8 +17,14 @@ export async function downscaleToJpeg(source: Blob, maxDim = 1000, quality = 0.8
   );
 }
 
-/** Upload a card photo to the user's folder; returns its public URL, or null
- *  on any failure (photo storage is always best-effort). */
+/** Upload a card photo to the user's folder; returns the URL it is stored
+ *  under, or null on any failure (photo storage is always best-effort).
+ *
+ *  That URL does not resolve. The bucket is private (migration 054) and
+ *  getPublicUrl here is pure string-building, not a promise about access —
+ *  what comes back is the identifier the catalogue and the grade reports
+ *  are written with, and every display of it goes through photoSrc(), which
+ *  points at /api/photo to have it signed for whoever is looking. */
 export async function uploadCardPhoto(source: Blob): Promise<string | null> {
   try {
     const supabase = createClient();
