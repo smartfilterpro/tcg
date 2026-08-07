@@ -54,9 +54,9 @@ All findings below are from manual review.
 
 **Summary: 0 CRITICAL · 2 HIGH · 5 MEDIUM · 4 LOW · 3 INFO**
 
-**Status, 7 August 2026: H1, H2, M1, M2, M4 and M5 are fixed** — see each finding. M3 and
-the four LOW findings are open. Migrations 054, 055 and 056 must be run for the fixes to
-take effect.
+**Status, 7 August 2026: every finding is fixed except L3**, which is left open on
+purpose (see it). Migrations 054, 055 and 056 must be run for the fixes to take effect,
+and Railway's healthcheck path should be pointed at `/api/health`.
 
 ### HIGH
 
@@ -179,7 +179,7 @@ the repo already had one — the audit's phrasing implied a wider gap than exist
 
 ---
 
-#### M3 — No request-size limit on image uploads
+#### M3 — No request-size limit on image uploads — **FIXED**
 **Files:** `src/app/api/scan/route.ts`, `src/app/api/grade/route.ts`, `next.config.mjs`
 
 Scan and grade accept base64 images in a JSON body. Neither checks the string length
@@ -189,9 +189,12 @@ before decoding and forwarding to Anthropic, and no body-size limit is configure
 case it is rejected downstream after the app has already buffered it in memory; worst
 case several concurrent uploads exhaust the instance.
 
-**Fix:** reject early — `if (image.length > 8_000_000) return 413` — before any decode or
-model call. Both endpoints already require a session and spend credits, which limits the
-blast radius to abuse by an existing member.
+**Fixed**, and rather than checking the length after the fact — which still means
+`req.json()` has already buffered whatever arrived — `src/lib/requestBody.ts` refuses
+first. Content-Length is checked because it is free, and then the stream is counted and
+cancelled the moment it exceeds the limit, because Content-Length is a claim rather than a
+fact. 12MB for a scan (one downscaled photo, ~200KB in practice), 30MB for a grade (front,
+back and up to eight corner close-ups). Both come back as a 413 with a sentence.
 
 ---
 
@@ -249,7 +252,7 @@ change, with something rendering to test against.
 
 ### LOW
 
-#### L1 — Timing-unsafe comparison of the bulk-scan device key
+#### L1 — Timing-unsafe comparison of the bulk-scan device key — **FIXED**
 **File:** `src/app/api/bulk/photo/route.ts:44` — `job.device_key !== key`
 
 The cron secret and the Stripe signature both use `timingSafeEqual`; this one uses `!==`.
@@ -257,39 +260,50 @@ Exploiting a string-comparison timing side channel over HTTP is close to theoret
 the route correctly refuses to distinguish a wrong job id from a wrong key. Worth aligning
 for consistency.
 
-**Fix:** reuse the `secretMatches` helper from `src/app/api/cron/refresh-prices/route.ts:22`.
+**Fixed.** `src/lib/secretCompare.ts` now holds the one implementation; the cron route's
+local copy is gone and the device key uses it. The inconsistency was the real finding —
+three places checking a secret should not have three opinions about how.
 
 ---
 
-#### L2 — No healthcheck endpoint
+#### L2 — No healthcheck endpoint — **FIXED**
 No `/health`, `/healthz` or `/api/health` route exists. Railway falls back to probing the
 app root, which renders a full React page and touches the database — a heavier check than
 a healthcheck should be, and one that can't distinguish "app up, database down".
 
-**Fix:** a route returning `{ ok: true }` plus a one-row Supabase read, with a short
-timeout.
+**Fixed.** `GET /api/health` does a head-only count against `profiles` with a 4s cap and
+reports `{ ok, database: "ok" | "slow" | "down", ms }`.
+
+The status stays 200 while the app is serving even when the database is down, which is
+deliberate: a platform that restarts the container over a database blip turns a
+recoverable outage into a longer one. A monitor that cares reads the body — that is what
+having one is for. Point Railway's healthcheck path at it.
 
 ---
 
-#### L3 — Unstructured logs
+#### L3 — Unstructured logs — open, deliberately
 Roughly 60 `console.log`/`warn`/`error` calls emit prose lines
 (`price sync loop: 3 set(s) → set 90 of 217, …`). They are unusually well written and
 `src/lib/logBuffer.ts` makes them readable from the admin page, but they cannot be
 filtered or aggregated by field, and they carry no request or user correlation id.
 
-**Fix:** not urgent at this size. If it ever matters, add a thin wrapper emitting JSON
-with `level`, `event` and a correlation id, keeping the human sentence as `msg`.
+**Left as is.** At this size the prose lines are more useful than JSON would be, and
+`logBuffer` already makes them readable from the admin page. Revisit if anything ever
+needs to aggregate across them.
 
 ---
 
-#### L4 — Sign-in error passthrough
+#### L4 — Sign-in error passthrough — **FIXED**
 **File:** `src/app/api/auth/login/route.ts:47-50`
 
 `Invalid login credentials` is correctly translated to a neutral message, but every other
 Supabase auth error is returned verbatim. Those strings can describe provider state
 ("Email not confirmed", rate-limit text).
 
-**Fix:** whitelist the messages worth showing; return a generic failure otherwise.
+**Fixed.** Two states get their own sentence, because a person can act on them:
+unconfirmed email, and the provider's own rate limit. Everything else — including
+whatever a future version of the provider starts returning — becomes "Wrong email or
+password."
 
 ---
 
@@ -333,9 +347,12 @@ input. RLS is enabled on all 22 tables.
 5. ~~**M4/M5 together**.~~ **Done** — migration 056, the Settings panel, and a `headers()`
    block.
 
-**Still open: M3, and the four LOW findings.** M3 (no request-size limit on the scan and
-grade uploads) is the only MEDIUM left; both endpoints require a session and spend
-credits, so the exposure is abuse by an existing member rather than by a stranger.
+6. ~~**M3**~~ and ~~**L1, L2, L4**~~ — **Done** in the same pass.
+
+**Open: L3 only**, and by choice — the prose logs are better than JSON at this size.
+
+**Two things to do outside the code:** run migrations 054, 055 and 056, and point
+Railway's healthcheck at `/api/health`.
 
 ## Requires manual verification
 

@@ -38,6 +38,11 @@ const PUBLIC_PATHS = [
   // app store reviewer follows the URL without an account, finds a login
   // wall, and rejects the submission.
   "/privacy",
+  // The platform's healthcheck, which cannot sign in and would otherwise be
+  // probing the landing page — a full React render plus a database read,
+  // every thirty seconds, that still could not tell an app fault from a
+  // database one.
+  "/api/health",
 ];
 
 /** startsWith("/") matches everything, so the landing page is handled as an

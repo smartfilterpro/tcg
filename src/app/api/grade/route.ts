@@ -9,8 +9,8 @@ import { GRADING_SYSTEM, GRADE_SCHEMA, type GradeReport } from "@/lib/grading";
 import { centeringCapBack, type CenteringMeasurement } from "@/lib/cardGeometry";
 import { computeGradeValue, parseRange, type GradedPrices, type GradeValue } from "@/lib/gradeValue";
 import { normalizeForSearch } from "@/lib/text";
-import { errorJson, safeMessage } from "@/lib/apiError";
-import { PublicError } from "@/lib/apiError";
+import { errorJson, PublicError, safeMessage } from "@/lib/apiError";
+import { GRADE_BODY_LIMIT, readJson } from "@/lib/requestBody";
 
 export const maxDuration = 180;
 
@@ -269,7 +269,10 @@ async function runGrade(opts: {
 export async function POST(req: Request) {
   try {
     const { user, profile } = await requireUser();
-    const body = (await req.json()) as { front?: SideInput; back?: SideInput; fee?: number };
+    const body = await readJson<{ front?: SideInput; back?: SideInput; fee?: number }>(
+      req,
+      GRADE_BODY_LIMIT
+    );
     const front = normalizeSide(body.front);
     const back = normalizeSide(body.back);
     if (!front.card?.data || !back.card?.data) {

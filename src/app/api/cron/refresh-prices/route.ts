@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "node:crypto";
 import { refreshStalePrices } from "@/lib/priceRefresh";
 import { errorJson } from "@/lib/apiError";
+import { secretMatches } from "@/lib/secretCompare";
 
 export const maxDuration = 300;
 
@@ -14,14 +14,6 @@ export const maxDuration = 300;
 // service, or any other scheduler, without changing the app.
 
 const running = globalThis as unknown as { __cronPriceRefreshRunning?: boolean };
-
-/** Constant-time compare that can't leak length either. */
-function secretMatches(given: string, expected: string): boolean {
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
 
 async function run(req: Request) {
   const expected = (process.env.CRON_SECRET ?? "").trim();
