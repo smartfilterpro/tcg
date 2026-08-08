@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { estimateCostUsd } from "@/lib/usage";
+import { rowCostUsd } from "@/lib/usage";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { errorJson } from "@/lib/apiError";
 
@@ -30,7 +30,7 @@ export async function GET() {
         fetchAllRows(() =>
           admin
             .from("ai_usage")
-            .select("user_id, model, endpoint, input_tokens, output_tokens, created_at")
+            .select("user_id, model, endpoint, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, created_at")
             .gte("created_at", m7)
             .order("created_at")
             .order("id")
@@ -97,11 +97,7 @@ export async function GET() {
     const costByEndpoint30 = new Map<string, number>();
     let cost30 = 0;
     for (const r of usage) {
-      const cost = estimateCostUsd(
-        (r.model as string) ?? "",
-        (r.input_tokens as number) ?? 0,
-        (r.output_tokens as number) ?? 0
-      );
+      const cost = rowCostUsd(r as Parameters<typeof rowCostUsd>[0]);
       const at = r.created_at as string;
       costByMonth.set(at.slice(0, 7), (costByMonth.get(at.slice(0, 7)) ?? 0) + cost);
       if (at >= d30) {

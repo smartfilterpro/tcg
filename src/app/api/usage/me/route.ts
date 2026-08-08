@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
-import { estimateCostUsd } from "@/lib/usage";
+import { rowCostUsd } from "@/lib/usage";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { creditSummary } from "@/lib/credits";
 import { errorJson } from "@/lib/apiError";
@@ -24,7 +24,7 @@ export async function GET() {
     const { data } = await fetchAllRows(() =>
       supabase
         .from("ai_usage")
-        .select("model, input_tokens, output_tokens, created_at")
+        .select("model, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, created_at")
         .eq("user_id", user.id)
         .gte("created_at", since.toISOString())
         .order("created_at")
@@ -36,7 +36,7 @@ export async function GET() {
     let calls = 0;
     const dayCost = new Map<string, number>();
     for (const r of rows) {
-      const cost = estimateCostUsd(r.model ?? "", r.input_tokens ?? 0, r.output_tokens ?? 0);
+      const cost = rowCostUsd(r);
       const t = new Date(r.created_at);
       if (t >= monthStart) {
         spentMonth += cost;

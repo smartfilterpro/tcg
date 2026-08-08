@@ -487,6 +487,7 @@ async function runChat(opts: {
     // taking the model's next move away without offering another is how a
     // deck-building question ends in an empty turn.
     if (finalRound) addFinalRoundNote(messages);
+    const effort = chatEffort(usedTools, finalRound);
     response = await completeWithRoom(
       client,
       {
@@ -497,7 +498,7 @@ async function runChat(opts: {
         max_tokens: 12000,
         system,
         tools: [CARD_LOOKUP_TOOL, SET_COMPLETION_TOOL, DECK_EDIT_TOOL],
-        output_config: { effort: chatEffort(usedTools, finalRound) },
+        output_config: { effort },
         // The last permitted round forbids another lookup, so the model
         // answers with what it has instead of ending mid-thought on a tool
         // call nothing will ever run.
@@ -512,7 +513,7 @@ async function runChat(opts: {
         ...(finalRound ? { tool_choice: { type: "none" as const } } : {}),
         messages,
       },
-      (r) => logAiUsage(supabase, userId, "chat", MODEL, r.usage)
+      (r) => logAiUsage(supabase, userId, "chat", MODEL, r.usage, effort)
     );
     if (response.stop_reason !== "tool_use") break;
     usedTools = true;

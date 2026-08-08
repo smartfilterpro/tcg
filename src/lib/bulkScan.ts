@@ -10,7 +10,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
-import { estimateCostUsd, logAiUsage } from "@/lib/usage";
+import { estimateCostUsd, logAiUsage, tokensFrom } from "@/lib/usage";
 import { numberKey } from "@/lib/pokemontcg";
 import { normalizeForSearch } from "@/lib/text";
 import { pickPrinting } from "@/lib/cardPrinting";
@@ -152,11 +152,7 @@ export async function identifyPhoto(
     });
 
     await logAiUsage(admin, adminUserId, "bulk_scan", SCAN_MODEL, res.usage);
-    const cost = estimateCostUsd(
-      SCAN_MODEL,
-      res.usage.input_tokens ?? 0,
-      res.usage.output_tokens ?? 0
-    );
+    const cost = estimateCostUsd(SCAN_MODEL, tokensFrom(res.usage));
     // Two writers can race here (both passes identify concurrently); the
     // increment is read-modify-write but a lost cent on a race is noise
     // next to the premium — correctness lives in ai_usage's rows.
