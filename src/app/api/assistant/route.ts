@@ -158,6 +158,32 @@ const SET_COMPLETION_TOOL = {
  *  card, and a follow-up without letting a loop run a tab. */
 const MAX_TOOL_ROUNDS = 4;
 
+/** How hard to think, per round.
+ *
+ *  Most questions here are rules questions — "if Abyss Eye knocks something
+ *  out, does it go to the discard pile?" — and they are answered from
+ *  knowledge on the opening round without touching a tool. Those were
+ *  running at the API's default effort of `high`, which is calibrated for
+ *  the hardest thing this chat does rather than the most common one: a few
+ *  steps of rules reasoning, priced and paced like a deck rebuild.
+ *
+ *  A round that opens with tool results is the other case. The model is
+ *  holding the player's actual collection and being asked what to do with
+ *  it — that is the work worth the extra deliberation, and only that round
+ *  pays for it.
+ *
+ *  The last round is bounded whatever came before it. By then the lookups
+ *  are done and what is left is writing it down; see the note at the call
+ *  site about the round that MUST produce words.
+ *
+ *  Nothing here changes the model, deliberately: the account digest is a
+ *  cached system block, caches are scoped to one model, and switching
+ *  models mid-conversation would re-bill the largest part of every request
+ *  to save the smallest. */
+function chatEffort(usedTools: boolean, finalRound: boolean): "medium" | "high" {
+  return usedTools && !finalRound ? "high" : "medium";
+}
+
 /** Sort key for collector numbers: numerically where they're numeric, so
  *  "2" comes before "10", with lettered numbers (TG12, SWSH250) after. */
 function numberOrder(n: string | null): [number, string] {
@@ -452,6 +478,9 @@ async function runChat(opts: {
   // A deck edit the model proposed this turn, carried out with the reply so
   // the client can offer it for approval. Nothing has been written.
   let pendingEdit: DeckEditProposal | null = null;
+  // Has this reply looked anything up yet? The answer decides how hard the
+  // next round thinks — see chatEffort.
+  let usedTools = false;
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const finalRound = round === MAX_TOOL_ROUNDS - 1;
     // Said out loud on the round where the tools close. See FINAL_ROUND_NOTE:
@@ -468,28 +497,25 @@ async function runChat(opts: {
         max_tokens: 12000,
         system,
         tools: [CARD_LOOKUP_TOOL, SET_COMPLETION_TOOL, DECK_EDIT_TOOL],
+        output_config: { effort: chatEffort(usedTools, finalRound) },
         // The last permitted round forbids another lookup, so the model
         // answers with what it has instead of ending mid-thought on a tool
         // call nothing will ever run.
         //
-        // …and bounds the deliberation, because this is the round that MUST
+        // It is also bounded above, because this is the round that MUST
         // produce words. By here the lookups are done and the thinking that
         // mattered has happened; what is left is writing it down. Left
         // unbounded, the round with the most context in front of it is also
         // the one most able to spend the whole budget reasoning and return
         // an empty turn — which reaches the player as an apology for a
         // question that was never the problem.
-        ...(finalRound
-          ? {
-              tool_choice: { type: "none" as const },
-              output_config: { effort: "medium" as const },
-            }
-          : {}),
+        ...(finalRound ? { tool_choice: { type: "none" as const } } : {}),
         messages,
       },
       (r) => logAiUsage(supabase, userId, "chat", MODEL, r.usage)
     );
     if (response.stop_reason !== "tool_use") break;
+    usedTools = true;
 
     messages.push({ role: "assistant", content: response.content });
     const results: Anthropic.ToolResultBlockParam[] = [];
