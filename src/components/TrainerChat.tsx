@@ -37,14 +37,26 @@ class ChatFailed extends Error {}
  *  the phone can sleep through any number of them and the first poll after
  *  waking collects the answer. */
 async function watchJob(
-  jobId: string
+  jobId: string,
+  /** The answer so far, each time the poll finds more of it. */
+  onPartial?: (soFar: string) => void
 ): Promise<{ answer: string; refused?: boolean; pendingEdit?: DeckEditProposal | null }> {
   // Generous, and only enforced while the job still says "running" — a
   // phone asleep past the deadline whose job finished still gets the
   // answer from its first poll after waking.
   const deadline = Date.now() + 3 * 60 * 1000;
+  // Ask quickly at first, then settle down.
+  //
+  // The old loop slept a second and a half before its FIRST ask, so even an
+  // answer that was already sitting there couldn't arrive sooner than that.
+  // Long replies never noticed; short ones — a rules question, a lookup —
+  // were being held up by the poller rather than by the model. Backing off
+  // to the old interval keeps a slow reply from being asked about forty
+  // times while it writes.
+  let wait = 250;
   for (;;) {
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, wait));
+    wait = Math.min(1500, Math.round(wait * 1.6));
     try {
       const res = await fetch(`/api/assistant?job=${encodeURIComponent(jobId)}`);
       const json = await res.json();
@@ -55,6 +67,12 @@ async function watchJob(
           refused?: boolean;
           pendingEdit?: DeckEditProposal | null;
         };
+      }
+      // Still writing, but there is something to read. The server rewrites
+      // this row as the reply is generated, so the person watches it arrive
+      // instead of watching a spinner.
+      if (job?.status === "running" && typeof job.result?.partial === "string") {
+        onPartial?.(job.result.partial);
       }
       if (job?.status === "error" || (job?.status === "done" && !job.result?.answer)) {
         throw new ChatFailed(job.error || "The chat failed");
@@ -84,6 +102,8 @@ export default function TrainerChat() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  /** The reply being written right now, shown in place of "Thinking…". */
+  const [streaming, setStreaming] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [migrated, setMigrated] = useState(true);
   const [loaded, setLoaded] = useState(false);
@@ -103,7 +123,7 @@ export default function TrainerChat() {
         // answer up where it was left.
         if (json.job?.id) {
           setBusy(true);
-          watchJob(json.job.id as string)
+          watchJob(json.job.id as string, setStreaming)
             .then((r) => {
               setMsgs((m) => [
                 ...m,
@@ -117,7 +137,10 @@ export default function TrainerChat() {
               credits.refresh();
             })
             .catch((e) => setError(e instanceof Error ? e.message : "The chat failed"))
-            .finally(() => setBusy(false));
+            .finally(() => {
+              setStreaming("");
+              setBusy(false);
+            });
         }
       }
     } catch {}
@@ -133,7 +156,7 @@ export default function TrainerChat() {
 
   useEffect(() => {
     if (open) endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [msgs, open, busy]);
+  }, [msgs, open, busy, streaming]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -172,7 +195,7 @@ export default function TrainerChat() {
         // answer lands in history whatever happens to this tab, so a
         // phone that locks mid-answer costs nothing but the wait.
         accepted = true;
-        reply = await watchJob(json.jobId as string);
+        reply = await watchJob(json.jobId as string, setStreaming);
       } else {
         throw new Error("The chat failed");
       }
@@ -195,6 +218,7 @@ export default function TrainerChat() {
       // Put the question back so a retry is one tap.
       setDraft(question);
     }
+    setStreaming("");
     setBusy(false);
   }
 
@@ -324,12 +348,19 @@ export default function TrainerChat() {
                   </div>
                 )
               )}
-              {busy && (
-                <div className="flex items-center gap-2 rounded-[14px] bg-white px-3.5 py-2.5 ring-1 ring-brand-line">
-                  <FanMark size={15} className="animate-spin-slow shrink-0" />
-                  <span className="animate-pulse text-[13px] text-brand-ink4">Thinking…</span>
-                </div>
-              )}
+              {busy &&
+                (streaming ? (
+                  // The reply as it is being written. Same bubble as a
+                  // finished answer, so it doesn't jump when it lands.
+                  <div className="rounded-[14px] bg-white px-3.5 py-2.5 text-[13px] leading-[1.6] ring-1 ring-brand-line">
+                    <Markdown text={streaming} />
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 rounded-[14px] bg-white px-3.5 py-2.5 ring-1 ring-brand-line">
+                    <FanMark size={15} className="animate-spin-slow shrink-0" />
+                    <span className="animate-pulse text-[13px] text-brand-ink4">Thinking…</span>
+                  </div>
+                ))}
               <div ref={endRef} />
             </div>
 
