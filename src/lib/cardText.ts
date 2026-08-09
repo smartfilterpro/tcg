@@ -269,6 +269,73 @@ const MAX_TEXT_ATTEMPTS = 2;
  *  image gets used. */
 const TEXT_COOL_OFF_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** Sorted copy, so two lists of the same things compare equal whatever
+ *  order the source happened to return them in. */
+function sortedList(v: unknown): string {
+  return JSON.stringify(Array.isArray(v) ? [...(v as string[])].sort() : (v ?? null));
+}
+
+/** One card's text, written to every other printing of the same card.
+ *
+ *  Mega Starmie ex ships in Perfect Order as a Double Rare (#21), an Ultra
+ *  Rare (#102) and a Special Illustration Rare (#118). The artwork differs;
+ *  the attacks, HP, weakness and retreat are the same words on every one of
+ *  them. Reading each separately paid three times for one card's worth of
+ *  information — and worse, spent the chat's two-reads-per-question budget
+ *  on duplicates of a card it had just read, which is how a question about
+ *  a popular card came back with no text at all.
+ *
+ *  Only rows that agree on everything printed except the picture are
+ *  filled: same set, same name, same supertype, same HP, same types and
+ *  subtypes. Two genuinely different cards agreeing on all of that inside
+ *  one set is not a thing that happens; matching any more loosely is, and
+ *  the failure mode is writing one card's attacks onto another card, which
+ *  is worse than having no text at all.
+ *
+ *  Never overwrites: a row that already holds text keeps it. Best-effort
+ *  throughout — the read it is copying already succeeded and was already
+ *  saved, so nothing here is allowed to turn that into a failure.
+ *
+ *  Returns how many siblings were filled. */
+export async function shareTextWithPrintings(
+  admin: SupabaseClient,
+  cardId: string,
+  bd: CardBattleData
+): Promise<number> {
+  try {
+    const cols = "id, name, set_name, supertype, subtypes, types, hp, battle_data";
+    const { data: self } = await admin.from("cards").select(cols).eq("id", cardId).maybeSingle();
+    if (!self?.name || !self?.set_name) return 0;
+
+    const { data: rows } = await admin
+      .from("cards")
+      .select(cols)
+      .eq("set_name", self.set_name)
+      .eq("name", self.name);
+
+    const ids = (rows ?? [])
+      .filter(
+        (r) =>
+          r.id !== cardId &&
+          r.battle_data == null &&
+          r.supertype === self.supertype &&
+          (r.hp ?? null) === (self.hp ?? null) &&
+          sortedList(r.types) === sortedList(self.types) &&
+          sortedList(r.subtypes) === sortedList(self.subtypes)
+      )
+      .map((r) => r.id as string);
+    if (ids.length === 0) return 0;
+
+    const { error } = await admin
+      .from("cards")
+      .update({ battle_data: bd, text_attempts: 0, text_failed_at: null })
+      .in("id", ids);
+    return error ? 0 : ids.length;
+  } catch {
+    return 0;
+  }
+}
+
 /** Read a card's text from its picture ONCE, and remember either outcome.
  *
  *  The plain reader returns null on failure and writes nothing, so the same
@@ -326,6 +393,10 @@ export async function readCardTextOnce(
         .from("cards")
         .update({ battle_data: bd, text_attempts: 0, text_failed_at: null })
         .eq("id", card.id);
+      // The same words are printed on every other printing of this card.
+      // Copying them is what stops the next question paying to read the
+      // alternate art of a card we just read.
+      await shareTextWithPrintings(admin, card.id, bd);
     } else {
       await admin
         .from("cards")

@@ -1326,6 +1326,7 @@ export default function AdminPage() {
           <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🖼️ Mirror card art</h2>
             <MirrorArtPanel />
+            <CardTextPanel />
           </div>
           <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🧬 Merge duplicate cards</h2>
@@ -3227,6 +3228,158 @@ function SharedDecksPanel() {
         </ul>
       )}
       {error && <p className="mb-0 mt-2 text-xs text-brand-negative">{error}</p>}
+    </div>
+  );
+}
+
+/** Reading the catalogue's printed text.
+ *
+ *  Same shape as the art mirror above: batches, a cursor the client holds,
+ *  stoppable. The difference is that this one can spend money — the free
+ *  databases are tried first for every card, and only what they don't carry
+ *  goes to the model. Owned-first is the default because a card in somebody's
+ *  collection is a card that gets asked about. */
+function CardTextPanel() {
+  const [status, setStatus] = useState<{
+    total: number;
+    withText: number;
+    missing: number;
+    cooling: number;
+    ownedMissing: number;
+  } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [ownedOnly, setOwnedOnly] = useState(true);
+  const [run, setRun] = useState({ fromDatabase: 0, fromPicture: 0, shared: 0, failures: [] as string[] });
+  const [error, setError] = useState<string | null>(null);
+  const stopRef = useRef(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/card-text");
+      const json = await res.json();
+      if (res.ok) setStatus(json);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function start() {
+    setRunning(true);
+    setError(null);
+    stopRef.current = false;
+    setRun({ fromDatabase: 0, fromPicture: 0, shared: 0, failures: [] });
+    let after: string | null = null;
+    try {
+      for (;;) {
+        if (stopRef.current) break;
+        const res = await resilientFetch(
+          "/api/admin/card-text",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ after, ownedOnly }),
+          },
+          {
+            onRetry: (n) => setError(`Connection dropped — reconnecting (${n})…`),
+            stopped: () => stopRef.current,
+          }
+        );
+        setError(null);
+        // Text first: a proxy timeout answers with prose, not JSON.
+        const body = await res.text();
+        let json: {
+          fromDatabase: number;
+          fromPicture: number;
+          shared: number;
+          failed: Array<{ id: string; name: string; reason: string }>;
+          next: string | null;
+          done: boolean;
+          error?: string;
+        };
+        try {
+          json = JSON.parse(body);
+        } catch {
+          throw new Error(body.slice(0, 200) || "The sweep returned nothing readable");
+        }
+        if (!res.ok) throw new Error(json.error || "Card-text sweep failed");
+        setRun((r) => ({
+          fromDatabase: r.fromDatabase + json.fromDatabase,
+          fromPicture: r.fromPicture + json.fromPicture,
+          shared: r.shared + json.shared,
+          failures: [...r.failures, ...json.failed.map((f) => `${f.name}: ${f.reason}`)].slice(-8),
+        }));
+        after = json.next;
+        if (json.done || !after) break;
+        if (json.fromDatabase + json.fromPicture > 0) refresh();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Card-text sweep failed");
+    }
+    setRunning(false);
+    refresh();
+  }
+
+  const target = ownedOnly ? status?.ownedMissing : status?.missing;
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-white p-3">
+      <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+        What a card <i>does</i> — attacks, abilities, weakness, retreat. Free card databases
+        are asked first; a brand-new set they haven&apos;t catalogued yet is read from the
+        card&apos;s own picture, which costs money, so those are rationed per batch. Every
+        read is copied to the card&apos;s other printings, so a chase card with three
+        alternate arts costs one read rather than three.
+      </p>
+      {status && (
+        <p className="m-0 mb-2 text-xs text-brand-ink3">
+          {status.withText.toLocaleString()} of {status.total.toLocaleString()} cards have
+          their text · {status.missing.toLocaleString()} missing
+          {status.ownedMissing > 0 && `, ${status.ownedMissing.toLocaleString()} of them owned by somebody`}
+          {status.cooling > 0 && ` · ${status.cooling.toLocaleString()} resting after failed reads`}
+        </p>
+      )}
+      <label className="mb-2 flex items-center gap-2 text-xs text-brand-ink3">
+        <input
+          type="checkbox"
+          checked={ownedOnly}
+          disabled={running}
+          onChange={(e) => setOwnedOnly(e.target.checked)}
+        />
+        Owned cards only — the ones people actually ask about
+      </label>
+      <div className="flex flex-wrap gap-2">
+        {running ? (
+          <button
+            className="btn-secondary text-sm"
+            onClick={() => {
+              stopRef.current = true;
+            }}
+          >
+            Stop after this batch
+          </button>
+        ) : (
+          <button className="btn-primary text-sm" disabled={target === 0} onClick={start}>
+            {target === 0 ? "Every card has its text" : "Read the missing text"}
+          </button>
+        )}
+      </div>
+      {(running || run.fromDatabase + run.fromPicture > 0) && (
+        <p className="m-0 mt-2 text-xs text-brand-ink3">
+          {running ? "Running… " : "Stopped. "}
+          {run.fromDatabase.toLocaleString()} from the free databases ·{" "}
+          {run.fromPicture.toLocaleString()} read from pictures
+          {run.shared > 0 && ` · ${run.shared.toLocaleString()} other printings filled for free`}
+        </p>
+      )}
+      {run.failures.length > 0 && (
+        <ul className="m-0 mt-2 list-none p-0 text-[11px] text-brand-ink4">
+          {run.failures.map((f, i) => (
+            <li key={i}>{f}</li>
+          ))}
+        </ul>
+      )}
+      {error && <p className="m-0 mt-2 text-xs text-brand-negative">{error}</p>}
     </div>
   );
 }
