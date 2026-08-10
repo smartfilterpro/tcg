@@ -6,6 +6,7 @@ import {
   SEALED_KINDS,
   sealedKindLabel,
   sealedItemPrice,
+  sealedTotal,
   type SealedItem,
   type SealedSuggestion,
 } from "@/lib/sealed";
@@ -19,7 +20,15 @@ import {
  *  The total is shown separately from the card total for the same reason.
  *  Mixing them would answer "what are my cards worth?" with a number that
  *  includes four sealed boxes, and that is a different question. */
-export default function SealedTab({ cardValue }: { cardValue?: number }) {
+export default function SealedTab({
+  cardValue,
+  onTotal,
+}: {
+  cardValue?: number;
+  /** Report the total up, so the Cards tab's grand total is this same
+   *  number rather than its own stale copy of it. */
+  onTotal?: (total: number) => void;
+}) {
   const [items, setItems] = useState<SealedItem[] | null>(null);
   const [migrated, setMigrated] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +65,15 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Hand the total up whenever it moves. The Cards tab used to read
+  // /api/sealed once when the page loaded and keep that figure for the rest
+  // of the session, so checking a price or adding a box here left the two
+  // headers quoting different grand totals — $1,727.55 on this tab against
+  // $1,324.38 on the other, from the same rows.
+  useEffect(() => {
+    if (items) onTotal?.(sealedTotal(items));
+  }, [items, onTotal]);
 
   // Suggestions while typing. Debounced, because every keystroke firing a
   // query is a query per keystroke, and the answer for "surg" is thrown
@@ -160,7 +178,7 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
   if (error && !items) return <p className="text-red-600">{error}</p>;
   if (!items) return <p className="text-slate-500">Loading…</p>;
 
-  const total = items.reduce((sum, i) => sum + (sealedItemPrice(i) ?? 0) * i.quantity, 0);
+  const total = sealedTotal(items);
   const priced = items.filter((i) => sealedItemPrice(i) != null).length;
 
   return (

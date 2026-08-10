@@ -10,6 +10,7 @@ import PriceHistory from "@/components/PriceHistory";
 import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc } from "@/lib/art";
 import SealedTab from "@/components/SealedTab";
+import { sealedTotal } from "@/lib/sealed";
 import { matchesSearch } from "@/lib/text";
 import { matchesPrintedNumber } from "@/lib/cardQuery";
 
@@ -252,11 +253,9 @@ export default function CollectionPage({
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (!live || !j?.items) return;
-        const value = (j.items as Array<{ quantity: number; price_override: number | null; product?: { market_price?: number | null } | null }>).reduce(
-          (sum, i) => sum + ((i.price_override ?? i.product?.market_price ?? 0) || 0) * i.quantity,
-          0
-        );
-        setSealedValue(value);
+        // The same function the Sealed tab totals with — two copies of one
+        // sum is two answers to one question.
+        setSealedValue(sealedTotal(j.items));
       })
       .catch(() => {});
     return () => {
@@ -688,7 +687,7 @@ export default function CollectionPage({
         {/* The card value is handed down rather than re-fetched: this page
             already has it, and the sealed tab asking for 3,500 collection
             rows to print one number would be absurd. */}
-        <SealedTab cardValue={totals.value} />
+        <SealedTab cardValue={totals.value} onTotal={setSealedValue} />
       </div>
     );
   }
@@ -806,7 +805,10 @@ export default function CollectionPage({
               "what are my cards worth?" must keep meaning that — and this
               answers the separate question underneath rather than quietly
               changing what the first number counts. */}
-          {sealedValue != null && sealedValue > 0 && (
+          {/* Yours, not theirs — there's no family view of sealed product,
+              so this line under someone else's card total would be adding
+              your boxes to their cards. */}
+          {!readOnly && sealedValue != null && sealedValue > 0 && (
             <p className="mt-0.5 text-sm text-slate-500">
               plus{" "}
               <span className="font-semibold text-brand-positive">

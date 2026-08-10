@@ -84,6 +84,25 @@ export function sealedItemPrice(item: {
   return item.product?.market_price ?? null;
 }
 
+/** What a holding of sealed product is worth, all together.
+ *
+ *  One function because there are two places that need the number — the
+ *  Sealed tab's own header and the Cards tab's grand total — and two copies
+ *  of a sum is two answers to one question. They had already drifted once,
+ *  though not through the arithmetic: the formulas matched and the DATA
+ *  didn't, because one side read it once at page load and the other re-read
+ *  it every time the tab opened. Checking a price then made the two headers
+ *  disagree by whatever the check had found. */
+export function sealedTotal(
+  items: Array<{
+    quantity: number;
+    price_override?: number | null;
+    product?: { market_price?: number | null } | null;
+  }>
+): number {
+  return items.reduce((sum, i) => sum + (sealedItemPrice(i) ?? 0) * i.quantity, 0);
+}
+
 /* ------------------------------------------------------------- pricing */
 
 /** Titles that are not the sealed product, however well they match the
