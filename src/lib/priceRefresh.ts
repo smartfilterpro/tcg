@@ -80,6 +80,21 @@ const SWING_FLOOR_USD = 1;
  *  is worse for someone valuing a collection than an honest blank. */
 const EBAY_TRUST_CEILING = 20;
 
+/** Rarities that are, by definition, the cards a set prints most of. */
+const BULK_RARITIES = new Set(["common", "uncommon"]);
+
+/** What a bulk-rarity card may be worth before the number is more likely to
+ *  be a mismatch than a market.
+ *
+ *  This one is a heuristic and says so. It exists because the failures seen
+ *  so far are not all attributable to one source: a Shuppet common and a
+ *  Mega Dragonite ex secret rare in the same set held the identical price to
+ *  the cent — $706.96 — which is a card wearing another card's product, and
+ *  no amount of preferring TCGplayer over eBay catches that. Whatever
+ *  upstream mapped them together, a Common at $706 is worth a human's glance
+ *  before it becomes what someone's collection is "worth". */
+const BULK_RARITY_CEILING_USD = 50;
+
 /** How long between runs once every owned card has a price. Prices move
  *  slowly; a daily pass is plenty for maintenance. */
 const MIN_HOURS_BETWEEN_RUNS = 20;
@@ -388,7 +403,12 @@ export async function refreshStalePrices(
           // An unverified eBay claim never became nextMarket, so the number
           // under review is the one it wanted to write.
           const proposed = nextMarket ?? ptMarket;
-          if ((ptUnverified || swung) && proposed != null) {
+          // A Common priced like a chase card, whichever source said so.
+          const implausible =
+            proposed != null &&
+            proposed > BULK_RARITY_CEILING_USD &&
+            BULK_RARITIES.has(((card.rarity as string | null) ?? "").trim().toLowerCase());
+          if ((ptUnverified || swung || implausible) && proposed != null) {
             summary.suspicious.push({
               id: card.id as string,
               name: card.name as string,
