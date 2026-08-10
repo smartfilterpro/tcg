@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { APP_NAME } from "@/lib/branding";
 import JoinFamilyForm from "./JoinFamilyForm";
 
@@ -31,21 +32,90 @@ export default async function JoinFamilyPage({
   const { token } = await params;
   const supabase = await createClient();
 
-  // Security-definer lookup: returns nothing for an expired, answered or
-  // revoked invitation, so a dead link and a wrong one look the same.
-  const { data } = await supabase.rpc("family_invite_by_token", { t: token });
-  const invite = (Array.isArray(data) ? data[0] : data) as Invite | undefined;
+  // Read directly, with the service role, rather than through the
+  // security-definer function.
+  //
+  // That function exists so a visitor with no account can resolve a token,
+  // and it is the right tool for a browser. This page is not a browser — it
+  // renders on the server, where the service role is already available and
+  // the server decides what comes back. Going through PostgREST as `anon`
+  // added two ways to fail that have nothing to do with invitations: the
+  // function's EXECUTE grant, and PostgREST's schema cache, which does not
+  // know a function exists until it reloads. Both produce a valid invite
+  // that cannot be read — which is exactly what happened, and which looked
+  // from the outside like an expired link.
+  //
+  // The filter is the same one the function applied, because it is the same
+  // rule: pending, and not yet expired. The token remains the only
+  // credential, and nothing is returned to anyone who does not hold it.
+  const admin = createAdminClient();
+  const { data: row, error } = await admin
+    .from("family_invites")
+    .select("id, group_id, email, role, expires_at, invited_by")
+    .eq("token", token)
+    .eq("status", "pending")
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+
+  let invite: Invite | undefined;
+  if (row) {
+    // Named separately: the inviter's name is a nicety, and failing to find
+    // it must not turn a good invitation into a dead one. The function used
+    // an inner join here, so a missing profile row would have silently
+    // invalidated the invite.
+    const { data: inviter } = await admin
+      .from("profiles")
+      .select("display_name, email")
+      .eq("id", row.invited_by as string)
+      .maybeSingle();
+    const name =
+      ((inviter?.display_name as string | null) ?? "").trim() ||
+      ((inviter?.email as string | null) ?? "").split("@")[0] ||
+      "Someone";
+    invite = { ...(row as unknown as Invite), inviter_name: name };
+  }
+
+  if (error) {
+    // Logged in full, because the visitor is not the person who can fix it.
+    console.error(`family invite lookup failed: ${error.message}`);
+  }
 
   if (!invite) {
+    // Only the invitation itself is the visitor's business. A broken lookup
+    // is ours, and saying "expired" about a database fault sends them to ask
+    // for a new link that will fail in exactly the same way.
+    const broken = !!error;
+    const needsMigration = /family_invites|does not exist|schema cache/i.test(
+      error?.message ?? ""
+    );
     return (
       <div className={SHELL}>
         <div className={PANEL}>
           <h1 className="m-0 mb-2 font-display text-2xl font-bold tracking-[-.025em]">
-            This invitation isn&apos;t valid
+            {broken ? "We couldn\u2019t check this invitation" : "This invitation isn\u2019t valid"}
           </h1>
           <p className="m-0 text-[14.5px] leading-[1.6] text-brand-ink3">
-            It may have expired, been cancelled, or already been answered. Ask whoever invited
-            you to send a new one.
+            {broken ? (
+              needsMigration ? (
+                <>
+                  Invitations need a one-time database update — run{" "}
+                  <span className="font-mono text-[13px]">
+                    supabase/migrations/031_family_invites.sql
+                  </span>
+                  . The link itself is fine and will work once that has run.
+                </>
+              ) : (
+                <>
+                  Something went wrong at our end, not with your link. Try again in a minute —
+                  and if it keeps happening, tell whoever invited you so they can report it.
+                </>
+              )
+            ) : (
+              <>
+                It may have expired, been cancelled, or already been answered. Ask whoever
+                invited you to send a new one.
+              </>
+            )}
           </p>
           <Link href="/" className="mt-4 inline-block text-[14px] text-brand-accent underline">
             Go to {APP_NAME}
