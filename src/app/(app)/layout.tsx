@@ -108,7 +108,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
                 <line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
             </Link>
-            <form action="/api/auth/logout" method="post" className="shrink-0">
+            {/* Hidden on a phone only because Settings → Account now has a
+                Sign out of its own, reached by the avatar immediately to the
+                left. Before that this icon was the single exit from the app
+                and hiding it would have trapped people. */}
+            <form action="/api/auth/logout" method="post" className="hidden shrink-0 sm:block">
               <button
                 aria-label="Sign out"
                 title="Sign out"

@@ -8,6 +8,7 @@
 // on, and how much runway is left. No opaque percentages either.
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { BOOST_LIST, BOOSTS_NOTE } from "@/lib/boosts";
 import { AI_NAME } from "@/lib/branding";
 
@@ -73,6 +74,8 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
   const chosen = packs.find((p) => p.id === pack)!;
 
   const [asked, setAsked] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   async function buy() {
     setBusy(true);
@@ -108,10 +111,26 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col justify-end bg-brand-ink/55 sm:items-center sm:justify-center" onClick={onClose}>
+  // Rendered into the body, not where it was called from.
+  //
+  // The header opens this sheet, and the header is `z-40 bg-brand-ink
+  // text-white`. Being a DOM descendant of it, the sheet inherited both:
+  // every line without an explicit colour — the heading, each pack's credit
+  // count, each price — came out white on cream and simply wasn't there.
+  // And z-50 inside a z-40 stacking context cannot rise above a sibling at
+  // z-40, so the chat button painted over the sheet's footer.
+  //
+  // Neither is a colour bug or a z-index bug; both are the same bug, which
+  // is that an overlay was living inside a bar. A portal takes it out of the
+  // header entirely, and the explicit text colour below means it no longer
+  // depends on wherever it happens to be mounted.
+  const sheet = (
+    <div
+      className="fixed inset-0 z-[60] flex flex-col justify-end bg-brand-ink/55 sm:items-center sm:justify-center"
+      onClick={onClose}
+    >
       <div
-        className="w-full rounded-t-[22px] bg-brand-canvas px-[18px] pb-[26px] pt-2.5 sm:max-w-md sm:rounded-[22px]"
+        className="max-h-[90vh] w-full overflow-y-auto rounded-t-[22px] bg-brand-canvas px-[18px] pb-[26px] pt-2.5 text-brand-ink sm:max-w-md sm:rounded-[22px]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mx-auto mb-[18px] h-1 w-[38px] rounded-full bg-brand-line-strong sm:hidden" />
@@ -183,6 +202,10 @@ export function BoostSheet({ balance, onClose }: { balance: number | null; onClo
       </div>
     </div>
   );
+
+  // Only after mount: document.body doesn't exist while rendering on the
+  // server, and this component is reachable from a server-rendered header.
+  return mounted ? createPortal(sheet, document.body) : null;
 }
 
 /** The collection-page meter. Three states: admin (unmetered), has credits,
