@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { getUserAndProfile } from "@/lib/auth";
+import { isFreeTier } from "@/lib/credits";
 import { APP_NAME, FAN_DISCLAIMER } from "@/lib/branding";
 import { TRADING_ENABLED } from "@/lib/features";
 import { FanMark, Wordmark } from "@/components/Logo";
@@ -26,7 +27,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Moderators get the Admin link too — the page itself shows them only the
   // content tools, and every money or deletion route refuses them anyway.
   const isStaff = isAdmin || auth.profile?.role === "moderator";
-  const plan = auth.profile?.plan ?? "free";
   // The lock marks what the free plan doesn't include. Neither page hard-
   // blocks: both run on trial credits — the lock is the plan pitch, not a
   // wall, and the real limit is the credit balance, shown per action.
@@ -36,7 +36,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // meter and nothing to sell. (Practice against the bot is a separate,
   // admin-only thing — see /api/battles.) If AI-driven battles arrive later,
   // that feature can be gated on its own terms rather than the whole page.
-  const locked = !isAdmin && plan === "free";
+  //
+  // Asked properly rather than read off the profile. A family member's own
+  // row says plan = 'free' — the plan lives on the group owner — so reading
+  // the column direct put padlocks on Scan and Grade for everyone in a
+  // household except the person paying, which is the wrong half of the
+  // family. isFreeTier resolves membership first and is the same test the
+  // deck cap and deck sharing already use.
+  const locked = !isAdmin && (await isFreeTier(auth.user, auth.profile));
 
   const navItems = [
     { label: "Collection", href: "/" },
