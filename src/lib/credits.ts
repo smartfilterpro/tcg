@@ -341,7 +341,12 @@ export async function checkCredits(
   profile: { role?: string; plan?: string; created_at?: string; billing_anchor?: string | null } | null
 ): Promise<CreditStatus> {
   const plan = profile?.plan ?? "free";
-  if (profile?.role === "admin") return { ok: true, balance: Infinity, plan, pooled: false };
+  // Admins are never BLOCKED — but they used to return here, before the
+  // family was resolved and before grants were ensured. An admin who owns a
+  // family pool would therefore skip creating that pool's monthly grant, so
+  // it only appeared when some other member happened to open the app first.
+  // Everything below still runs for them; only the two refusals are skipped.
+  const isAdmin = profile?.role === "admin";
 
   try {
     const admin = createAdminClient();
@@ -368,7 +373,7 @@ export async function checkCredits(
     // and charged for a truncated one. Do not "fix" this into a mid-flight
     // abort — an abandoned generation costs us exactly the same as a
     // finished one, and delivers nothing.
-    if (balance <= 0) {
+    if (!isAdmin && balance <= 0) {
       // An unconfirmed account has a zero balance for a different reason,
       // and telling them to buy a boost would be both useless and rude —
       // their free credits are waiting, not spent.
@@ -390,7 +395,7 @@ export async function checkCredits(
 
     // A kid profile's per-cycle cap is checked against their OWN spend, even
     // though the pool is shared.
-    if (family && family.myCap != null) {
+    if (!isAdmin && family && family.myCap != null) {
       const spent = -(await sumDeltas(admin, [user.id], {
         // The pool's clock, not the kid's: caps reset when the grant does.
         since: cycleStart(family.ownerAnchorIso),
@@ -430,6 +435,23 @@ export async function debitCredits(
   if (!isMetered(endpoint)) return;
   try {
     const admin = createAdminClient();
+    // An admin is never stopped by the meter, so debiting them writes a
+    // number nothing enforces — and the moment an admin owns a family pool
+    // it stops being their number at all. Every deck build and every chat
+    // they run comes out of the household's shared balance, and the first
+    // symptom is a child being told they are out of credits for work a
+    // parent did.
+    //
+    // The spend is not lost: ai_usage keeps every row, and that is the cost
+    // record. The ledger is the account, and an unmetered account has
+    // nothing to account for. One primary-key lookup, after a model call
+    // that took seconds.
+    const { data: me } = await admin
+      .from("profiles")
+      .select("role")
+      .eq("id", userId)
+      .maybeSingle();
+    if (me?.role === "admin") return;
     await admin.from("credit_ledger").insert({
       user_id: userId,
       delta: -creditsForUsd(usd),
