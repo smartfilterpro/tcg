@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import CardZoom from "@/components/CardZoom";
+import { money } from "@/lib/money";
 import {
   SEALED_KINDS,
   sealedKindLabel,
@@ -191,7 +192,7 @@ export default function SealedTab({
             <>
               <b>{items.reduce((n, i) => n + i.quantity, 0)}</b> item
               {items.reduce((n, i) => n + i.quantity, 0) === 1 ? "" : "s"} ·{" "}
-              <b className="text-green-700">${total.toFixed(2)}</b>
+              <b className="text-green-700">{money(total)}</b>
               {priced < items.length && (
                 <span className="text-slate-400">
                   {" "}
@@ -202,10 +203,10 @@ export default function SealedTab({
                   does not depend on which tab you happen to be looking at. */}
               {cardValue != null && cardValue > 0 && (
                 <div className="mt-0.5 text-slate-500">
-                  plus ${cardValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                  plus {money(cardValue)}{" "}
                   in cards ·{" "}
                   <b className="text-green-700">
-                    ${(total + cardValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                    {money(total + cardValue)}{" "}
                     total collection
                   </b>
                 </div>
@@ -300,7 +301,7 @@ export default function SealedTab({
                         : sug.source === "tracker"
                           ? " · product database"
                           : " · suggested name"}
-                      {sug.marketPrice != null ? ` · $${sug.marketPrice.toFixed(2)}` : ""}
+                      {sug.marketPrice != null ? ` · ${money(sug.marketPrice)}` : ""}
                     </span>
                   </span>
                   <span className="shrink-0 text-xs text-brand-accent">Add</span>
@@ -394,7 +395,7 @@ export default function SealedTab({
                   <div className="text-xs">
                     {price != null ? (
                       <span className="font-semibold text-green-700">
-                        ${price.toFixed(2)} each
+                        {money(price)} each
                         {item.price_override != null && (
                           <span className="font-normal text-slate-400"> (your value)</span>
                         )}

@@ -10,6 +10,7 @@ import type { GradeValue } from "@/lib/gradeValue";
 import { CORNER_REGIONS, type CenteringMeasurement } from "@/lib/cardGeometry";
 import CenteringDiagram from "@/components/CenteringDiagram";
 import Markdown from "@/components/Markdown";
+import { money } from "@/lib/money";
 
 /** Grade → pill colour, on the artboard's thresholds. */
 export function gradeColor(g: number): string {
@@ -23,10 +24,6 @@ export function gradeColor(g: number): string {
 /** The shared panel chrome for the report column. */
 const PANEL = "rounded-[18px] border border-brand-line bg-white p-[22px]";
 const PANEL_TITLE = "font-display text-base font-bold";
-
-function money(n: number): string {
-  return `$${n.toFixed(2)}`;
-}
 
 function SubgradeTile({ label, score, notes }: { label: string; score: number; notes: string }) {
   return (

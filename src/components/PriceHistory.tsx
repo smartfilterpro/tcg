@@ -13,6 +13,7 @@
 // up: flat until the day it changed.
 
 import { useEffect, useState } from "react";
+import { money } from "@/lib/money";
 
 interface Point {
   date: string;
@@ -42,10 +43,6 @@ function stepPath(points: Point[]): string {
     d += ` H ${x(points[i])} V ${y(points[i])}`;
   }
   return d;
-}
-
-function money(n: number): string {
-  return `$${n.toFixed(2)}`;
 }
 
 export default function PriceHistory({ cardId }: { cardId: string }) {
