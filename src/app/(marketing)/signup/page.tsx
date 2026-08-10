@@ -51,20 +51,23 @@ const CHOICES: Record<
  *
  *  "Try again" is honest advice here, not a shrug: a signup that failed to
  *  send left nothing behind, and a second signup for an address that exists
- *  but was never confirmed re-sends the confirmation rather than refusing. */
-function signupMessage(raw: string): string {
-  const text = raw.toLowerCase();
-  if (
-    text.includes("deadline") ||
-    text.includes("timeout") ||
-    text.includes("timed out") ||
-    text.includes("error sending") ||
-    text.includes("504") ||
-    text.includes("gateway")
-  ) {
-    return "We couldn't send your confirmation email — the mail server took too long to answer. Nothing was lost, so press Create account again.";
-  }
-  if (text.includes("rate limit") || text.includes("too many") || text.includes("429")) {
+ *  but was never confirmed re-sends the confirmation rather than refusing.
+ *
+ *  The status code leads, because the prose can't be trusted. supabase-js
+ *  builds its message from the response body and falls back to
+ *  JSON.stringify when the body carries no message of its own — so a
+ *  gateway timeout, whose body is empty, reaches the form as the two
+ *  characters "{}". Matching on words alone missed the single most common
+ *  failure there is. */
+const MAIL_FAILED =
+  "We couldn't send your confirmation email — the mail server didn't answer in time. Nothing was lost, so press Create my account again.";
+
+function signupMessage(raw: string, status?: number): string {
+  const text = (raw ?? "").toLowerCase();
+  // "{}" and its cousins are what's left when the server said nothing at all.
+  const silent = !raw || raw === "{}" || raw === "[object Object]" || raw === "undefined";
+
+  if (status === 429 || text.includes("rate limit") || text.includes("too many")) {
     return "That's a few too many attempts in a row. Wait a minute and try again.";
   }
   if (text.includes("already registered")) {
@@ -73,7 +76,21 @@ function signupMessage(raw: string): string {
   if (text.includes("failed to fetch") || text.includes("networkerror")) {
     return "We couldn't reach the server. Check your connection and try again.";
   }
-  return raw;
+  if (
+    (status != null && status >= 500) ||
+    status === 408 ||
+    silent ||
+    text.includes("deadline") ||
+    text.includes("timeout") ||
+    text.includes("timed out") ||
+    text.includes("error sending") ||
+    text.includes("gateway")
+  ) {
+    return MAIL_FAILED;
+  }
+  // Anything genuinely new keeps its own words, plus the code, so that a
+  // screenshot is enough to work from.
+  return status ? `${raw} (${status})` : raw;
 }
 
 export default function SignupPage() {
@@ -167,7 +184,13 @@ export default function SignupPage() {
           },
         },
       });
-      if (err) throw new Error(err.message);
+      // Not rethrown: an AuthError carries the HTTP status, and new Error()
+      // would drop the one field worth having.
+      if (err) {
+        setError(signupMessage(err.message, err.status));
+        setBusy(false);
+        return;
+      }
       if (data.session) {
         // Email confirmations are off in this Supabase project: the account
         // is live immediately, so go straight on to payment.
