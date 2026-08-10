@@ -921,6 +921,11 @@ const JOB_STORAGE_KEY = "pokedeck-build-job";
 export default function DecksPage() {
   const credits = useCredits();
   const [decks, setDecks] = useState<Deck[]>([]);
+  // The rest of the household's, read-only. Kept apart from `decks` rather
+  // than flagged inside it: every action on this page — edit, delete, share,
+  // the free-tier deck count — means "mine", and one merged list would have
+  // to remember that in a dozen places.
+  const [familyDecks, setFamilyDecks] = useState<Deck[]>([]);
   const [styleNotes, setStyleNotes] = useState("");
   const [styleSaved, setStyleSaved] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -1020,6 +1025,7 @@ export default function DecksPage() {
       .then(({ ok, j }) => {
         if (!ok) throw new Error(j.error || "load failed");
         setDecks(j.decks ?? []);
+        setFamilyDecks(j.family ?? []);
       })
       .catch((e) => {
         const detail = e instanceof Error ? e.message : "load failed";
@@ -1191,6 +1197,12 @@ export default function DecksPage() {
     trainer: cards.filter((c) => c.category === "trainer"),
     energy: cards.filter((c) => c.category === "energy"),
   });
+
+  // Someone else's deck opens in the same viewer, minus everything that
+  // would change it. Identity by list membership rather than by comparing
+  // user ids, because the page never needed to know its own id before and
+  // this is not a good reason to start.
+  const viewingIsFamily = !!viewing && familyDecks.some((d) => d.id === viewing.id);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -1366,6 +1378,33 @@ export default function DecksPage() {
         )}
       </div>
 
+      {/* The rest of the house. Only rendered when there is one, so a solo
+          account never sees an empty heading asking what it's for. */}
+      {familyDecks.length > 0 && (
+        <div className="card-panel p-4">
+          <h2 className="mb-2 font-semibold">Family decks</h2>
+          <p className="mb-2 text-xs text-slate-500">
+            Everyone on your family plan can see each other&apos;s decks. You can look and
+            borrow ideas; only the person who built one can change it.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {familyDecks.map((deck) => (
+              <button
+                key={deck.id}
+                className="card-panel p-4 text-left hover:shadow-md"
+                onClick={() => setViewing(deck)}
+              >
+                <div className="font-bold">{deck.name}</div>
+                <div className="text-xs text-slate-500">
+                  {deck.owner_name} · {(deck.cards ?? []).reduce((s, c) => s + c.quantity, 0)} cards
+                  · {new Date(deck.created_at).toLocaleDateString()}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {viewing && (
         <Modal onClose={() => setViewing(null)} size="xl" labelledBy="deck-modal-title">
           <>
@@ -1379,6 +1418,12 @@ export default function DecksPage() {
               </h2>
               <ModalClose onClose={() => setViewing(null)} />
             </div>
+            {viewingIsFamily ? (
+              <p className="mt-2 text-sm text-brand-ink3">
+                Built by {viewing.owner_name ?? "someone in your family"} — you can read it and
+                try the opening hand, but only they can change it.
+              </p>
+            ) : (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <button
                 className="btn text-sm text-poke-blue hover:bg-poke-blue/10"
@@ -1423,7 +1468,8 @@ export default function DecksPage() {
                 Delete
               </button>
             </div>
-            {!credits.freeTier && <DeckDirectShares deckId={viewing.id} />}
+            )}
+            {!viewingIsFamily && !credits.freeTier && <DeckDirectShares deckId={viewing.id} />}
 
             {/* Two columns once there's room for them. Everything used to be
                 one stack, so on a wide screen the write-up ran as a narrow
@@ -1450,15 +1496,20 @@ export default function DecksPage() {
                   />
                 )}
                 <HandSimulator getCards={() => viewing.cards ?? []} />
-                <CoachBox
-                  deck={{
-                    name: viewing.name,
-                    strategy: viewing.strategy,
-                    cards: viewing.cards ?? [],
-                  }}
-                  deckId={viewing.id}
-                  onEdited={() => reloadDeck(viewing.id)}
-                />
+                {/* No coaching on someone else's deck: it would spend the
+                    household's credits to produce edits that can't be
+                    applied, since the write policies are still owner-only. */}
+                {!viewingIsFamily && (
+                  <CoachBox
+                    deck={{
+                      name: viewing.name,
+                      strategy: viewing.strategy,
+                      cards: viewing.cards ?? [],
+                    }}
+                    deckId={viewing.id}
+                    onEdited={() => reloadDeck(viewing.id)}
+                  />
+                )}
               </div>
             </div>
           </>

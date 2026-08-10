@@ -426,6 +426,9 @@ export interface Deck {
   shared?: boolean;
   /** Who a shared deck is visible to: the whole group or accepted pals only. */
   share_scope?: "everyone" | "friends";
+  /** Set only on decks belonging to someone else in your family, where the
+   *  whole point is knowing whose it is. Never stored — the API fills it in. */
+  owner_name?: string;
   created_at: string;
 }
 
