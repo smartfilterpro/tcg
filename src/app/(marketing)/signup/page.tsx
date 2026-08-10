@@ -39,6 +39,43 @@ const CHOICES: Record<
   },
 };
 
+/** Supabase's signup errors, said in English.
+ *
+ *  GoTrue sends the confirmation email inside the same transaction that
+ *  creates the account, so when the mail server is slow or unreachable the
+ *  whole signup rolls back and what reaches the form is "context deadline
+ *  exceeded", or a bare 504, or "Error sending confirmation email". All true,
+ *  all useless to someone who only wants an account. Mail is the one part of
+ *  signing up that we don't control, which makes it the part that most needs
+ *  a human sentence and a way forward.
+ *
+ *  "Try again" is honest advice here, not a shrug: a signup that failed to
+ *  send left nothing behind, and a second signup for an address that exists
+ *  but was never confirmed re-sends the confirmation rather than refusing. */
+function signupMessage(raw: string): string {
+  const text = raw.toLowerCase();
+  if (
+    text.includes("deadline") ||
+    text.includes("timeout") ||
+    text.includes("timed out") ||
+    text.includes("error sending") ||
+    text.includes("504") ||
+    text.includes("gateway")
+  ) {
+    return "We couldn't send your confirmation email — the mail server took too long to answer. Nothing was lost, so press Create account again.";
+  }
+  if (text.includes("rate limit") || text.includes("too many") || text.includes("429")) {
+    return "That's a few too many attempts in a row. Wait a minute and try again.";
+  }
+  if (text.includes("already registered")) {
+    return "That address already has an account. Sign in instead, or reset your password if you've forgotten it.";
+  }
+  if (text.includes("failed to fetch") || text.includes("networkerror")) {
+    return "We couldn't reach the server. Check your connection and try again.";
+  }
+  return raw;
+}
+
 export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -47,6 +84,7 @@ export default function SignupPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [verifySent, setVerifySent] = useState(false);
+  const [resent, setResent] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   const [nextPath, setNextPath] = useState<string | null>(null);
 
   // /signup?plan=pro from the pricing page. The param used to be dropped, so
@@ -75,6 +113,34 @@ export default function SignupPage() {
   const next = nextPath;
   const destination = next ?? (paid ? `/api/billing/checkout?plan=${plan}` : "/onboarding");
 
+  /** Where the confirmation link comes back to. Shared by the first send and
+   *  any resend, because a resend that landed somewhere else would drop a
+   *  paid plan or an invitation on the floor. */
+  function confirmRedirect() {
+    return `${window.location.origin}/auth/callback?next=${encodeURIComponent(destination)}`;
+  }
+
+  /** Ask for the confirmation email again.
+   *
+   *  The old copy sent people who saw nothing arrive back to the form to
+   *  "try a different address", which is the wrong advice for the common
+   *  case — the address was right and the message was slow, filtered, or
+   *  lost. There was no way to simply ask for another. */
+  async function resend() {
+    setResent("sending");
+    try {
+      const supabase = createClient();
+      const { error: err } = await supabase.auth.resend({
+        type: "signup",
+        email: email.trim().toLowerCase(),
+        options: { emailRedirectTo: confirmRedirect() },
+      });
+      setResent(err ? "failed" : "sent");
+    } catch {
+      setResent("failed");
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!agreed) {
@@ -89,7 +155,7 @@ export default function SignupPage() {
         email: email.trim().toLowerCase(),
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(destination)}`,
+          emailRedirectTo: confirmRedirect(),
           data: {
             // Stamped into the profile by the auth callback once the email is
             // verified — the box they just ticked must not be asked twice.
@@ -110,7 +176,7 @@ export default function SignupPage() {
       }
       setVerifySent(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      setError(signupMessage(err instanceof Error ? err.message : "Something went wrong"));
     }
     setBusy(false);
   }
@@ -127,12 +193,35 @@ export default function SignupPage() {
         }
       >
         <p className="text-[13.5px] leading-[1.6] text-brand-ink3">
-          Nothing arriving? Check spam, or{" "}
-          <button className="font-medium text-brand-accent hover:underline" onClick={() => setVerifySent(false)}>
+          Nothing arriving? Check spam,{" "}
+          <button
+            className="font-medium text-brand-accent hover:underline disabled:opacity-60 disabled:hover:no-underline"
+            onClick={resend}
+            disabled={resent === "sending" || resent === "sent"}
+          >
+            {resent === "sending"
+              ? "sending…"
+              : resent === "sent"
+                ? "sent again"
+                : "send it again"}
+          </button>
+          , or{" "}
+          <button
+            className="font-medium text-brand-accent hover:underline"
+            onClick={() => {
+              setVerifySent(false);
+              setResent("idle");
+            }}
+          >
             try a different address
           </button>
           .
         </p>
+        {resent === "failed" && (
+          <p className="text-[13.5px] leading-[1.6] text-brand-ink3">
+            That one didn&apos;t go through. Give it a moment and try once more.
+          </p>
+        )}
       </AuthShell>
     );
   }
