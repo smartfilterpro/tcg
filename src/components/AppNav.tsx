@@ -25,7 +25,7 @@ export default function AppNav({ items }: { items: AppNavItem[] }) {
           <Link
             key={item.href}
             href={item.href}
-            className={`flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 ${
+            className={`flex items-center gap-1.5 whitespace-nowrap border-b-2 px-2 sm:px-3 ${
               active
                 ? "border-brand-highlight text-white"
                 : "border-transparent text-dark-ink3 hover:text-white"

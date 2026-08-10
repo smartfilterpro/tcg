@@ -84,11 +84,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             >
               {initialsFor(auth.profile?.display_name, auth.profile?.email)}
             </Link>
+            {/* Support is linked from every footer, so on a phone the nav
+                needs this width more than the bar needs the icon. Sign-out
+                below stays at every size: it is the way out. */}
             <Link
               href="/support"
               aria-label="Help & support"
               title="Help & support"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white/70 hover:bg-white/10"
+              className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-full text-white/70 hover:bg-white/10 sm:flex"
             >
               <svg
                 width="17"

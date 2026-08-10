@@ -379,6 +379,37 @@ export default function AdminPage() {
     load();
   }
 
+  /** Comp a plan by hand.
+   *
+   *  Plans are otherwise written only by the Stripe webhook, which leaves no
+   *  way to put your own account on Family — you'd be paying yourself, minus
+   *  the card fee — or to make good on a checkout that went wrong. The server
+   *  refuses when Stripe is already the source of truth for that account. */
+  async function setPlan(u: Profile) {
+    const current = u.plan ?? "free";
+    const answer = prompt(
+      `Plan for ${u.display_name || u.email}: free, pro or family.\n\n` +
+        `This comps the plan — no Stripe subscription is created and nothing renews or ` +
+        `bills. Refused if they already have a live subscription.`,
+      current
+    );
+    if (answer == null) return;
+    const plan = answer.trim().toLowerCase();
+    if (!["free", "pro", "family"].includes(plan)) {
+      setError("Plan must be free, pro or family.");
+      return;
+    }
+    const res = await fetch(`/api/admin/users/${u.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan }),
+    });
+    const json = await res.json();
+    if (!res.ok) setError(json.error);
+    else setMessage(`${u.display_name || u.email} is now on ${plan}.`);
+    load();
+  }
+
   async function setAiBudget(u: Profile) {
     const current = u.ai_budget_usd != null ? Number(u.ai_budget_usd) : 10;
     const answer = prompt(
@@ -732,6 +763,12 @@ export default function AdminPage() {
                         </>
                       );
                     })()}
+                    {amAdmin && (
+                      <button className="btn text-xs" onClick={() => setPlan(u)}>
+                        Plan: {u.plan ?? "free"}
+                        {u.plan_comped === true && " (comped)"}
+                      </button>
+                    )}
                     <button
                       className={`btn text-xs ${
                         u.suspended === true
@@ -1509,9 +1546,10 @@ function CardImportPanel() {
 interface BusinessData {
   kpis: {
     mrr: number; payingCustomers: number; totalAccounts: number; aiCost30: number;
+    memberAiCost30: number; staffAiCost30: number;
     revenue30: number; grossMarginPct: number | null; conversionPct: number | null;
   };
-  months: Array<{ label: string; revenue: number; cost: number }>;
+  months: Array<{ label: string; revenue: number; cost: number; staffCost: number }>;
   planMix: Array<{ label: string; count: number; mrr: number }>;
   credits: {
     granted30: number; spent30: number; spentPct: number | null;
@@ -1663,6 +1701,13 @@ function BusinessDashboard({ priceCron }: { priceCron: string | null }) {
           "AI cost 30d",
           `$${k.aiCost30.toFixed(2)}`,
           <>
+            {/* Serving members, and running the place. A catalogue sweep or
+                an afternoon of testing lands in the same endpoints a
+                member's questions do, so the split is the only way to tell
+                what the product costs from what you cost. */}
+            members ${k.memberAiCost30.toFixed(2)}
+            {k.staffAiCost30 > 0 && <> · staff ${k.staffAiCost30.toFixed(2)}</>}
+            <br />
             {costNote}
             {costDelta != null && <> · {delta(costDelta, "%", false, prevLabel)}</>}
           </>
@@ -1671,7 +1716,7 @@ function BusinessDashboard({ priceCron }: { priceCron: string | null }) {
           "Gross margin",
           k.grossMarginPct == null ? "—" : `${k.grossMarginPct}%`,
           <>
-            target {MARGIN_TARGET}%
+            on members · target {MARGIN_TARGET}%
             {marginDelta != null && <> · {delta(marginDelta, "pt", true, prevLabel)}</>}
           </>,
           // The owner's dial: green at or above target, amber within ten

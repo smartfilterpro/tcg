@@ -76,6 +76,8 @@ async function handleSubscription(admin: ReturnType<typeof createAdminClient>, s
     .from("profiles")
     .update({
       plan,
+      // Whatever this account was before, it is a paying customer now.
+      plan_comped: false,
       stripe_subscription: str(sub.id),
       // Anchors credit cycles to the billing period from here on.
       billing_anchor: periodStart ? new Date(periodStart * 1000).toISOString() : null,

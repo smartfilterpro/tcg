@@ -25,7 +25,10 @@ export async function GET() {
     const [profilesRes, usageRes, ledgerRes, boostsRes, scansRes, ticketsRes, stateRes, sharedRes, refusedRes] =
       await Promise.all([
         fetchAllRows(() =>
-          admin.from("profiles").select("id, email, display_name, plan, role, created_at").order("id")
+          admin
+            .from("profiles")
+            .select("id, email, display_name, plan, plan_comped, role, created_at")
+            .order("id")
         ),
         fetchAllRows(() =>
           admin
@@ -91,17 +94,36 @@ export async function GET() {
     );
 
     // ===== per-user & per-month cost =====
+    //
+    // Split by who spent it. Staff — admins and moderators — are not
+    // customers: their usage is the cost of running the place, not the cost
+    // of serving anybody, and a catalogue sweep or an afternoon of testing
+    // lands in the same endpoints a member's questions do. Left mixed in, a
+    // busy operator makes the margin on real customers look far worse than
+    // it is, and the concentration figure just finds the operator.
+    //
+    // Both halves are reported. Nothing is hidden — staff spend is real
+    // money leaving, it is simply a different line.
+    const staffIds = new Set(
+      profiles.filter((p) => p.role === "admin" || p.role === "moderator").map((p) => p.id as string)
+    );
     const cost30ByUser = new Map<string, number>();
     const costByMonth = new Map<string, number>();
+    const staffByMonth = new Map<string, number>();
     const costByModel = new Map<string, number>();
     const costByEndpoint30 = new Map<string, number>();
     let cost30 = 0;
+    let staffCost30 = 0;
     for (const r of usage) {
       const cost = rowCostUsd(r as Parameters<typeof rowCostUsd>[0]);
       const at = r.created_at as string;
-      costByMonth.set(at.slice(0, 7), (costByMonth.get(at.slice(0, 7)) ?? 0) + cost);
+      const month = at.slice(0, 7);
+      const isStaff = staffIds.has(r.user_id as string);
+      costByMonth.set(month, (costByMonth.get(month) ?? 0) + cost);
+      if (isStaff) staffByMonth.set(month, (staffByMonth.get(month) ?? 0) + cost);
       if (at >= d30) {
         cost30 += cost;
+        if (isStaff) staffCost30 += cost;
         const uid = r.user_id as string;
         cost30ByUser.set(uid, (cost30ByUser.get(uid) ?? 0) + cost);
         const model = ((r.model as string) ?? "unknown").replace(/-\d{8}$/, "");
@@ -127,24 +149,41 @@ export async function GET() {
       const m = (b.created_at as string).slice(0, 7);
       revByMonth.set(m, (revByMonth.get(m) ?? 0) + ((b.amount_cents as number) ?? 0) / 100);
     }
-    // monthly_grant deltas map back to their plan price.
+    // A monthly grant means somebody is on a plan; the plan says what they
+    // pay. Two things this used to get wrong.
+    //
+    // It priced by the size of the grant — 2,000 or more meant Family. That
+    // threshold outlived the grant it was written for: Family is 1,500 now,
+    // so every Family customer had been quietly counted as a Pro one, and
+    // the chart under-reported real income.
+    //
+    // And it counted every grant as revenue, including the comped ones.
+    // Admins and moderators are given their plans; billing them would be
+    // absurd and so is booking their grants as money that came in.
+    const planPrice: Record<string, number> = { pro: 9, family: 19 };
     const grantRows = (
       await fetchAllRows(() =>
         admin
           .from("credit_ledger")
-          .select("delta, created_at")
+          .select("user_id, delta, created_at")
           .eq("reason", "monthly_grant")
           .gte("created_at", m7)
           .order("created_at")
           .order("id")
       )
     ).data ?? [];
+    const byId = new Map(
+      (profiles as Array<Record<string, unknown>>).map((p) => [p.id as string, p])
+    );
     for (const g of grantRows as Array<Record<string, unknown>>) {
+      const who = byId.get(g.user_id as string);
+      if (!who || who.plan_comped === true) continue;
+      const price = planPrice[(who.plan as string) ?? "free"];
+      if (!price) continue;
       const m = (g.created_at as string).slice(0, 7);
-      const price = (g.delta as number) >= 2000 ? 19 : 9;
       revByMonth.set(m, (revByMonth.get(m) ?? 0) + price);
     }
-    const months: Array<{ label: string; revenue: number; cost: number }> = [];
+    const months: Array<{ label: string; revenue: number; cost: number; staffCost: number }> = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now);
       d.setUTCMonth(d.getUTCMonth() - i);
@@ -153,6 +192,7 @@ export async function GET() {
         label: d.toLocaleDateString(undefined, { month: "short" }),
         revenue: Math.round((revByMonth.get(key) ?? 0) * 100) / 100,
         cost: Math.round((costByMonth.get(key) ?? 0) * 100) / 100,
+        staffCost: Math.round((staffByMonth.get(key) ?? 0) * 100) / 100,
       });
     }
 
@@ -168,10 +208,19 @@ export async function GET() {
       .filter((b) => (b.created_at as string) >= d30)
       .reduce((s, b) => s + ((b.credits as number) ?? 0), 0);
 
-    const costsSorted = [...cost30ByUser.values()].sort((a, b) => b - a);
+    // Concentration among CUSTOMERS. Including staff here just finds the
+    // operator, who is usually the largest single spender and is not a
+    // signal about anybody's usage but their own.
+    const costsSorted = [...cost30ByUser.entries()]
+      .filter(([id]) => !staffIds.has(id))
+      .map(([, v]) => v)
+      .sort((a, b) => b - a);
     const topN = Math.max(1, Math.ceil(costsSorted.length * 0.05));
+    const memberCost30 = cost30 - staffCost30;
     const top5Share =
-      cost30 > 0 ? costsSorted.slice(0, topN).reduce((s, v) => s + v, 0) / cost30 : 0;
+      memberCost30 > 0
+        ? costsSorted.slice(0, topN).reduce((s, v) => s + v, 0) / memberCost30
+        : 0;
 
     // ===== customers table =====
     const boost30ByUser = new Map<string, number>();
@@ -186,7 +235,10 @@ export async function GET() {
         const id = p.id as string;
         const plan = ((p.plan as string) ?? "free") as "free" | "pro" | "family";
         const cost = cost30ByUser.get(id) ?? 0;
-        const revCents = (PLAN_CENTS[plan] ?? 0) + (boost30ByUser.get(id) ?? 0);
+        // A comped plan brings in nothing. Boosts still count — those are
+        // bought with real money whoever is buying them.
+        const revCents =
+          (p.plan_comped === true ? 0 : (PLAN_CENTS[plan] ?? 0)) + (boost30ByUser.get(id) ?? 0);
         return {
           email: (p.email as string) ?? "",
           name: ((p.display_name as string | null) ?? "").trim() || null,
@@ -385,10 +437,17 @@ export async function GET() {
         payingCustomers: byPlan.pro + byPlan.family,
         totalAccounts: nonAdmin.length,
         aiCost30: Math.round(cost30 * 100) / 100,
+        // What serving customers cost, and what running the place cost.
+        memberAiCost30: Math.round(memberCost30 * 100) / 100,
+        staffAiCost30: Math.round(staffCost30 * 100) / 100,
         revenue30: revenue30Cents / 100,
+        // Margin on customers. Staff usage is an operating cost, not the
+        // cost of the thing being sold, and folding it in here says the
+        // product is unprofitable when what it means is that the operator
+        // had a busy week.
         grossMarginPct:
           revenue30Cents > 0
-            ? Math.round(((revenue30Cents / 100 - cost30) / (revenue30Cents / 100)) * 1000) / 10
+            ? Math.round(((revenue30Cents / 100 - memberCost30) / (revenue30Cents / 100)) * 1000) / 10
             : null,
         conversionPct:
           nonAdmin.length > 0

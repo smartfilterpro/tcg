@@ -389,6 +389,9 @@ export interface Profile {
   stripe_subscription?: string | null;
   /** Set while a cancellation is pending: paid access runs to this date. */
   plan_expires_at?: string | null;
+  /** True when an admin granted the plan rather than it being paid for.
+   *  Kept out of revenue: staff aren't customers. */
+  plan_comped?: boolean;
   /** Stripe billing-period start; credit cycles anchor here once present. */
   billing_anchor?: string | null;
   created_at: string;

@@ -456,6 +456,20 @@ export default function AccountPage() {
         </div>
       )}
 
+      {/* ---- sign out ---- */}
+      {/* Until now the only way out of the app was an icon in the header,
+          which is the first thing that gets hidden when a small screen runs
+          out of room — and the last thing that should be. */}
+      <div className={PANEL}>
+        <div className={`${TITLE} mb-1`}>Sign out</div>
+        <p className="mb-2.5 text-[13px] leading-[1.55] text-brand-ink2">
+          Signs you out on this device. Your collection, decks and credits are untouched.
+        </p>
+        <form action="/api/auth/logout" method="post">
+          <button className={`${PILL_QUIET} self-start`}>Sign out</button>
+        </form>
+      </div>
+
       {/* ---- delete ---- */}
       <div className="rounded-[18px] border border-brand-line bg-brand-sunken p-[22px]">
         <div className={`${TITLE} mb-1`}>Close this account</div>
