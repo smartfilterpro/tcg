@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { APP_NAME } from "@/lib/branding";
 import JoinFamilyForm from "./JoinFamilyForm";
 
@@ -31,17 +32,48 @@ export default async function JoinFamilyPage({
   const { token } = await params;
   const supabase = await createClient();
 
-  // Security-definer lookup: returns nothing for an expired, answered or
-  // revoked invitation, so a dead link and a wrong one look the same.
+  // Read directly, with the service role, rather than through the
+  // security-definer function.
   //
-  // The ERROR is a different thing entirely, and this used to throw it away.
-  // A missing function, a database fault and a genuinely dead invitation all
-  // rendered the same "isn't valid" — so the one failure a person could act
-  // on was indistinguishable from the two they couldn't, and nobody could
-  // tell which they were looking at. The same shape of bug as a card read
-  // that never happened looking exactly like one that failed.
-  const { data, error } = await supabase.rpc("family_invite_by_token", { t: token });
-  const invite = (Array.isArray(data) ? data[0] : data) as Invite | undefined;
+  // That function exists so a visitor with no account can resolve a token,
+  // and it is the right tool for a browser. This page is not a browser — it
+  // renders on the server, where the service role is already available and
+  // the server decides what comes back. Going through PostgREST as `anon`
+  // added two ways to fail that have nothing to do with invitations: the
+  // function's EXECUTE grant, and PostgREST's schema cache, which does not
+  // know a function exists until it reloads. Both produce a valid invite
+  // that cannot be read — which is exactly what happened, and which looked
+  // from the outside like an expired link.
+  //
+  // The filter is the same one the function applied, because it is the same
+  // rule: pending, and not yet expired. The token remains the only
+  // credential, and nothing is returned to anyone who does not hold it.
+  const admin = createAdminClient();
+  const { data: row, error } = await admin
+    .from("family_invites")
+    .select("id, group_id, email, role, expires_at, invited_by")
+    .eq("token", token)
+    .eq("status", "pending")
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+
+  let invite: Invite | undefined;
+  if (row) {
+    // Named separately: the inviter's name is a nicety, and failing to find
+    // it must not turn a good invitation into a dead one. The function used
+    // an inner join here, so a missing profile row would have silently
+    // invalidated the invite.
+    const { data: inviter } = await admin
+      .from("profiles")
+      .select("display_name, email")
+      .eq("id", row.invited_by as string)
+      .maybeSingle();
+    const name =
+      ((inviter?.display_name as string | null) ?? "").trim() ||
+      ((inviter?.email as string | null) ?? "").split("@")[0] ||
+      "Someone";
+    invite = { ...(row as unknown as Invite), inviter_name: name };
+  }
 
   if (error) {
     // Logged in full, because the visitor is not the person who can fix it.
@@ -53,7 +85,7 @@ export default async function JoinFamilyPage({
     // is ours, and saying "expired" about a database fault sends them to ask
     // for a new link that will fail in exactly the same way.
     const broken = !!error;
-    const missingFunction = /family_invite_by_token|function|schema cache/i.test(
+    const needsMigration = /family_invites|does not exist|schema cache/i.test(
       error?.message ?? ""
     );
     return (
@@ -64,7 +96,7 @@ export default async function JoinFamilyPage({
           </h1>
           <p className="m-0 text-[14.5px] leading-[1.6] text-brand-ink3">
             {broken ? (
-              missingFunction ? (
+              needsMigration ? (
                 <>
                   Invitations need a one-time database update — run{" "}
                   <span className="font-mono text-[13px]">
