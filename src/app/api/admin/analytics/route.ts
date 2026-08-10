@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, AuthError } from "@/lib/auth";
-import { estimateCostUsd } from "@/lib/usage";
+import { rowCostUsd } from "@/lib/usage";
 import { itemPrice } from "@/lib/types";
 import { lastPriceRefresh } from "@/lib/priceRefresh";
 import { fetchAllRows } from "@/lib/fetchAll";
@@ -99,7 +99,7 @@ export async function GET() {
         () =>
           admin
             .from("ai_usage")
-            .select("model, input_tokens, output_tokens")
+            .select("model, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, created_at")
             .gte("created_at", monthStart.toISOString())
             .order("created_at")
             .order("id"),
@@ -139,7 +139,7 @@ export async function GET() {
     }
 
     const aiCostMonth = (usageMonth ?? []).reduce(
-      (s, r) => s + estimateCostUsd(r.model ?? "", r.input_tokens ?? 0, r.output_tokens ?? 0),
+      (s, r) => s + rowCostUsd(r),
       0
     );
 

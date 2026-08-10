@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireModerator, AuthError } from "@/lib/auth";
-import { estimateCostUsd } from "@/lib/usage";
+import { rowCostUsd } from "@/lib/usage";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { errorJson } from "@/lib/apiError";
 
@@ -28,7 +28,7 @@ export async function GET() {
         () =>
           admin
             .from("ai_usage")
-            .select("user_id, model, input_tokens, output_tokens, created_at")
+            .select("user_id, model, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, created_at")
             .order("created_at", { ascending: false })
             .order("id"),
         50000
@@ -53,7 +53,7 @@ export async function GET() {
       u.calls += 1;
       u.inputTokens += row.input_tokens ?? 0;
       u.outputTokens += row.output_tokens ?? 0;
-      const cost = estimateCostUsd(row.model ?? "", row.input_tokens ?? 0, row.output_tokens ?? 0);
+      const cost = rowCostUsd(row);
       u.costUsd += cost;
       const t = new Date(row.created_at).getTime();
       if (t >= cutoff30d) u.costUsd30d += cost;

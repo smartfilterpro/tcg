@@ -3,7 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
-import { readCardTextOnce } from "@/lib/cardText";
+import { readCardTextOnce, shareTextWithPrintings } from "@/lib/cardText";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
@@ -33,6 +33,11 @@ const HISTORY_PAGE = 100;
  *  component mounts on every page — without a cutoff, one stranded row
  *  would greet every panel-open with an eternal "Thinking…". */
 const RESUME_WINDOW_MS = 5 * 60 * 1000;
+
+/** How often the partial answer is written to the job row while it is being
+ *  generated. Fast enough to read as live, slow enough that a long reply
+ *  costs tens of writes rather than thousands. */
+const PARTIAL_WRITE_MS = 700;
 
 const MIGRATION_MSG =
   "The chat needs a one-time database update — run supabase/migrations/029_assistant_chat.sql.";
@@ -334,43 +339,84 @@ async function runCardLookup(
   // rather than once per question. Two per lookup keeps a broad question
   // from turning into a bill.
   const MAX_VISION_READS = 2;
-  let visionReads = 0;
   if (detailed) {
-    for (const row of rows) {
-      if (!("battle_data" in row) || row.battle_data != null) continue;
-      const id = row.id as string;
-      if (id.startsWith("custom-")) continue;
-      try {
-        // Free sources first, then the card's own picture.
-        //
-        // Neither free database catalogues everything — promo bundles and
-        // brand-new sets arrive with a name, a price and a photograph and
-        // nothing about what the card does. For those the picture IS the
-        // source, and transcribing it is not the same kind of act as
-        // recalling a card from training data: it is reading what is
-        // printed, from the image a person would read it from.
-        let bd = id.startsWith("tcgdex-")
-          ? await getTcgdexBattleDataById(id)
-          : await getBattleDataById(id);
+    const admin = createAdminClient();
+    const missing = rows.filter(
+      (r) => "battle_data" in r && r.battle_data == null && !(r.id as string).startsWith("custom-")
+    );
 
-        if (!bd && visionReads < MAX_VISION_READS) {
-          visionReads += 1;
+    // Free sources first, and all at once.
+    //
+    // Neither free database catalogues everything — promo bundles and
+    // brand-new sets arrive with a name, a price and a photograph and
+    // nothing about what the card does. For those the picture IS the
+    // source, and transcribing it is not the same kind of act as recalling
+    // a card from training data: it is reading what is printed, from the
+    // image a person would read it from.
+    //
+    // These were six sequential round trips to somebody else's server, one
+    // after another, with the person watching. They do not depend on each
+    // other, so they no longer wait for each other.
+    const looked = await Promise.all(
+      missing.map(async (row) => {
+        const id = row.id as string;
+        try {
+          const bd = id.startsWith("tcgdex-")
+            ? await getTcgdexBattleDataById(id)
+            : await getBattleDataById(id);
+          return { row, bd };
+        } catch {
+          return { row, bd: null };
+        }
+      })
+    );
+
+    const unread: Array<Record<string, unknown>> = [];
+    for (const { row, bd } of looked) {
+      if (!bd) {
+        unread.push(row);
+        continue;
+      }
+      row.battle_data = bd;
+      await admin.from("cards").update({ battle_data: bd }).eq("id", row.id as string);
+      // The other printings of this card say the same words; filling them
+      // now is what stops the next question paying to read one of them.
+      await shareTextWithPrintings(admin, row.id as string, bd);
+    }
+
+    // Then the picture, for the few the databases don't carry. Capped
+    // because it is the most expensive thing this tool can do — and run
+    // together, because two reads that each take seconds should take as
+    // long as one of them, not both.
+    await Promise.all(
+      unread.slice(0, MAX_VISION_READS).map(async (row) => {
+        try {
           // Reads once and remembers the outcome — including a failure, so
           // an unreadable card is not re-read and re-charged on every
-          // question about it. Writes battle_data itself on success.
-          bd = await readCardTextOnce(
-            createAdminClient(),
+          // question about it. Writes battle_data itself on success, and
+          // copies it to the card's other printings.
+          const bd = await readCardTextOnce(
+            admin,
             row as unknown as Parameters<typeof readCardTextOnce>[1],
             userId
           );
           if (bd) row.battle_data = bd;
-        } else if (bd) {
-          row.battle_data = bd;
-          await createAdminClient().from("cards").update({ battle_data: bd }).eq("id", id);
+        } catch {
+          // The card still answers with everything else it knows.
         }
-      } catch {
-        // The card still answers with everything else it knows.
-      }
+      })
+    );
+
+    // A read fills its siblings in the database, but the rows already in
+    // hand are stale. Mega Starmie ex returns four printings and only two
+    // may be read; without this the answer would say it has no text for the
+    // other two, having just written that very text to them.
+    for (const row of rows) {
+      if (row.battle_data != null) continue;
+      const twin = rows.find(
+        (r) => r !== row && r.name === row.name && r.set_name === row.set_name && r.battle_data != null
+      );
+      if (twin) row.battle_data = twin.battle_data;
     }
   }
 
@@ -432,8 +478,10 @@ async function runChat(opts: {
     refused?: boolean,
     meta?: unknown
   ) => Promise<void>;
+  /** The answer as it is being written, for showing before it is finished. */
+  onPartial?: (soFar: string) => void;
 }): Promise<{ answer: string; refused: boolean; pendingEdit: DeckEditProposal | null }> {
-  const { supabase, userId, text, save } = opts;
+  const { supabase, userId, text, save, onPartial } = opts;
 
   // History is read before the user turn is saved, so the prompt below can
   // append the question exactly once.
@@ -487,6 +535,7 @@ async function runChat(opts: {
     // taking the model's next move away without offering another is how a
     // deck-building question ends in an empty turn.
     if (finalRound) addFinalRoundNote(messages);
+    const effort = chatEffort(usedTools, finalRound);
     response = await completeWithRoom(
       client,
       {
@@ -497,7 +546,7 @@ async function runChat(opts: {
         max_tokens: 12000,
         system,
         tools: [CARD_LOOKUP_TOOL, SET_COMPLETION_TOOL, DECK_EDIT_TOOL],
-        output_config: { effort: chatEffort(usedTools, finalRound) },
+        output_config: { effort },
         // The last permitted round forbids another lookup, so the model
         // answers with what it has instead of ending mid-thought on a tool
         // call nothing will ever run.
@@ -512,7 +561,8 @@ async function runChat(opts: {
         ...(finalRound ? { tool_choice: { type: "none" as const } } : {}),
         messages,
       },
-      (r) => logAiUsage(supabase, userId, "chat", MODEL, r.usage)
+      (r) => logAiUsage(supabase, userId, "chat", MODEL, r.usage, effort),
+      onPartial
     );
     if (response.stop_reason !== "tool_use") break;
     usedTools = true;
@@ -620,7 +670,32 @@ export async function POST(req: Request) {
     }
     const jobId = job.id as string;
 
-    void runChat({ supabase, userId: user.id, text, save })
+    // The reply, shown as it is written.
+    //
+    // The stream stays server-side and the browser keeps polling — a held
+    // open connection is exactly what the job design was built to avoid,
+    // because a sleeping phone drops it. Writing the partial answer to the
+    // row the poller already reads gets progressive text without giving
+    // that up.
+    //
+    // Throttled: the model produces tokens far faster than a row is worth
+    // rewriting, and the poller only looks about once a second anyway.
+    let lastWrite = 0;
+    let lastText = "";
+    const onPartial = (soFar: string) => {
+      const now = Date.now();
+      if (soFar === lastText) return;
+      if (now - lastWrite < PARTIAL_WRITE_MS) return;
+      lastWrite = now;
+      lastText = soFar;
+      void admin
+        .from("assistant_jobs")
+        .update({ result: { partial: soFar }, updated_at: new Date().toISOString() })
+        .eq("id", jobId)
+        .then(() => {});
+    };
+
+    void runChat({ supabase, userId: user.id, text, save, onPartial })
       .then(async (result) => {
         await admin
           .from("assistant_jobs")

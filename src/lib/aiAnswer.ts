@@ -159,9 +159,34 @@ function withNudge(system: Anthropic.MessageStreamParams["system"]) {
 export async function completeWithRoom(
   client: Anthropic,
   params: Anthropic.MessageStreamParams,
-  onResponse?: (response: Anthropic.Message) => Promise<void> | void
+  onResponse?: (response: Anthropic.Message) => Promise<void> | void,
+  /** Called with the answer so far, as it is written.
+   *
+   *  The reply already arrives from the API a token at a time; until now
+   *  that was collected in silence and shown all at once, so the person
+   *  waited out the whole generation staring at "Thinking…". Handing the
+   *  partial text to the caller lets it be put somewhere the browser can
+   *  see it.
+   *
+   *  Resets to the empty string at the start of each attempt, so a retry
+   *  replaces the abandoned text rather than appending to it. */
+  onText?: (soFar: string) => void
 ): Promise<Anthropic.Message> {
-  const first = await client.messages.stream(params).finalMessage();
+  /** Wraps a stream so its text is reported as it arrives. */
+  const streamed = (p: Anthropic.MessageStreamParams) => {
+    const stream = client.messages.stream(p);
+    if (onText) {
+      let soFar = "";
+      onText("");
+      stream.on("text", (delta) => {
+        soFar += delta;
+        onText(soFar);
+      });
+    }
+    return stream.finalMessage();
+  };
+
+  const first = await streamed(params);
   await onResponse?.(first);
   if (!producedNoAnswer(first)) return first;
 
@@ -171,8 +196,7 @@ export async function completeWithRoom(
   );
 
   try {
-    const second = await client.messages
-      .stream({
+    const second = await streamed({
         ...params,
         max_tokens: Math.min(RETRY_CEILING, (params.max_tokens ?? 4000) * 2),
         // The lever that actually addresses the cause: bound the reasoning
@@ -181,8 +205,7 @@ export async function completeWithRoom(
         // choice is what just failed.
         output_config: { ...(params.output_config ?? {}), effort: "medium" as const },
         system: withNudge(params.system),
-      })
-      .finalMessage();
+      });
     await onResponse?.(second);
     if (answerText(second)) return second;
 
@@ -202,13 +225,11 @@ export async function completeWithRoom(
         `second: ${answerDiagnosis(second)}. Trying once more with thinking off.`
     );
     const { output_config: _dropped, tools: _noTools, tool_choice: _noChoice, ...rest } = params;
-    const third = await client.messages
-      .stream({
-        ...rest,
-        thinking: { type: "disabled" as const },
-        system: withNudge(params.system),
-      })
-      .finalMessage();
+    const third = await streamed({
+      ...rest,
+      thinking: { type: "disabled" as const },
+      system: withNudge(params.system),
+    });
     await onResponse?.(third);
     if (answerText(third)) return third;
     console.error(`ai: STILL no answer with thinking off — ${answerDiagnosis(third)}`);
