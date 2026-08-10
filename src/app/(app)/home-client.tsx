@@ -51,6 +51,18 @@ export default function CollectionPage({
   // leave with your data" is worth more as a promise than as an upsell.
   const [items, setItems] = useState<CollectionItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Whose cards are on screen. Null means yours.
+  //
+  // A family plan is one household, so "show me hers" should be the same
+  // page with the same search, the same filters and the same card reader —
+  // not a cut-down list somewhere else. Everything that WRITES is gated on
+  // `readOnly` below; the browsing half is shared wholesale, which is the
+  // entire point.
+  const [member, setMember] = useState<{ id: string; name: string } | null>(null);
+  const [household, setHousehold] = useState<Array<{ id: string; name: string }>>([]);
+  const [meId, setMeId] = useState<string | null>(null);
+  const [amParent, setAmParent] = useState(false);
+  const [moving, setMoving] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [setFilter, setSetFilter] = useState("");
@@ -192,9 +204,34 @@ export default function CollectionPage({
     }
   }
 
+  /** Hand copies of a card to someone else in the household. */
+  async function moveCard(item: CollectionItem, toUserId: string, quantity: number) {
+    setMoving(toUserId);
+    setError(null);
+    try {
+      const res = await fetch("/api/family/collection/transfer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.id, toUserId, quantity }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't move that card.");
+      // Close the sheet when the last copy leaves — it would be describing a
+      // row that no longer exists.
+      if (json.left <= 0) setSelected(null);
+      else setSelected((s) => (s?.id === item.id ? { ...s, quantity: json.left } : s));
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't move that card.");
+    }
+    setMoving(null);
+  }
+
   async function load() {
     try {
-      const res = await fetch("/api/collection");
+      const res = await fetch(
+        member ? `/api/family/collection/${member.id}` : "/api/collection"
+      );
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
       setItems(json.items);
@@ -227,7 +264,34 @@ export default function CollectionPage({
   }, []);
 
   useEffect(() => {
+    setItems(null);
+    setSelected(null);
+    setError(null);
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [member]);
+
+  // Who else is in the house, if anyone. Silent on failure and on a solo
+  // account: no family means no switcher, and the page looks exactly as it
+  // always did.
+  useEffect(() => {
+    let live = true;
+    fetch("/api/family")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!live || !j?.group) return;
+        setMeId(j.group.meId);
+        setAmParent(j.group.myRole === "parent");
+        setHousehold(
+          (j.group.members ?? [])
+            .filter((m: { userId: string }) => m.userId !== j.group.meId)
+            .map((m: { userId: string; name: string }) => ({ id: m.userId, name: m.name }))
+        );
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
   }, []);
 
   const facets = useMemo(() => {
@@ -550,9 +614,46 @@ export default function CollectionPage({
     }
   }
 
+  /** Someone else's cards: look, don't touch. Every write below checks this,
+   *  and so does the server — the collection_items write policies are still
+   *  user_id = auth.uid(), so a slip here fails at the database too. */
+  const readOnly = member !== null;
+
+  /** The one thing you may do to a family member's collection: give them a
+   *  card, or take one of yours back. Parents can move anyone's, which is
+   *  the same authority they already have over caps and the trade board;
+   *  everyone else can only move their own. */
+  const canMoveFrom = (owner: string | null) => !readOnly || amParent || owner === meId;
+
+  /** Whose cards to show. Only rendered for a household — a solo account
+   *  sees the page exactly as it always was. */
+  const householdSwitcher = household.length > 0 && (
+    <div className="mb-3.5 flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-slate-500">Whose cards:</span>
+      {[{ id: null as string | null, name: "Mine" }, ...household].map((who) => {
+        const active = (member?.id ?? null) === who.id;
+        return (
+          <button
+            key={who.id ?? "me"}
+            className={`rounded-full border px-3 py-1 text-xs font-medium ${
+              active
+                ? "border-brand-accent bg-brand-accent text-white"
+                : "border-brand-line-strong text-brand-ink2 hover:border-brand-accent"
+            }`}
+            onClick={() => setMember(who.id ? { id: who.id, name: who.name } : null)}
+          >
+            {who.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  // Sealed product is per-account and there's no family view of it, so the
+  // tab would show YOUR boxes under someone else's name.
   const tabs = (
     <div className="mb-4 flex gap-1 border-b border-slate-200">
-      {(["cards", "sealed"] as const).map((t) => (
+      {(readOnly ? (["cards"] as const) : (["cards", "sealed"] as const)).map((t) => (
         <button
           key={t}
           onClick={() => setTab(t)}
@@ -569,7 +670,12 @@ export default function CollectionPage({
   );
 
   if (error) return <p className="text-red-600">{error}</p>;
-  if (!items) return <p className="text-slate-500">Loading your collection…</p>;
+  if (!items)
+    return (
+      <p className="text-slate-500">
+        Loading {member ? `${member.name}'s collection` : "your collection"}…
+      </p>
+    );
 
   // The sealed tab has to be reachable from the empty state too — somebody
   // whose first purchase was a booster box has an empty CARD collection and
@@ -590,20 +696,27 @@ export default function CollectionPage({
     return (
       <div>
         {tabs}
+      {householdSwitcher}
       <div className="card-panel mx-auto mt-12 max-w-md p-8 text-center">
         <div className="text-4xl">📷</div>
-        <h1 className="mt-2 text-xl font-bold">Your collection is empty</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Scan your first cards, or add them by searching the card database.
-        </p>
-        <div className="mt-4 flex justify-center gap-2">
-          <Link href="/scan" className="btn-primary">
-            Scan cards
-          </Link>
-          <button className="btn-secondary" onClick={() => setShowAdd(true)}>
-            + Add by search
-          </button>
-        </div>
+        <h1 className="mt-2 text-xl font-bold">
+          {member ? `${member.name} hasn't added any cards yet` : "Your collection is empty"}
+        </h1>
+        {!readOnly && (
+          <>
+            <p className="mt-1 text-sm text-slate-500">
+              Scan your first cards, or add them by searching the card database.
+            </p>
+            <div className="mt-4 flex justify-center gap-2">
+              <Link href="/scan" className="btn-primary">
+                Scan cards
+              </Link>
+              <button className="btn-secondary" onClick={() => setShowAdd(true)}>
+                + Add by search
+              </button>
+            </div>
+          </>
+        )}
         {showAdd && (
           <CardPickerModal
             initialQuery=""
@@ -653,7 +766,9 @@ export default function CollectionPage({
       {tabs}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-[26px] font-bold tracking-[-.025em]">My Collection</h1>
+          <h1 className="text-[26px] font-bold tracking-[-.025em]">
+            {member ? `${member.name}'s Collection` : "My Collection"}
+          </h1>
           <p className="mt-0.5 text-sm text-slate-500">
             {totals.cards.toLocaleString()} cards · {totals.unique.toLocaleString()} unique ·{" "}
             <span className="font-bold text-brand-positive">
@@ -708,21 +823,32 @@ export default function CollectionPage({
             </p>
           )}
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button className="btn-secondary" onClick={refreshPrices} disabled={refreshing}>
-            {refreshing ? "Refreshing…" : "↻ Refresh prices"}
-          </button>
-          <button className="btn-secondary" onClick={() => setShowAdd(true)}>
-            + Add by search
-          </button>
-          <Link href="/scan" className="btn-primary">
-            Bulk scan
-          </Link>
-        </div>
+        {/* Adding, scanning and refreshing all act on YOUR collection, so
+            they'd be lying about what they'd do while someone else's is on
+            screen. */}
+        {!readOnly && (
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-secondary" onClick={refreshPrices} disabled={refreshing}>
+              {refreshing ? "Refreshing…" : "↻ Refresh prices"}
+            </button>
+            <button className="btn-secondary" onClick={() => setShowAdd(true)}>
+              + Add by search
+            </button>
+            <Link href="/scan" className="btn-primary">
+              Bulk scan
+            </Link>
+          </div>
+        )}
       </div>
 
-      <CreditsMeter />
-      <BulkScanNudge cards={totals.cards} />
+      {householdSwitcher}
+
+      {!readOnly && (
+        <>
+          <CreditsMeter />
+          <BulkScanNudge cards={totals.cards} />
+        </>
+      )}
 
       {/* Artboard 02: one wrapping row — search pill, then chip-style selects. */}
       <div className="mb-3.5 flex flex-wrap items-center gap-2">
@@ -1003,6 +1129,7 @@ export default function CollectionPage({
                     <select
                       className="input min-w-0 flex-1 py-1 text-xs sm:w-auto sm:flex-none"
                       value={selected.variant ?? "normal"}
+                      disabled={readOnly}
                       onChange={(e) => changeVariant(selected, e.target.value)}
                     >
                       {[
@@ -1061,6 +1188,8 @@ export default function CollectionPage({
                   {refreshNote && (
                     <p className="m-0 text-[11px] leading-snug text-slate-500">{refreshNote}</p>
                   )}
+                  {!readOnly && (
+                  <>
                   <div className="flex items-center gap-2 pt-1">
                     <span className="shrink-0 text-xs text-slate-500">Your value $</span>
                     <input
@@ -1082,6 +1211,8 @@ export default function CollectionPage({
                     Overrides the market price — use for Pokémon Center stamps, graded cards,
                     etc. Clear the box and Set to go back to market pricing.
                   </p>
+                  </>
+                  )}
                 </dl>
               </div>
             </div>
@@ -1103,6 +1234,42 @@ export default function CollectionPage({
               />
             </div>
 
+            {/* Give it to someone in the house. Deleting from one collection
+                and searching it back into another loses the finish, the
+                notes and the custom value — and leaves a child with no
+                record that the card was ever theirs. */}
+            {household.length > 0 && canMoveFrom(selected.user_id) && (
+              <div className="mt-4 border-t border-slate-100 pt-3">
+                <label className="text-xs font-semibold text-slate-500">
+                  Move to someone in your family
+                </label>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  {(member
+                    ? [
+                        { id: meId!, name: "me" },
+                        ...household.filter((h) => h.id !== member.id),
+                      ]
+                    : household
+                  ).map((who) => (
+                    <button
+                      key={who.id}
+                      className="btn-secondary px-2.5 py-1 text-xs"
+                      disabled={moving === who.id}
+                      onClick={() => moveCard(selected, who.id, 1)}
+                    >
+                      {moving === who.id ? "Moving…" : `→ ${who.name}`}
+                    </button>
+                  ))}
+                  {selected.quantity > 1 && (
+                    <span className="text-[11px] text-slate-400">
+                      one at a time — you have {selected.quantity}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {!readOnly && (
             <div className="mt-4 border-t border-slate-100 pt-3">
               <label className="text-xs font-semibold text-slate-500">
                 Notes (e.g. “Pokémon Center stamp”, “graded PSA 9”)
@@ -1120,7 +1287,15 @@ export default function CollectionPage({
                 {notesSaved && <span className="text-xs text-green-600">Saved ✓</span>}
               </div>
             </div>
+            )}
+            {readOnly && selected.notes && (
+              <div className="mt-4 border-t border-slate-100 pt-3">
+                <div className="text-xs font-semibold text-slate-500">Their note</div>
+                <p className="mt-1 whitespace-pre-wrap text-sm">{selected.notes}</p>
+              </div>
+            )}
 
+            {!readOnly && (
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-4">
               <div className="flex items-center gap-2">
                 <button
@@ -1153,6 +1328,7 @@ export default function CollectionPage({
                 </button>
               </div>
             </div>
+            )}
           </div>
         </div>
       )}
