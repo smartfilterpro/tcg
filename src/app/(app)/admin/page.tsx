@@ -766,6 +766,7 @@ export default function AdminPage() {
                     {amAdmin && (
                       <button className="btn text-xs" onClick={() => setPlan(u)}>
                         Plan: {u.plan ?? "free"}
+                        {u.plan_comped === true && " (comped)"}
                       </button>
                     )}
                     <button

@@ -25,7 +25,10 @@ export async function GET() {
     const [profilesRes, usageRes, ledgerRes, boostsRes, scansRes, ticketsRes, stateRes, sharedRes, refusedRes] =
       await Promise.all([
         fetchAllRows(() =>
-          admin.from("profiles").select("id, email, display_name, plan, role, created_at").order("id")
+          admin
+            .from("profiles")
+            .select("id, email, display_name, plan, plan_comped, role, created_at")
+            .order("id")
         ),
         fetchAllRows(() =>
           admin
@@ -127,21 +130,38 @@ export async function GET() {
       const m = (b.created_at as string).slice(0, 7);
       revByMonth.set(m, (revByMonth.get(m) ?? 0) + ((b.amount_cents as number) ?? 0) / 100);
     }
-    // monthly_grant deltas map back to their plan price.
+    // A monthly grant means somebody is on a plan; the plan says what they
+    // pay. Two things this used to get wrong.
+    //
+    // It priced by the size of the grant — 2,000 or more meant Family. That
+    // threshold outlived the grant it was written for: Family is 1,500 now,
+    // so every Family customer had been quietly counted as a Pro one, and
+    // the chart under-reported real income.
+    //
+    // And it counted every grant as revenue, including the comped ones.
+    // Admins and moderators are given their plans; billing them would be
+    // absurd and so is booking their grants as money that came in.
+    const planPrice: Record<string, number> = { pro: 9, family: 19 };
     const grantRows = (
       await fetchAllRows(() =>
         admin
           .from("credit_ledger")
-          .select("delta, created_at")
+          .select("user_id, delta, created_at")
           .eq("reason", "monthly_grant")
           .gte("created_at", m7)
           .order("created_at")
           .order("id")
       )
     ).data ?? [];
+    const byId = new Map(
+      (profiles as Array<Record<string, unknown>>).map((p) => [p.id as string, p])
+    );
     for (const g of grantRows as Array<Record<string, unknown>>) {
+      const who = byId.get(g.user_id as string);
+      if (!who || who.plan_comped === true) continue;
+      const price = planPrice[(who.plan as string) ?? "free"];
+      if (!price) continue;
       const m = (g.created_at as string).slice(0, 7);
-      const price = (g.delta as number) >= 2000 ? 19 : 9;
       revByMonth.set(m, (revByMonth.get(m) ?? 0) + price);
     }
     const months: Array<{ label: string; revenue: number; cost: number }> = [];
@@ -186,7 +206,10 @@ export async function GET() {
         const id = p.id as string;
         const plan = ((p.plan as string) ?? "free") as "free" | "pro" | "family";
         const cost = cost30ByUser.get(id) ?? 0;
-        const revCents = (PLAN_CENTS[plan] ?? 0) + (boost30ByUser.get(id) ?? 0);
+        // A comped plan brings in nothing. Boosts still count — those are
+        // bought with real money whoever is buying them.
+        const revCents =
+          (p.plan_comped === true ? 0 : (PLAN_CENTS[plan] ?? 0)) + (boost30ByUser.get(id) ?? 0);
         return {
           email: (p.email as string) ?? "",
           name: ((p.display_name as string | null) ?? "").trim() || null,

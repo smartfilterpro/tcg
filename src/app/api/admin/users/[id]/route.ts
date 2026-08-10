@@ -115,6 +115,11 @@ export async function PATCH(req: Request, { params }: Params) {
         );
       }
       patch.plan = plan;
+      // Given, not sold. Revenue is derived from grant rows mapped back to a
+      // plan price, so an unmarked comp would report income that never
+      // arrived — and the operator's own Family plan would be the biggest
+      // imaginary customer on the chart.
+      patch.plan_comped = plan !== "free";
       // A comped plan has no billing period, so grants anchor to signup and
       // nothing expires it. Clearing the expiry matters: a stale one from an
       // old subscription would end the comp on a date nobody chose.
