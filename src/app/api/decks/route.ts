@@ -1,23 +1,88 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, AuthError } from "@/lib/auth";
 import { isFreeTier } from "@/lib/credits";
 import { FREE_DECK_LIMIT } from "@/lib/limits";
 import { nameAllowed, recordNameAttempt } from "@/lib/moderation";
-import type { DeckCardEntry, DeckSuggestion } from "@/lib/types";
+import type { Deck, DeckCardEntry, DeckSuggestion } from "@/lib/types";
 import { errorJson } from "@/lib/apiError";
+
+/** The rest of the household's decks, read-only, with whose they are.
+ *
+ *  Deliberately read through the caller's own client rather than the service
+ *  role: migration 060's policy is what decides this, so the list and the
+ *  deck page can't disagree about who may see what. Before that migration
+ *  runs the policy simply isn't there and this comes back empty, which is the
+ *  right way for a missing migration to fail.
+ *
+ *  The group lookup uses the service role because family_members is
+ *  deliberately unreadable by clients — a kid must not be able to enumerate
+ *  or edit the household. Names come the same way, and only for the handful
+ *  of people already established to be in the group. */
+async function householdDecks(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string
+): Promise<Deck[]> {
+  try {
+    const admin = createAdminClient();
+    const { data: mine } = await admin
+      .from("family_members")
+      .select("group_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!mine) return [];
+
+    const { data: members } = await admin
+      .from("family_members")
+      .select("user_id")
+      .eq("group_id", mine.group_id);
+    const others = (members ?? [])
+      .map((m) => m.user_id as string)
+      .filter((id) => id !== userId);
+    if (others.length === 0) return [];
+
+    const [{ data: decks }, { data: profiles }] = await Promise.all([
+      supabase
+        .from("decks")
+        .select("*")
+        .in("user_id", others)
+        .order("created_at", { ascending: false }),
+      admin.from("profiles").select("id, display_name, email").in("id", others),
+    ]);
+
+    const nameById = new Map(
+      (profiles ?? []).map((p) => [
+        p.id as string,
+        ((p.display_name as string | null) ?? "").trim() ||
+          ((p.email as string) ?? "").split("@")[0],
+      ])
+    );
+    return (decks ?? []).map((d) => ({
+      ...(d as Deck),
+      owner_name: nameById.get(d.user_id as string) ?? "Someone",
+    }));
+  } catch {
+    // A household without decks is a small loss; a decks page that won't load
+    // is a large one. Never let this take the user's own list down with it.
+    return [];
+  }
+}
 
 export async function GET() {
   try {
     const { user } = await requireUser();
     const supabase = await createClient();
-    const { data, error } = await supabase
-      .from("decks")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
+    const [{ data, error }, family] = await Promise.all([
+      supabase
+        .from("decks")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false }),
+      householdDecks(supabase, user.id),
+    ]);
     if (error) throw error;
-    return NextResponse.json({ decks: data ?? [] });
+    return NextResponse.json({ decks: data ?? [], family });
   } catch (err) {
     return errorResponse(err);
   }

@@ -81,6 +81,9 @@ export async function GET() {
         ownerId: fam.group.owner_user,
         myRole: fam.myRole,
         amOwner: fam.group.owner_user === user.id,
+        // Which row is you. The page needs it to know whose collection it
+        // shouldn't offer to open — yours is one tab away already.
+        meId: user.id,
         poolGrant: MONTHLY_GRANT.family,
         members: fam.members.map((m) => {
           const p = profById.get(m.user_id as string);
