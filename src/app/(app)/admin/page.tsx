@@ -708,6 +708,23 @@ export default function AdminPage() {
                     Make staff
                   </button>
                 )}
+                {/* Outside the block below, deliberately.
+                    That block is gated on `u.role !== "admin"` because its
+                    controls — suspend, remove, block sharing — are things
+                    you cannot do to an admin. A plan is not one of those:
+                    putting the operator's own account on Family is the
+                    single case this button exists for, and gating it with
+                    the rest hid it from exactly that row. */}
+                {amAdmin && (
+                  <button
+                    className="btn text-xs"
+                    title="Comp a plan. No Stripe subscription is created and nothing renews; refused if this account already has a live subscription."
+                    onClick={() => setPlan(u)}
+                  >
+                    Plan: {u.plan ?? "free"}
+                    {u.plan_comped === true && " (comped)"}
+                  </button>
+                )}
                 {u.role !== "admin" && (
                   <>
                     <button
@@ -763,12 +780,6 @@ export default function AdminPage() {
                         </>
                       );
                     })()}
-                    {amAdmin && (
-                      <button className="btn text-xs" onClick={() => setPlan(u)}>
-                        Plan: {u.plan ?? "free"}
-                        {u.plan_comped === true && " (comped)"}
-                      </button>
-                    )}
                     <button
                       className={`btn text-xs ${
                         u.suspended === true
