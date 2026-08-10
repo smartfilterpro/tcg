@@ -39,7 +39,9 @@ export interface PriceRefreshSummary {
     number?: string | null;
     image?: string | null;
     rarity?: string | null;
-    old: number;
+    /** Null when the card had no price at all — an uncorroborated eBay
+     *  claim on a blank card is exactly the case worth reviewing. */
+    old: number | null;
     next: number;
   }>;
   /** PokeTrace source stats (present only when POKETRACE_API_KEY is set). */
@@ -63,6 +65,20 @@ export interface PriceRefreshSummary {
 }
 
 const STATE_KEY = "price_refresh";
+
+/** How far a price may move before a human should look at it. Five-fold in
+ *  either direction is well past any real market move over one night. */
+const SWING_RATIO = 5;
+
+/** …and how many dollars it has to move as well, so the queue isn't filled
+ *  with bulk commons wobbling between 2c and 15c. */
+const SWING_FLOOR_USD = 1;
+
+/** The most an UNCORROBORATED eBay completed-sales average may assert on its
+ *  own. Above this it goes to review instead of straight onto the card: eBay
+ *  averages sweep in bulk lots and graded slabs, and a confidently wrong $700
+ *  is worse for someone valuing a collection than an honest blank. */
+const EBAY_TRUST_CEILING = 20;
 
 /** How long between runs once every owned card has a price. Prices move
  *  slowly; a daily pass is plenty for maintenance. */
@@ -186,6 +202,7 @@ export async function refreshStalePrices(
             "graded_prices" in card && card.graded_prices != null;
           const gradedWorthAsking = !hasGraded && (knownValue == null || knownValue >= 5);
           let ptMarket: number | null = null;
+          let ptSource: "tcgplayer" | "ebay" | null = null;
           if (pt && !pt.error && pt.requests < PT_BUDGET && gradedWorthAsking) {
             try {
               const hasIdColumn = "poketrace_id" in card;
@@ -213,6 +230,7 @@ export async function refreshStalePrices(
                 const prices = await getPoketracePrices(pid);
                 if (prices?.market != null) {
                   ptMarket = prices.market;
+                  ptSource = prices.marketSource;
                   pt.priced += 1;
                 }
                 if (prices?.graded && "graded_prices" in card) {
@@ -239,8 +257,35 @@ export async function refreshStalePrices(
             nextMarket = fresh?.marketPrice ?? null;
             nextPrices = fresh?.prices ?? null;
           }
-          // PokeTrace's daily-updated market number wins when it exists.
-          if (ptMarket != null) nextMarket = ptMarket;
+          // PokeTrace's daily-updated market number wins when it exists —
+          // but not blindly, and not when it came from eBay.
+          //
+          // It used to win unconditionally, which meant an eBay completed-
+          // sales average could overwrite a perfectly good free-source
+          // price. For a card TCGplayer hasn't listed yet — everything in a
+          // set released last month — that average is dominated by bulk lots
+          // and slabs, and commons from a current set were showing hundreds
+          // of dollars each.
+          //
+          // So the two sources check each other. A TCGplayer number still
+          // wins outright. An eBay one only wins if nothing else priced the
+          // card, or if it broadly agrees with what did.
+          let ptUnverified = false;
+          if (ptMarket != null) {
+            if (ptSource === "tcgplayer") {
+              nextMarket = ptMarket;
+            } else if (nextMarket == null) {
+              // Nothing to check it against. Small numbers are worth having
+              // even unverified; a large one is a claim, and a wrong large
+              // one is worse than an honest blank.
+              if (ptMarket <= EBAY_TRUST_CEILING) nextMarket = ptMarket;
+              else ptUnverified = true;
+            } else if (ptMarket <= nextMarket * SWING_RATIO && ptMarket >= nextMarket / SWING_RATIO) {
+              nextMarket = ptMarket;
+            }
+            // Else: the free source and eBay disagree wildly. Keep the free
+            // source, which is a per-single price by construction.
+          }
 
           // Last resort, and the reason a scanned card stops sitting at no
           // price: the paid tracker. It was wired in for the set-by-set
@@ -324,17 +369,31 @@ export async function refreshStalePrices(
               .eq("id", card.id);
             return;
           }
-          if (
+          // A swing worth a human's attention, or a claim nothing corroborated.
+          //
+          // The ratio test used to be gated on `old >= 1`, so it only watched
+          // cards that were already worth a pound — and a 12-cent common
+          // jumping to $706 sailed straight through, unflagged, which is the
+          // exact shape of the bug this now catches. Cheap cards are where a
+          // bad source match is most likely AND most obvious.
+          //
+          // The dollar floor replaces what `old >= 1` was clumsily doing:
+          // keeping penny noise out of the queue. 2c to 15c is a 7x move and
+          // means nothing; 12c to $706 is the same ratio and means everything.
+          const swung =
             old != null &&
             nextMarket != null &&
-            old >= 1 &&
-            (nextMarket > old * 5 || nextMarket < old / 5)
-          ) {
+            Math.abs(nextMarket - old) >= SWING_FLOOR_USD &&
+            (nextMarket > old * SWING_RATIO || nextMarket < old / SWING_RATIO);
+          // An unverified eBay claim never became nextMarket, so the number
+          // under review is the one it wanted to write.
+          const proposed = nextMarket ?? ptMarket;
+          if ((ptUnverified || swung) && proposed != null) {
             summary.suspicious.push({
               id: card.id as string,
               name: card.name as string,
               old,
-              next: nextMarket,
+              next: proposed,
               set: (card.set_name as string | null) ?? null,
               number: (card.number as string | null) ?? null,
               image: (card.image_small as string | null) ?? null,

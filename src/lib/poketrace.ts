@@ -159,6 +159,16 @@ export async function searchPoketraceCard(
 export interface PoketracePrices {
   /** Best raw (ungraded) USD market price: TCGplayer NM, else eBay NM. */
   market: number | null;
+  /** Which source `market` came from, because they are not equally
+   *  trustworthy and the caller has to know which it got.
+   *
+   *  TCGplayer's number is the market price of ONE single in that condition.
+   *  eBay's is an average of completed sales, and a completed sale for a
+   *  common is very often a bulk lot — "500 card lot", a full set, a sealed
+   *  box — or a graded slab. Averaging those produces a number that is real,
+   *  correctly computed, and nothing to do with what one loose card is
+   *  worth. It is how a Shuppet ends up at $706. */
+  marketSource: "tcgplayer" | "ebay" | null;
   /** Graded snapshot, e.g. { "PSA_10": 5200, "CGC_9": 800 }. */
   graded: Record<string, number> | null;
 }
@@ -170,8 +180,19 @@ export async function getPoketracePrices(id: string): Promise<PoketracePrices | 
   if (!card) return null;
   const tcg = card.prices?.tcgplayer ?? {};
   const ebay = card.prices?.ebay ?? {};
-  const market =
-    tcg["NEAR_MINT"]?.avg ?? ebay["NEAR_MINT"]?.avg ?? tcg["LIGHTLY_PLAYED"]?.avg ?? null;
+  // Ordered by how much a single loose card's price can be trusted from it:
+  // TCGplayer near mint, TCGplayer lightly played, and only then eBay's
+  // completed-sales average. eBay used to sit second, which meant any card
+  // TCGplayer hadn't listed yet — every card in a set released last month —
+  // took a lot price as its market value.
+  const candidates: Array<[number | null | undefined, "tcgplayer" | "ebay"]> = [
+    [tcg["NEAR_MINT"]?.avg, "tcgplayer"],
+    [tcg["LIGHTLY_PLAYED"]?.avg, "tcgplayer"],
+    [ebay["NEAR_MINT"]?.avg, "ebay"],
+  ];
+  const hit = candidates.find(([v]) => typeof v === "number" && v > 0);
+  const market = hit?.[0] ?? null;
+  const marketSource = hit?.[1] ?? null;
 
   const graded: Record<string, number> = {};
   for (const source of [ebay, tcg]) {
@@ -183,6 +204,7 @@ export async function getPoketracePrices(id: string): Promise<PoketracePrices | 
   }
   return {
     market: typeof market === "number" && market > 0 ? market : null,
+    marketSource: typeof market === "number" && market > 0 ? marketSource : null,
     graded: Object.keys(graded).length > 0 ? graded : null,
   };
 }

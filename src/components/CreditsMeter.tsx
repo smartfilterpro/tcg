@@ -260,7 +260,7 @@ export default function CreditsMeter() {
             <button className="rounded-full bg-brand-ink px-[18px] py-[11px] text-sm font-medium text-brand-canvas" onClick={() => setBoost(true)}>
               Boost now
             </button>
-            {c.plan === "free" && (
+            {c.plan === "free" && !c.pooled && (
               <a href="/pricing" className="rounded-full border border-brand-line-strong bg-brand-panel px-[18px] py-[11px] text-sm font-medium">
                 See Pro — 500 credits/mo
               </a>
@@ -361,13 +361,21 @@ export default function CreditsMeter() {
  *  collection worth the pitch. Dark panel, highlight badge, one CTA. */
 export function BulkScanNudge({ cards }: { cards: number }) {
   const [plan, setPlan] = useState<string | null>(null);
+  // A family member's own profile reads 'free' — the plan sits on the group
+  // owner — so plan alone would pitch the Pro upgrade at someone already
+  // inside a Family subscription.
+  const [pooled, setPooled] = useState(false);
   useEffect(() => {
     fetch("/api/usage/me")
       .then((r) => (r.ok ? r.json() : null))
-      .then((j) => j && !j.admin && setPlan(j.credits?.plan ?? null))
+      .then((j) => {
+        if (!j || j.admin) return;
+        setPlan(j.credits?.plan ?? null);
+        setPooled(j.credits?.pooled === true);
+      })
       .catch(() => {});
   }, []);
-  if (plan !== "free" || cards < 20) return null;
+  if (plan !== "free" || pooled || cards < 20) return null;
   return (
     <div className="mb-[18px] flex flex-wrap items-center gap-[18px] rounded-2xl bg-brand-ink px-5 py-[18px] text-brand-canvas">
       <span className="rounded-full bg-brand-highlight px-2.5 py-1 font-mono text-[10.5px] font-medium tracking-[.06em] text-brand-ink">

@@ -2075,11 +2075,26 @@ function PriceRefreshPanel({
                   {[s.set, s.rarity].filter(Boolean).join(" · ") || "set unknown"}
                 </div>
                 <div className="mt-0.5">
-                  ${(s.old ?? 0).toFixed(2)} → <b>${(s.next ?? 0).toFixed(2)}</b>{" "}
-                  <span className="opacity-70">
-                    ({s.next > s.old ? "×" : "÷"}
-                    {(s.next > s.old ? s.next / Math.max(s.old, 0.01) : s.old / Math.max(s.next, 0.01)).toFixed(0)})
-                  </span>
+                  {/* No prior price is its own case now: an eBay average
+                      asserting $700 on a card nothing else priced is worth
+                      a look precisely because there's nothing to compare. */}
+                  {s.old == null ? (
+                    <>
+                      no price → <b>${s.next.toFixed(2)}</b>{" "}
+                      <span className="opacity-70">(unverified)</span>
+                    </>
+                  ) : (
+                    <>
+                      ${s.old.toFixed(2)} → <b>${s.next.toFixed(2)}</b>{" "}
+                      <span className="opacity-70">
+                        ({s.next > s.old ? "×" : "÷"}
+                        {(s.next > s.old
+                          ? s.next / Math.max(s.old, 0.01)
+                          : s.old / Math.max(s.next, 0.01)
+                        ).toFixed(0)})
+                      </span>
+                    </>
+                  )}
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   <button
