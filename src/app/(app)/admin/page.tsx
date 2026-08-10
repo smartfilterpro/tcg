@@ -1546,9 +1546,10 @@ function CardImportPanel() {
 interface BusinessData {
   kpis: {
     mrr: number; payingCustomers: number; totalAccounts: number; aiCost30: number;
+    memberAiCost30: number; staffAiCost30: number;
     revenue30: number; grossMarginPct: number | null; conversionPct: number | null;
   };
-  months: Array<{ label: string; revenue: number; cost: number }>;
+  months: Array<{ label: string; revenue: number; cost: number; staffCost: number }>;
   planMix: Array<{ label: string; count: number; mrr: number }>;
   credits: {
     granted30: number; spent30: number; spentPct: number | null;
@@ -1700,6 +1701,13 @@ function BusinessDashboard({ priceCron }: { priceCron: string | null }) {
           "AI cost 30d",
           `$${k.aiCost30.toFixed(2)}`,
           <>
+            {/* Serving members, and running the place. A catalogue sweep or
+                an afternoon of testing lands in the same endpoints a
+                member's questions do, so the split is the only way to tell
+                what the product costs from what you cost. */}
+            members ${k.memberAiCost30.toFixed(2)}
+            {k.staffAiCost30 > 0 && <> · staff ${k.staffAiCost30.toFixed(2)}</>}
+            <br />
             {costNote}
             {costDelta != null && <> · {delta(costDelta, "%", false, prevLabel)}</>}
           </>
@@ -1708,7 +1716,7 @@ function BusinessDashboard({ priceCron }: { priceCron: string | null }) {
           "Gross margin",
           k.grossMarginPct == null ? "—" : `${k.grossMarginPct}%`,
           <>
-            target {MARGIN_TARGET}%
+            on members · target {MARGIN_TARGET}%
             {marginDelta != null && <> · {delta(marginDelta, "pt", true, prevLabel)}</>}
           </>,
           // The owner's dial: green at or above target, amber within ten
