@@ -8,7 +8,10 @@
 // that flips a column nothing reads would be theatre.
 
 import { useCallback, useEffect, useState } from "react";
+import Modal, { ModalClose } from "@/components/Modal";
 import { MONTHLY_GRANT } from "@/lib/credits";
+import { artSrc } from "@/lib/art";
+import { itemPrice, type CollectionItem } from "@/lib/types";
 
 interface Member {
   userId: string;
@@ -27,6 +30,7 @@ interface FamilyData {
     ownerId: string;
     myRole: "parent" | "kid";
     amOwner: boolean;
+    meId: string;
     poolGrant: number;
     members: Member[];
   } | null;
@@ -69,6 +73,7 @@ export default function FamilyPage() {
   const [copied, setCopied] = useState(false);
   /** Which pending invitation was just copied, so only that row says so. */
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [peeking, setPeeking] = useState<{ id: string; name: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -256,6 +261,14 @@ export default function FamilyPage() {
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium">{m.name}</div>
                   <div className="truncate text-xs text-brand-ink4">{m.email}</div>
+                  {m.userId !== g.meId && (
+                    <button
+                      className="mt-0.5 text-xs font-medium text-brand-accent hover:underline"
+                      onClick={() => setPeeking({ id: m.userId, name: m.name })}
+                    >
+                      View cards
+                    </button>
+                  )}
                 </div>
               </div>
               <span className="text-[13px] text-brand-ink2">
@@ -473,7 +486,117 @@ export default function FamilyPage() {
         controls (spending approvals, outside-trade approvals, weekly digest) arrive with those
         features.
       </p>
+
+      {peeking && (
+        <CollectionPeek
+          userId={peeking.id}
+          name={peeking.name}
+          onClose={() => setPeeking(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/** One household member's cards, to look at and nothing else.
+ *
+ *  Deliberately not the collection page in disguise. That page is built for
+ *  the person who owns the cards — add, edit quantities, set a value, delete
+ *  — and none of it applies here. What a parent actually wants is the answer
+ *  to "does she already have this one", so: every card, biggest first, with
+ *  a count and a total. */
+function CollectionPeek({
+  userId,
+  name,
+  onClose,
+}: {
+  userId: string;
+  name: string;
+  onClose: () => void;
+}) {
+  const [items, setItems] = useState<CollectionItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    fetch(`/api/family/collection/${userId}`)
+      .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => {
+        if (!live) return;
+        if (!ok) throw new Error(j.error || "Couldn't load that collection.");
+        setItems(j.items ?? []);
+      })
+      .catch((e) => live && setError(e instanceof Error ? e.message : "Couldn't load it."));
+    return () => {
+      live = false;
+    };
+  }, [userId]);
+
+  const cards = (items ?? []).reduce((s, it) => s + it.quantity, 0);
+  const value = (items ?? []).reduce((s, it) => s + (itemPrice(it) ?? 0) * it.quantity, 0);
+  // Most valuable first: scrolling a thousand cards alphabetically to find
+  // out whether anything good is in there is not an answer to any question.
+  const sorted = [...(items ?? [])].sort(
+    (a, b) => (itemPrice(b) ?? 0) - (itemPrice(a) ?? 0)
+  );
+
+  return (
+    <Modal onClose={onClose} size="xl" labelledBy="peek-title">
+      <>
+        <div className="flex items-start justify-between gap-2">
+          <h2 id="peek-title" className="min-w-0 break-words font-display text-xl font-bold">
+            {name}&apos;s cards
+          </h2>
+          <ModalClose onClose={onClose} />
+        </div>
+
+        {error ? (
+          <p className="mt-3 text-sm text-brand-negative">{error}</p>
+        ) : items === null ? (
+          <p className="mt-3 text-sm text-brand-ink3">Loading…</p>
+        ) : items.length === 0 ? (
+          <p className="mt-3 text-sm text-brand-ink3">
+            {name} hasn&apos;t added any cards yet.
+          </p>
+        ) : (
+          <>
+            <p className="mt-1 font-mono text-xs text-brand-ink3">
+              {cards.toLocaleString()} cards · ${value.toFixed(2)}
+            </p>
+            <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5 xl:grid-cols-6">
+              {sorted.map((it) => {
+                const src = artSrc(it.card.id, it.card.image_small);
+                const price = itemPrice(it);
+                return (
+                  <div key={it.id} className="min-w-0">
+                    <div className="relative aspect-[63/88] w-full overflow-hidden rounded bg-brand-sunken">
+                      {src && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={src}
+                          alt={it.card.name}
+                          className="h-full w-full object-cover"
+                          loading="lazy"
+                        />
+                      )}
+                      {it.quantity > 1 && (
+                        <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 font-mono text-[10px] text-white">
+                          ×{it.quantity}
+                        </span>
+                      )}
+                    </div>
+                    <div className="truncate text-[11px] font-medium">{it.card.name}</div>
+                    <div className="truncate font-mono text-[10.5px] text-brand-ink4">
+                      {price != null ? `$${price.toFixed(2)}` : "—"}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </>
+    </Modal>
   );
 }
 
