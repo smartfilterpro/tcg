@@ -142,6 +142,16 @@ export async function PATCH(req: Request, { params }: Params) {
     const admin = createAdminClient();
     const { error } = await admin.from("profiles").update(patch).eq("id", id);
     if (error) {
+      if (/plan_comped/i.test(error.message ?? "")) {
+        return NextResponse.json(
+          {
+            error:
+              "Setting a plan needs a one-time database update — run " +
+              "supabase/migrations/058_plan_comped.sql first.",
+          },
+          { status: 400 }
+        );
+      }
       if (/can_share_decks|can_post_trades/i.test(error.message ?? "")) {
         return NextResponse.json(
           { error: "Moderation switches need a database update — run supabase/migrations/038_moderation.sql first." },
