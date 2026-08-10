@@ -15,7 +15,7 @@ export async function PATCH(req: Request, { params }: Params) {
     // being admin-only, which is the safe direction to be wrong in.
     const { user, isAdmin } = await requireModerator();
     const { id } = await params;
-    const { aiBudgetUsd, suspended, resetDisplayName, canShareDecks, canPostTrades, role } =
+    const { aiBudgetUsd, suspended, resetDisplayName, canShareDecks, canPostTrades, role, plan } =
       (await req.json()) as {
         aiBudgetUsd?: number;
         suspended?: boolean;
@@ -28,14 +28,19 @@ export async function PATCH(req: Request, { params }: Params) {
         /** Promote to admin or demote to member. Never your own row — an
          *  admin who demotes themselves locks everyone out of the tools. */
         role?: string;
+        /** Comp a plan without Stripe — the operator's own account, or
+         *  making good on a checkout that went wrong. */
+        plan?: string;
       };
 
     const patch: Record<string, unknown> = {};
-    // Roles and AI budgets are admin work: one hands out power, the other
-    // spends money.
-    if (!isAdmin && (role !== undefined || aiBudgetUsd !== undefined)) {
+    // Roles, AI budgets and plans are admin work: one hands out power, the
+    // other two spend money. Unlike role, a plan MAY be set on your own
+    // account — putting the operator's own login on Family is the reason
+    // this exists.
+    if (!isAdmin && (role !== undefined || aiBudgetUsd !== undefined || plan !== undefined)) {
       return NextResponse.json(
-        { error: "Only an admin can change roles or AI budgets." },
+        { error: "Only an admin can change roles, AI budgets or plans." },
         { status: 403 }
       );
     }
@@ -77,6 +82,44 @@ export async function PATCH(req: Request, { params }: Params) {
         );
       }
       patch.ai_budget_usd = aiBudgetUsd;
+    }
+    if (plan !== undefined) {
+      // Comping a plan by hand.
+      //
+      // Until now `plan` was written by exactly one thing — the Stripe
+      // webhook — which is correct for customers and leaves no way to put
+      // the operator's own account on Family, or to make good on a botched
+      // checkout without asking someone to pay twice.
+      //
+      // Refused when Stripe is already the source of truth for this person.
+      // Setting it by hand there would desync the two: Stripe keeps billing
+      // on its own schedule and the next subscription event overwrites
+      // whatever was typed here, so the change would appear to work and
+      // then quietly undo itself.
+      if (!["free", "pro", "family"].includes(plan as string)) {
+        return NextResponse.json({ error: "Plan must be free, pro or family." }, { status: 400 });
+      }
+      const { data: target } = await createAdminClient()
+        .from("profiles")
+        .select("stripe_subscription")
+        .eq("id", id)
+        .maybeSingle();
+      if ((target as { stripe_subscription?: string | null } | null)?.stripe_subscription) {
+        return NextResponse.json(
+          {
+            error:
+              "That account has a live subscription — change the plan in Stripe, or cancel it " +
+              "there first. Setting it here would be overwritten by the next billing event.",
+          },
+          { status: 400 }
+        );
+      }
+      patch.plan = plan;
+      // A comped plan has no billing period, so grants anchor to signup and
+      // nothing expires it. Clearing the expiry matters: a stale one from an
+      // old subscription would end the comp on a date nobody chose.
+      patch.plan_expires_at = null;
+      console.warn(`admin: ${user.id} set plan=${plan} on ${id}`);
     }
     if (suspended !== undefined) {
       if (typeof suspended !== "boolean") {
