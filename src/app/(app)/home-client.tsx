@@ -6,6 +6,7 @@ import CardPickerModal from "@/components/CardPickerModal";
 import CardText, { useCardText } from "@/components/CardText";
 import CardZoom from "@/components/CardZoom";
 import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
+import PriceHistory from "@/components/PriceHistory";
 import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc } from "@/lib/art";
 import SealedTab from "@/components/SealedTab";
@@ -1233,6 +1234,8 @@ export default function CollectionPage({
                 missingNote="No printed text on file for this card yet — it fills in automatically as the card databases are read."
               />
             </div>
+
+            <PriceHistory cardId={selected.card.id} />
 
             {/* Give it to someone in the house. Deleting from one collection
                 and searching it back into another loses the finish, the
