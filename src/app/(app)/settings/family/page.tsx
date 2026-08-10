@@ -67,6 +67,8 @@ export default function FamilyPage() {
   // invitation quietly went nowhere.
   const [lastLink, setLastLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  /** Which pending invitation was just copied, so only that row says so. */
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -428,6 +430,26 @@ export default function FamilyPage() {
               <span className="font-mono text-[11.5px] text-brand-ink4">
                 {i.role === "parent" ? "parent" : "kid"}
               </span>
+              {/* The link, again, for as long as the invitation is alive.
+                  It used to exist only in React state for the seconds after
+                  sending: navigate away or reload and the only way back to
+                  it was to cancel the invitation and make a new one. The
+                  token was in this list the whole time — the API has always
+                  returned it — it simply was not being used. Showing it
+                  grants nothing new either: a parent who can cancel an
+                  invitation can already do more to it than resend it. */}
+              <button
+                className="text-[12.5px] text-brand-accent underline"
+                onClick={() => {
+                  const link = `${window.location.origin}/family/join/${i.token}`;
+                  navigator.clipboard?.writeText(link).then(
+                    () => setCopiedId(i.id),
+                    () => setLastLink(link)
+                  );
+                }}
+              >
+                {copiedId === i.id ? "Copied ✓" : "Copy link"}
+              </button>
               <button
                 className="text-[12.5px] text-brand-ink5 underline hover:text-brand-negative"
                 onClick={async () => {
