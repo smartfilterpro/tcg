@@ -33,19 +33,57 @@ export default async function JoinFamilyPage({
 
   // Security-definer lookup: returns nothing for an expired, answered or
   // revoked invitation, so a dead link and a wrong one look the same.
-  const { data } = await supabase.rpc("family_invite_by_token", { t: token });
+  //
+  // The ERROR is a different thing entirely, and this used to throw it away.
+  // A missing function, a database fault and a genuinely dead invitation all
+  // rendered the same "isn't valid" — so the one failure a person could act
+  // on was indistinguishable from the two they couldn't, and nobody could
+  // tell which they were looking at. The same shape of bug as a card read
+  // that never happened looking exactly like one that failed.
+  const { data, error } = await supabase.rpc("family_invite_by_token", { t: token });
   const invite = (Array.isArray(data) ? data[0] : data) as Invite | undefined;
 
+  if (error) {
+    // Logged in full, because the visitor is not the person who can fix it.
+    console.error(`family invite lookup failed: ${error.message}`);
+  }
+
   if (!invite) {
+    // Only the invitation itself is the visitor's business. A broken lookup
+    // is ours, and saying "expired" about a database fault sends them to ask
+    // for a new link that will fail in exactly the same way.
+    const broken = !!error;
+    const missingFunction = /family_invite_by_token|function|schema cache/i.test(
+      error?.message ?? ""
+    );
     return (
       <div className={SHELL}>
         <div className={PANEL}>
           <h1 className="m-0 mb-2 font-display text-2xl font-bold tracking-[-.025em]">
-            This invitation isn&apos;t valid
+            {broken ? "We couldn\u2019t check this invitation" : "This invitation isn\u2019t valid"}
           </h1>
           <p className="m-0 text-[14.5px] leading-[1.6] text-brand-ink3">
-            It may have expired, been cancelled, or already been answered. Ask whoever invited
-            you to send a new one.
+            {broken ? (
+              missingFunction ? (
+                <>
+                  Invitations need a one-time database update — run{" "}
+                  <span className="font-mono text-[13px]">
+                    supabase/migrations/031_family_invites.sql
+                  </span>
+                  . The link itself is fine and will work once that has run.
+                </>
+              ) : (
+                <>
+                  Something went wrong at our end, not with your link. Try again in a minute —
+                  and if it keeps happening, tell whoever invited you so they can report it.
+                </>
+              )
+            ) : (
+              <>
+                It may have expired, been cancelled, or already been answered. Ask whoever
+                invited you to send a new one.
+              </>
+            )}
           </p>
           <Link href="/" className="mt-4 inline-block text-[14px] text-brand-accent underline">
             Go to {APP_NAME}
