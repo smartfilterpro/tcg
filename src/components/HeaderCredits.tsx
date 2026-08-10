@@ -37,7 +37,7 @@ export default function HeaderCredits() {
        *  sheet, which is one tap either way — the button was never doing
        *  anything the pill couldn't. */}
       <button
-        className={`flex min-w-0 shrink items-center gap-2 rounded-full border py-1.5 pl-3 pr-3 sm:pr-2 ${
+        className={`flex min-w-0 shrink items-center gap-2 rounded-full border py-1.5 pl-2.5 pr-2.5 sm:pl-3 sm:pr-2 ${
           empty ? "border-brand-highlight bg-brand-highlight" : "border-dark-line3 bg-dark-tile"
         }`}
         onClick={() => setBoost(true)}
