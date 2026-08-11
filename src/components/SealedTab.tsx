@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import CardZoom from "@/components/CardZoom";
+import { money } from "@/lib/money";
 import {
   SEALED_KINDS,
   sealedKindLabel,
   sealedItemPrice,
+  sealedTotal,
   type SealedItem,
   type SealedSuggestion,
 } from "@/lib/sealed";
@@ -19,7 +21,15 @@ import {
  *  The total is shown separately from the card total for the same reason.
  *  Mixing them would answer "what are my cards worth?" with a number that
  *  includes four sealed boxes, and that is a different question. */
-export default function SealedTab({ cardValue }: { cardValue?: number }) {
+export default function SealedTab({
+  cardValue,
+  onTotal,
+}: {
+  cardValue?: number;
+  /** Report the total up, so the Cards tab's grand total is this same
+   *  number rather than its own stale copy of it. */
+  onTotal?: (total: number) => void;
+}) {
   const [items, setItems] = useState<SealedItem[] | null>(null);
   const [migrated, setMigrated] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +66,15 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Hand the total up whenever it moves. The Cards tab used to read
+  // /api/sealed once when the page loaded and keep that figure for the rest
+  // of the session, so checking a price or adding a box here left the two
+  // headers quoting different grand totals — $1,727.55 on this tab against
+  // $1,324.38 on the other, from the same rows.
+  useEffect(() => {
+    if (items) onTotal?.(sealedTotal(items));
+  }, [items, onTotal]);
 
   // Suggestions while typing. Debounced, because every keystroke firing a
   // query is a query per keystroke, and the answer for "surg" is thrown
@@ -160,7 +179,7 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
   if (error && !items) return <p className="text-red-600">{error}</p>;
   if (!items) return <p className="text-slate-500">Loading…</p>;
 
-  const total = items.reduce((sum, i) => sum + (sealedItemPrice(i) ?? 0) * i.quantity, 0);
+  const total = sealedTotal(items);
   const priced = items.filter((i) => sealedItemPrice(i) != null).length;
 
   return (
@@ -173,7 +192,7 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
             <>
               <b>{items.reduce((n, i) => n + i.quantity, 0)}</b> item
               {items.reduce((n, i) => n + i.quantity, 0) === 1 ? "" : "s"} ·{" "}
-              <b className="text-green-700">${total.toFixed(2)}</b>
+              <b className="text-green-700">{money(total)}</b>
               {priced < items.length && (
                 <span className="text-slate-400">
                   {" "}
@@ -184,10 +203,10 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
                   does not depend on which tab you happen to be looking at. */}
               {cardValue != null && cardValue > 0 && (
                 <div className="mt-0.5 text-slate-500">
-                  plus ${cardValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                  plus {money(cardValue)}{" "}
                   in cards ·{" "}
                   <b className="text-green-700">
-                    ${(total + cardValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                    {money(total + cardValue)}{" "}
                     total collection
                   </b>
                 </div>
@@ -282,7 +301,7 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
                         : sug.source === "tracker"
                           ? " · product database"
                           : " · suggested name"}
-                      {sug.marketPrice != null ? ` · $${sug.marketPrice.toFixed(2)}` : ""}
+                      {sug.marketPrice != null ? ` · ${money(sug.marketPrice)}` : ""}
                     </span>
                   </span>
                   <span className="shrink-0 text-xs text-brand-accent">Add</span>
@@ -376,7 +395,7 @@ export default function SealedTab({ cardValue }: { cardValue?: number }) {
                   <div className="text-xs">
                     {price != null ? (
                       <span className="font-semibold text-green-700">
-                        ${price.toFixed(2)} each
+                        {money(price)} each
                         {item.price_override != null && (
                           <span className="font-normal text-slate-400"> (your value)</span>
                         )}
