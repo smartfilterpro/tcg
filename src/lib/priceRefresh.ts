@@ -80,8 +80,18 @@ const SWING_FLOOR_USD = 1;
  *  is worse for someone valuing a collection than an honest blank. */
 const EBAY_TRUST_CEILING = 20;
 
-/** Rarities that are, by definition, the cards a set prints most of. */
-const BULK_RARITIES = new Set(["common", "uncommon"]);
+/** Rarities a set prints in quantity. Plain "rare" belongs here: the modern
+ *  black-star rare is a filler slot, not a chase card — the chase cards wear
+ *  "Double Rare", "Illustration Rare", "Special Illustration Rare" and the
+ *  rest, and none of those are listed. */
+const BULK_RARITIES = new Set(["common", "uncommon", "rare"]);
+
+/** …but only for recent sets. A 1999 Rare can genuinely be worth hundreds —
+ *  vintage non-holos from Base Set are exactly that — while a Rare from a
+ *  set that came out this year is a bulk card by construction, however the
+ *  market feels about it. Without this the guard would start refusing real
+ *  prices on the oldest and most valuable cards in the app. */
+const BULK_RARITY_MAX_AGE_YEARS = 3;
 
 /** What a bulk-rarity card may be worth before the number is more likely to
  *  be a mismatch than a market.
@@ -403,10 +413,19 @@ export async function refreshStalePrices(
           // An unverified eBay claim never became nextMarket, so the number
           // under review is the one it wanted to write.
           const proposed = nextMarket ?? ptMarket;
-          // A Common priced like a chase card, whichever source said so.
+          // A bulk-rarity card from a recent set priced like a chase card,
+          // whichever source said so. Unknown release date counts as recent:
+          // the cards with no release_date are the ones freshly imported from
+          // a set nobody has catalogued yet, which is exactly when the
+          // upstream mappings are least settled.
+          const releasedAt = Date.parse((card.release_date as string | null) ?? "");
+          const recent =
+            Number.isNaN(releasedAt) ||
+            Date.now() - releasedAt < BULK_RARITY_MAX_AGE_YEARS * 365 * 86_400_000;
           const implausible =
             proposed != null &&
             proposed > BULK_RARITY_CEILING_USD &&
+            recent &&
             BULK_RARITIES.has(((card.rarity as string | null) ?? "").trim().toLowerCase());
           if ((ptUnverified || swung || implausible) && proposed != null) {
             summary.suspicious.push({
