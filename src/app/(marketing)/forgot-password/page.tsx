@@ -3,7 +3,7 @@
 // Undesigned in the handoff (flagged there as such) — built minimal in the
 // auth-card style rather than invented beyond it.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { AuthShell, authButton, authInput, authLabel } from "@/components/marketing/AuthShell";
 
@@ -12,6 +12,12 @@ export default function ForgotPasswordPage() {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Arrived here from a reset link that didn't work. */
+  const [expired, setExpired] = useState(false);
+
+  useEffect(() => {
+    setExpired(new URLSearchParams(window.location.search).get("expired") === "1");
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -40,6 +46,13 @@ export default function ForgotPasswordPage() {
           : "Enter your account email and we'll send you a link to set a new password."
       }
     >
+      {!sent && expired && (
+        <p className="mb-3 rounded-xl bg-brand-sunken px-3.5 py-3 text-[13.5px] leading-[1.6] text-brand-ink2">
+          That reset link didn&apos;t work — they can only be used once, and they expire.
+          Some email apps also open links to scan them, which uses the link up before you
+          get to it. Ask for a fresh one below and open it straight away.
+        </p>
+      )}
       {!sent && (
         <form onSubmit={submit} className="flex flex-col gap-3">
           <label className={authLabel}>

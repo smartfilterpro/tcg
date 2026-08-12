@@ -57,5 +57,14 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.redirect(new URL("/login?error=link", origin));
+  // A dead link is not a login problem, and sending someone to the login
+  // form to solve it is why "choose a new password" looked like it just
+  // dropped you at sign-in: the page took the failure and showed nothing.
+  //
+  // A recovery link that didn't verify has exactly one useful next step —
+  // get another one — so it goes where that happens, saying why.
+  const wasRecovery = type === "recovery" || next.startsWith("/reset-password");
+  return NextResponse.redirect(
+    new URL(wasRecovery ? "/forgot-password?expired=1" : "/login?error=link", origin)
+  );
 }

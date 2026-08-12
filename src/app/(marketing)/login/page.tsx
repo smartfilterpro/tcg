@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthShell, authButton, authInput, authLabel } from "@/components/marketing/AuthShell";
 
@@ -9,6 +9,19 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // /auth/callback sends a failed email link here with ?error=link, and this
+  // page used to ignore it completely — so a confirmation or invitation link
+  // that didn't verify looked exactly like being logged out for no reason.
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get("error") === "link") {
+        setError(
+          "That link didn't work — email links can only be used once and they expire. Ask for a new one and open it straight away."
+        );
+      }
+    } catch {}
+  }, []);
 
   /** An internal ?next= path when present (battle invites etc.), else home.
    *  A legacy account that hasn't accepted the Terms yet gets routed to
