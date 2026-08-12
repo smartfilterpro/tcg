@@ -1375,6 +1375,7 @@ export default function AdminPage() {
             <h2 className="mb-2 font-display text-[17px] font-bold">🖼️ Mirror card art</h2>
             <MirrorArtPanel />
             <CardTextPanel />
+            <CardEffectsPanel />
           </div>
           <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🧬 Merge duplicate cards</h2>
@@ -3445,6 +3446,143 @@ function CardTextPanel() {
       )}
       {run.failures.length > 0 && (
         <ul className="m-0 mt-2 list-none p-0 text-[11px] text-brand-ink4">
+          {run.failures.map((f, i) => (
+            <li key={i}>{f}</li>
+          ))}
+        </ul>
+      )}
+      {error && <p className="m-0 mt-2 text-xs text-brand-negative">{error}</p>}
+    </div>
+  );
+}
+
+function CardEffectsPanel() {
+  const [status, setStatus] = useState<{
+    compilable: number;
+    compiled: number;
+    pending: number;
+    lowConfidence: number;
+  } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [run, setRun] = useState({ compiled: 0, unsure: [] as string[], failures: [] as string[] });
+  const [error, setError] = useState<string | null>(null);
+  const stopRef = useRef(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/card-effects");
+      const json = await res.json();
+      if (res.ok) setStatus(json);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function start() {
+    setRunning(true);
+    setError(null);
+    stopRef.current = false;
+    setRun({ compiled: 0, unsure: [], failures: [] });
+    let after: string | null = null;
+    try {
+      for (;;) {
+        if (stopRef.current) break;
+        const res = await resilientFetch(
+          "/api/admin/card-effects",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ after }),
+          },
+          {
+            onRetry: (n) => setError(`Connection dropped — reconnecting (${n})…`),
+            stopped: () => stopRef.current,
+          }
+        );
+        setError(null);
+        const body = await res.text();
+        let json: {
+          compiled: number;
+          unsure: Array<{ id: string; name: string; note: string; confidence: number }>;
+          failed: Array<{ id: string; name: string; reason: string }>;
+          next: string | null;
+          done: boolean;
+          error?: string;
+        };
+        try {
+          json = JSON.parse(body);
+        } catch {
+          throw new Error(body.slice(0, 200) || "The compiler returned nothing readable");
+        }
+        if (!res.ok) throw new Error(json.error || "Effect compile failed");
+        setRun((r) => ({
+          compiled: r.compiled + json.compiled,
+          unsure: [
+            ...r.unsure,
+            ...json.unsure.map((u) => `${u.name} (${Math.round(u.confidence * 100)}%): ${u.note}`),
+          ].slice(-8),
+          failures: [...r.failures, ...json.failed.map((f) => `${f.name}: ${f.reason}`)].slice(-6),
+        }));
+        after = json.next;
+        if (json.done || !after) break;
+        if (json.compiled > 0) refresh();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Effect compile failed");
+    }
+    setRunning(false);
+    refresh();
+  }
+
+  return (
+    <div className="rounded-lg border border-brand-line bg-white p-3">
+      <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+        What a card <i>means</i> — the printed text turned into something the battle engine
+        can execute. Runs once per card, ever, and is shared by every player, so a battle
+        never calls the model. Anything the compiler can&apos;t express becomes a note for
+        the players to read, which is exactly what the game does today: it can decline, it
+        can&apos;t invent.
+      </p>
+      {status && (
+        <p className="m-0 mb-2 text-xs text-brand-ink3">
+          {status.compiled.toLocaleString()} of {status.compilable.toLocaleString()} cards
+          compiled · {status.pending.toLocaleString()} to go
+          {status.lowConfidence > 0 &&
+            ` · ${status.lowConfidence.toLocaleString()} unsure, still played by hand`}
+        </p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {running ? (
+          <button
+            className="btn-secondary text-sm"
+            onClick={() => {
+              stopRef.current = true;
+            }}
+          >
+            Stop after this batch
+          </button>
+        ) : (
+          <button className="btn-primary text-sm" disabled={status?.pending === 0} onClick={start}>
+            {status?.pending === 0 ? "Every card is compiled" : "Compile the rest"}
+          </button>
+        )}
+      </div>
+      {(running || run.compiled > 0) && (
+        <p className="m-0 mt-2 text-xs text-brand-ink3">
+          {running ? "Running… " : "Stopped. "}
+          {run.compiled.toLocaleString()} compiled
+        </p>
+      )}
+      {run.unsure.length > 0 && (
+        <ul className="m-0 mt-2 list-none p-0 text-[11px] text-brand-ink4">
+          {run.unsure.map((u, i) => (
+            <li key={i}>{u}</li>
+          ))}
+        </ul>
+      )}
+      {run.failures.length > 0 && (
+        <ul className="m-0 mt-2 list-none p-0 text-[11px] text-brand-negative">
           {run.failures.map((f, i) => (
             <li key={i}>{f}</li>
           ))}
