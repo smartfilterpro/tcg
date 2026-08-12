@@ -16,6 +16,8 @@
  * structural rules on purpose.
  */
 
+import { payCost, paymentNote } from "@/lib/energy";
+
 export interface BattleAttack {
   name: string;
   cost: string[];
@@ -39,6 +41,9 @@ export interface BattleCard {
   hp?: number | null;
   /** Energy types (for weakness/resistance matching). */
   types?: string[];
+  /** For an Energy card: which symbols it pays, from the compiler. Lets a
+   *  Double Turbo say "two Colorless" instead of being guessed at. */
+  provides?: string[] | null;
   /** Printed attacks, when the card database knows them. */
   atk?: BattleAttack[];
   /** Weakness type (×2) / resistance type (−30). */
@@ -835,10 +840,10 @@ export function applyAction(
       const warnings: string[] = [];
       if (hasStatus(me.active, "asleep")) warnings.push("asleep");
       if (hasStatus(me.active, "paralyzed")) warnings.push("paralyzed");
-      const cost = attack.cost.filter((c) => c.toLowerCase() !== "free").length;
-      if (energyCount(me.active) < cost) {
-        warnings.push(`${energyCount(me.active)} of ${cost} energy attached`);
-      }
+      // Colour, not just count. Two Water never paid for ⚡⚡ at a real
+      // table and shouldn't here either.
+      const payment = payCost(attack.cost, me.active.attached);
+      if (!payment.ok) warnings.push(paymentNote(payment));
       const { base, variable } = parseDamage(attack.damage);
       const target = opp.active;
       let dmg = base;

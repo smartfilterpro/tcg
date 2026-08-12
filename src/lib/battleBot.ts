@@ -12,6 +12,7 @@
 // list to pick from is cheaper and safer than letting it invent actions.
 
 import type { BattleAction, BattleCard, BattleState, SideState } from "@/lib/battle";
+import { payCost } from "@/lib/energy";
 
 /** The opponent's user id in a practice battle. Not a real profile row —
  *  battles against the bot leave guest_user null and key the second side by
@@ -24,24 +25,22 @@ export interface Move {
   label: string;
 }
 
-function energyOn(stack: { attached: BattleCard[] }): number {
-  return stack.attached.filter((c) => c.cat === "energy").length;
-}
-
 function isPokemon(card: BattleCard): boolean {
   return card.cat === "pokemon" || card.cat == null;
 }
 
-/** Attacks this Pokémon can pay for right now. */
+/** Attacks this Pokémon can pay for right now.
+ *
+ *  By colour, not by count. Counting is what let the bot swing a Fire attack
+ *  off two Psychic energy — legal-looking to the enumerator and nonsense at
+ *  the table. */
 export function affordableAttacks(stack: {
   face: BattleCard;
   attached: BattleCard[];
 }): Array<{ index: number; damage: number; name: string }> {
-  const have = energyOn(stack);
   const out: Array<{ index: number; damage: number; name: string }> = [];
   (stack.face.atk ?? []).forEach((a, index) => {
-    const cost = a.cost.filter((c) => c.toLowerCase() !== "free").length;
-    if (cost > have) return;
+    if (!payCost(a.cost, stack.attached).ok) return;
     const damage = parseInt(a.damage.replace(/\D/g, ""), 10);
     out.push({ index, damage: Number.isFinite(damage) ? damage : 0, name: a.name });
   });
