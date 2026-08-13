@@ -8,6 +8,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { GRADING_SYSTEM, GRADE_SCHEMA, type GradeReport } from "@/lib/grading";
 import { centeringCapBack, type CenteringMeasurement } from "@/lib/cardGeometry";
 import { computeGradeValue, parseRange, type GradedPrices, type GradeValue } from "@/lib/gradeValue";
+import { defaultVariantFor, priceForVariant } from "@/lib/types";
 import { normalizeForSearch } from "@/lib/text";
 import { errorJson, PublicError, safeMessage } from "@/lib/apiError";
 import { GRADE_BODY_LIMIT, readJson } from "@/lib/requestBody";
@@ -138,10 +139,31 @@ async function lookupValue(
     candidates.sort((a, b) => score(b) - score(a));
     const card = candidates[0];
 
-    const prices = card.prices as Record<string, number | null> | null;
-    const raw =
-      (card.market_price as number | null) ??
-      (prices && typeof prices.normal === "number" ? prices.normal : null);
+    // The FINISH matters, and this was ignoring it.
+    //
+    // market_price is the card's headline number and on a foil-only
+    // printing it is routinely the wrong one — a Slowbro Illustration Rare
+    // showed $16.09 in the collection, where the finish is known, and
+    // $0.14 here, where it wasn't. Same card, same second, two answers, and
+    // the grading advice was built on the wrong one: "worth about $0.14, so
+    // only grade it for its own sake" about a card worth sixteen dollars.
+    //
+    // defaultVariantFor is the same reasoning the collection uses when a
+    // card is added — an Illustration Rare has no plain printing, so the
+    // only finish it comes in is the finish it is. Asking it here means the
+    // two pages can no longer disagree.
+    const variant = defaultVariantFor({
+      prices: card.prices as Record<string, number | null> | null,
+      rarity: card.rarity as string | null,
+      name: card.name as string,
+    });
+    const raw = priceForVariant(
+      {
+        prices: card.prices as Record<string, number | null> | null,
+        market_price: card.market_price as number | null,
+      },
+      variant
+    );
     const graded = (card.graded_prices as GradedPrices | null) ?? null;
 
     return computeGradeValue({
