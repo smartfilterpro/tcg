@@ -1302,7 +1302,28 @@ function SheetContent({
               key={i}
               className="block w-full border-b border-slate-100 py-2.5 text-left"
               disabled={busy}
-              onClick={() => act({ type: "attack", attackIndex: i })}
+              onClick={() => {
+                // Attacks the card gates on a coin get the coin FIRST.
+                //
+                // The engine can't roll it — a rules engine that calls
+                // Math.random inside itself can't be replayed or tested —
+                // and it won't read an unanswered flip as tails. So the
+                // answer is collected here, before the attack is sent,
+                // which is also the order it happens at a real table.
+                const gated = stack.face.eff?.attacks?.[i]?.gate?.if === "coinFlip";
+                if (!gated) return act({ type: "attack", attackIndex: i });
+                const heads = Math.random() < 0.5;
+                if (
+                  !confirm(
+                    `${a.name} needs a coin flip.\n\nFlipping… ${heads ? "HEADS" : "TAILS"}!\n\n${
+                      heads ? "The attack hits." : "The attack does nothing."
+                    }\n\nOK to continue.`
+                  )
+                ) {
+                  return;
+                }
+                return act({ type: "attack", attackIndex: i, flip: heads });
+              }}
             >
               <span className="flex items-baseline justify-between gap-2 text-sm">
                 <span className="font-semibold">⚔️ {a.name}</span>

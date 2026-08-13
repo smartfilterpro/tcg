@@ -58,6 +58,12 @@ export type TargetRef =
   | "theirActive"
   | "theirBench"
   | "theirAll"
+  /** Whoever just attacked. Only meaningful inside a trigger, and the whole
+   *  reason triggers need their own target: Spiritomb's "place 1 damage
+   *  counter on the Attacking Pokémon" cannot be said with sides alone,
+   *  because the attacker is on the other side of the table from the card
+   *  whose ability it is. */
+  | "attacker"
   /** The player chooses — the engine asks rather than picking. */
   | "chosen";
 
@@ -146,6 +152,35 @@ export type Modifier =
    *  "prevent" needs a judgement about what counts as an effect. */
   | { mod: "manual"; note: string };
 
+/* -------------------------------------------------------------- triggers */
+
+/** Something that fires because something else happened.
+ *
+ *  The third kind of thing, and the one a real game made unavoidable:
+ *  Spiritomb sits on the BENCH and says "if your Active Darkness Pokémon is
+ *  damaged by an attack, place 1 damage counter on the Attacking Pokémon".
+ *  It is not an action — nobody plays it. It is not a modifier — it changes
+ *  no number while nothing is happening. It is a reaction, and without one
+ *  the ability could only ever be announced in the log and then done by
+ *  hand, which is exactly what happened.
+ *
+ *  Deliberately a tiny set. Every entry here is a moment the engine already
+ *  knows it is at, so a trigger can never fire at a time the engine cannot
+ *  identify. */
+export type TriggerMoment =
+  /** The owner's side took attack damage. */
+  | "damagedByAttack"
+  /** The owner's Active was knocked out. */
+  | "knockedOut";
+
+export interface Trigger {
+  on: TriggerMoment;
+  /** Asked at the moment it fires. Spiritomb's "if your Active is a
+   *  Darkness Pokémon" lives here. */
+  when?: Condition;
+  then: Action[];
+}
+
 /* ------------------------------------------------- the compiled card */
 
 /** Everything the compiler learned about one card.
@@ -176,6 +211,8 @@ export interface CompiledCard {
   play?: ConditionalAction[];
   /** Continuous effects this card contributes while it is in play. */
   modifiers?: Modifier[];
+  /** Reactions this card contributes while it is in play. */
+  triggers?: Trigger[];
   /** For an Energy card: the symbols it pays. "*" means any one symbol. */
   provides?: string[];
   /** How sure the compiler was. Below `TRUSTED` the engine still executes
@@ -238,9 +275,12 @@ function stacks(board: BoardView, who: TargetRef): StackView[] {
       return board.them.bench;
     case "theirAll":
       return [...(board.them.active ? [board.them.active] : []), ...board.them.bench];
-    // "chosen" cannot be resolved without asking a player, so a condition
-    // that depends on it is not answerable here.
+    // Neither of these is answerable from the board alone — "chosen" needs
+    // a player and "attacker" needs the event that is firing. A condition
+    // that leans on either is simply not true here, which is the safe way
+    // for an unanswerable question to fail.
     case "chosen":
+    case "attacker":
       return [];
   }
 }
@@ -316,6 +356,31 @@ export function activeModifiers(
       if (m.mod === "manual") continue;
       if (!testCondition(m.when, board, flip)) continue;
       out.push(m);
+    }
+  }
+  return out;
+}
+
+/** Everything that reacts to a moment, from everything in play.
+ *
+ *  Same trust rule as modifiers: an uncertain compile contributes nothing
+ *  automatically. A trigger firing wrongly is worse than a modifier being
+ *  wrong, because it happens on someone else's turn — the player it hurts
+ *  is not the one who could have caught it. */
+export function firedTriggers(
+  inPlay: Array<{ compiled?: CompiledCard | null; name: string }>,
+  moment: TriggerMoment,
+  board: BoardView,
+  flip?: boolean
+): Array<{ source: string; actions: Action[] }> {
+  const out: Array<{ source: string; actions: Action[] }> = [];
+  for (const card of inPlay) {
+    const compiled = card.compiled;
+    if (!compiled || compiled.confidence < TRUSTED) continue;
+    for (const t of compiled.triggers ?? []) {
+      if (t.on !== moment) continue;
+      if (!testCondition(t.when, board, flip)) continue;
+      if (t.then.length > 0) out.push({ source: card.name, actions: t.then });
     }
   }
   return out;

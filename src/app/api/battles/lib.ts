@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AuthError } from "@/lib/auth";
 import { BattleError, type BattleCard } from "@/lib/battle";
+import type { CompiledCard } from "@/lib/cardEffects";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
 import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
@@ -145,6 +146,9 @@ export async function expandDeck(
     types: string[];
     bd: CardBattleData | null;
     hasBdColumn: boolean;
+    /** The compiled effect script. Undefined before migration 065, which
+     *  the engine reads as 'nothing compiled' and plays exactly as before. */
+    eff: CompiledCard | null;
     /** Failed vision reads, so an unreadable card is not retried every
      *  battle. Undefined before migration 050. */
     textAttempts?: number | null;
@@ -179,6 +183,7 @@ export async function expandDeck(
       types: (row.types as string[] | null) ?? [],
       bd: (row.battle_data as CardBattleData | null) ?? null,
       hasBdColumn: "battle_data" in row,
+      eff: (row.effects as CompiledCard | null) ?? null,
       textAttempts: (row.text_attempts as number | null) ?? null,
       textFailedAt: (row.text_failed_at as string | null) ?? null,
     };
@@ -376,6 +381,8 @@ export async function expandDeck(
         rules: meta?.bd?.rules?.length ? meta.bd.rules : undefined,
         abilities: meta?.bd?.abilities?.length ? meta.bd.abilities : undefined,
         fx: meta?.bd?.fx ?? undefined,
+        eff: meta?.eff ?? undefined,
+        provides: meta?.eff?.provides ?? undefined,
       });
     }
   });

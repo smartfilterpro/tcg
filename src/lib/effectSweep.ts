@@ -139,6 +139,17 @@ const MODIFIER = {
   additionalProperties: false,
 };
 
+const TRIGGER = {
+  type: "object",
+  properties: {
+    on: { type: "string", enum: ["damagedByAttack", "knockedOut"] },
+    when: { anyOf: [CONDITION, { type: "null" }] },
+    then: { type: "array", items: ACTION },
+  },
+  required: ["on", "then"],
+  additionalProperties: false,
+};
+
 const COUNT = {
   type: "object",
   properties: {
@@ -182,6 +193,7 @@ const SCHEMA = {
     },
     play: { type: ["array", "null"], items: CONDITIONAL },
     modifiers: { type: ["array", "null"], items: MODIFIER },
+    triggers: { type: ["array", "null"], items: TRIGGER },
     provides: { type: ["array", "null"], items: { type: "string" } },
     confidence: { type: "number" },
     note: { type: ["string", "null"] },
@@ -203,6 +215,8 @@ RULES, in order of importance:
 2b. "gate" is for an attack that can do nothing at all: "Flip a coin. If tails, this attack does nothing." Put it in "gate", never in "effects" — the engine has to know before it deals damage, not after.
 
 3. "modifiers" are CONTINUOUS: true for as long as the card is in play. A Tool that adds 20 damage, an Ability that reduces retreat, a Stadium that changes something. They are not actions and never go in "play".
+
+3a. "triggers" are REACTIONS: an ability that answers something happening. "If your Active Pokémon is damaged by an attack, place 1 damage counter on the Attacking Pokémon" is {"on":"damagedByAttack","then":[{"do":"damageCounters","who":"attacker","n":1}]}. The target "attacker" only means anything inside a trigger. If the ability only fires under a condition — "if your Active Darkness Pokémon is damaged" — put that in "when".
 
 4. "play" is for Trainers and Supporters: what happens once, when the card is played.
 
@@ -338,6 +352,7 @@ async function compileOne(
     ...(parsed.attacks?.length ? { attacks: parsed.attacks } : {}),
     ...(parsed.play?.length ? { play: parsed.play } : {}),
     ...(parsed.modifiers?.length ? { modifiers: parsed.modifiers } : {}),
+    ...(parsed.triggers?.length ? { triggers: parsed.triggers } : {}),
     ...(parsed.provides?.length ? { provides: parsed.provides } : {}),
     confidence,
     ...(parsed.note ? { note: String(parsed.note).slice(0, 300) } : {}),
