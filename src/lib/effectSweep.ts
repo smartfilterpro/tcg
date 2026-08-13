@@ -139,6 +139,31 @@ const MODIFIER = {
   additionalProperties: false,
 };
 
+const COUNT = {
+  type: "object",
+  properties: {
+    count: { type: "string", enum: ["myBench", "theirBench", "energyOn", "countersOn"] },
+    who: { type: ["string", "null"], enum: [...TARGETS, null] },
+  },
+  required: ["count"],
+  additionalProperties: false,
+};
+
+/** Extra damage beyond the printed number. `per` is what makes "30 more for
+ *  each Benched Pokémon" expressible at all — without it, the compiler had
+ *  no way to say the thing half of variable attacks are printed as. */
+const BONUS = {
+  type: "object",
+  properties: {
+    n: { type: "integer" },
+    per: { anyOf: [COUNT, { type: "null" }] },
+    max: { type: ["integer", "null"] },
+    when: { anyOf: [CONDITION, { type: "null" }] },
+  },
+  required: ["n"],
+  additionalProperties: false,
+};
+
 const SCHEMA = {
   type: "object",
   properties: {
@@ -148,8 +173,9 @@ const SCHEMA = {
       items: {
         type: "object",
         properties: {
-          bonus: { type: ["array", "null"], items: CONDITIONAL },
+          bonus: { type: ["array", "null"], items: BONUS },
           effects: { type: ["array", "null"], items: CONDITIONAL },
+          gate: { anyOf: [CONDITION, { type: "null" }] },
         },
         additionalProperties: false,
       },
@@ -170,7 +196,11 @@ RULES, in order of importance:
 
 1. Only use the operations listed in the schema. Never invent one. If a card does something the vocabulary cannot express, emit {"do":"manual","note":"<the printed wording>"} and lower your confidence. A manual note is a correct answer. An invented opcode is silently ignored by the engine, which is the worst possible outcome.
 
-2. The printed damage number is ALREADY known — do not repeat it. "attacks[i].bonus" is only for damage BEYOND the printed number, such as "and 30 more damage if...". An attack that just deals its printed damage has no bonus and no effects.
+2. The printed damage number is ALREADY known — do not repeat it. "attacks[i].bonus" is only for damage BEYOND the printed number. An attack that just deals its printed damage has no bonus, no effects and no gate.
+
+2a. Damage that scales uses "per". "This attack does 30 more damage for each of your opponent's Benched Pokémon" is {"n":30,"per":{"count":"theirBench"}} — NOT a flat 30, and never the total. "up to 3 times" is {"max":3}.
+
+2b. "gate" is for an attack that can do nothing at all: "Flip a coin. If tails, this attack does nothing." Put it in "gate", never in "effects" — the engine has to know before it deals damage, not after.
 
 3. "modifiers" are CONTINUOUS: true for as long as the card is in play. A Tool that adds 20 damage, an Ability that reduces retreat, a Stadium that changes something. They are not actions and never go in "play".
 
