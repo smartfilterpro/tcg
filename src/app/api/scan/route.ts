@@ -537,11 +537,20 @@ async function runScan(opts: {
           // shapes with their own retry ladders is how one Lampent spent
           // 39.5 seconds while the rest of the scan waited: a batch finishes
           // when its slowest member does.
-          let { match, candidates } = await matchDetectedCard(detected, {
-            deadline: cardDeadline,
-            timeoutMs: 8_000,
-            attempts: 2,
-          });
+          // The deadline goes in AND the call is raced against it. Passing
+          // it inward should be enough, and twice now it hasn't been — a
+          // Retry-After sleep walked through it once already. The engine of
+          // record for "this card is out of time" is this line, not the
+          // goodwill of whatever sits under it.
+          let { match, candidates } = await withinDeadline(
+            matchDetectedCard(detected, {
+              deadline: cardDeadline,
+              timeoutMs: 8_000,
+              attempts: 2,
+            }),
+            cardDeadline + 1_000,
+            { match: null, candidates: [] as CardSummary[] }
+          );
           let usedTcgdex = false;
 
           // Consult TCGdex when the primary DB found nothing — or found only
