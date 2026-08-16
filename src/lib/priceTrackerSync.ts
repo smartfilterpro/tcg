@@ -891,12 +891,38 @@ export async function runPriceSync(
 
       for (const patch of patches) {
         const { id, tcgplayer_id, ...fields } = patch;
-        // The id goes in its OWN statement. It is uniquely indexed, so when
-        // the catalogue holds a duplicate the twin already owns that id and
-        // the write is rejected — and bundled in here, that rejection threw
-        // away the price, the artwork and the printing details along with
-        // it, silently, for precisely the cards that most needed fixing.
-        // The price is the point; the id is a bonus.
+        // THE ID GOES FIRST, AND A CONFLICT CANCELS THE PRICE.
+        //
+        // It used to go last, as a bonus after the price was already
+        // written, on the reasoning that a rejected id shouldn't cost us a
+        // good price. That reasoning was backwards, and it is the bug that
+        // put $706.96 on a Shuppet.
+        //
+        // tcgplayer_id is uniquely indexed, so a rejection means some OTHER
+        // card in the catalogue already owns this TCGplayer product. There
+        // are only two ways that happens: our catalogue holds a genuine
+        // twin of this card, or the matcher has paired two DIFFERENT cards
+        // to one product. In the second case the price we are about to
+        // write belongs to somebody else — which is exactly how a common
+        // and a secret rare two hundred numbers apart ended up holding the
+        // same number to the cent, and why the server log fills with
+        // hundreds of these warnings every sync.
+        //
+        // We cannot tell the two cases apart from here. But the costs are
+        // not symmetric: skipping a price on a genuine twin loses nothing,
+        // because the twin already carries it, while applying a mismatched
+        // one silently corrupts what somebody's collection is worth. So the
+        // unique index becomes what it always should have been — the proof
+        // that this match is real, checked BEFORE we trust anything else
+        // that came with it.
+        if (tcgplayer_id) {
+          const attached = await attachTcgPlayerId(admin, id, tcgplayer_id);
+          if (attached.conflict) {
+            state.idConflicts = (state.idConflicts ?? 0) + 1;
+            continue;
+          }
+          if (attached.saved) state.idsFilled += 1;
+        }
         const { error } = await admin
           .from("cards")
           .update({ ...fields, price_updated_at: new Date().toISOString() })
@@ -905,15 +931,8 @@ export async function runPriceSync(
           console.warn(`price sync: couldn't update ${id}: ${error.message}`);
           continue;
         }
-        let idSaved = false;
-        if (tcgplayer_id) {
-          const attached = await attachTcgPlayerId(admin, id, tcgplayer_id);
-          idSaved = attached.saved;
-          if (attached.conflict) state.idConflicts = (state.idConflicts ?? 0) + 1;
-        }
         if (fields.market_price != null) state.pricesFilled += 1;
         if (fields.image_small) state.imagesFilled += 1;
-        if (idSaved) state.idsFilled += 1;
         if (
           fields.rarity ||
           fields.supertype ||
