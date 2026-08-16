@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
-import type { CollectionItem } from "@/lib/types";
+import { CARD_SUMMARY_COLUMNS, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { errorJson } from "@/lib/apiError";
 
@@ -30,7 +30,7 @@ export async function GET(_req: Request, { params }: Params) {
     const { data, error } = await fetchAllRows(() =>
       supabase
         .from("collection_items")
-        .select("*, card:cards(*)")
+        .select(`*, card:cards(${CARD_SUMMARY_COLUMNS})`)
         .eq("user_id", id)
         .order("created_at", { ascending: false })
         .order("id")

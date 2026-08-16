@@ -12,6 +12,7 @@ import {
   PATTERN_VARIANTS,
   type CardSummary,
   type CollectionItem,
+  CARD_SUMMARY_COLUMNS,
 } from "@/lib/types";
 import { patternPrintingFor } from "@/lib/cardPrinting";
 import { fetchAllRows } from "@/lib/fetchAll";
@@ -27,7 +28,7 @@ export async function GET() {
     const { data, error } = await fetchAllRows(() =>
       supabase
         .from("collection_items")
-        .select("*, card:cards(*)")
+        .select(`*, card:cards(${CARD_SUMMARY_COLUMNS})`)
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .order("id")

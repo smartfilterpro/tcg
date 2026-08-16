@@ -80,6 +80,23 @@ export function itemPrice(item: {
   return priceForVariant(item.card, item.variant ?? "normal");
 }
 
+/** The card columns a collection LIST actually renders.
+ *
+ *  `card:cards(*)` shipped every column of every card — including
+ *  battle_data (attacks, abilities, rules text) and effects (the compiled
+ *  battle script), two fat jsonb blobs the grid never reads. Across a
+ *  1,700-row collection that is most of the payload, which is most of the
+ *  load time. The card sheet's text panel fetches its own via /api/cards
+ *  when opened, so nothing here loses data — it stops shipping data nobody
+ *  asked for yet.
+ *
+ *  One constant rather than three hand-typed lists, so the collection, the
+ *  family view and the friend view cannot drift apart column by column. */
+export const CARD_SUMMARY_COLUMNS =
+  "id, name, supertype, subtypes, types, hp, number, rarity, set_id, set_name, " +
+  "set_series, set_printed_total, release_date, image_small, image_large, " +
+  "market_price, prices, price_updated_at";
+
 /** DB row shape of the cards table (snake_case). */
 export interface CardSummaryRow {
   id: string;

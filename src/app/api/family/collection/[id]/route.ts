@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser } from "@/lib/auth";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { errorJson } from "@/lib/apiError";
-import type { CollectionItem } from "@/lib/types";
+import { CARD_SUMMARY_COLUMNS, type CollectionItem } from "@/lib/types";
 
 interface Params {
   params: Promise<{ id: string }>;
@@ -51,7 +51,7 @@ export async function GET(_req: Request, { params }: Params) {
     const { data, error } = await fetchAllRows(() =>
       supabase
         .from("collection_items")
-        .select("*, card:cards(*)")
+        .select(`*, card:cards(${CARD_SUMMARY_COLUMNS})`)
         .eq("user_id", id)
         .order("created_at", { ascending: false })
         .order("id")
