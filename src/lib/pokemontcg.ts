@@ -187,7 +187,15 @@ async function apiFetchJson(
       const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
       const jittered = backoff * (0.75 + Math.random() * 0.5);
       // If they told us how long to wait, believe them over our own guess.
-      await sleep(Math.max(jittered, retryAfterMs));
+      const wait = Math.max(jittered, retryAfterMs);
+      // …unless the wait itself would outlive the deadline. The check above
+      // ran BEFORE the sleep, so a 429 with "Retry-After: 30" sailed past
+      // it at t=1s, napped for thirty seconds, and then fetched anyway —
+      // which is how one Litwick spent 37s against a 12s budget while five
+      // finished cards waited. A deadline someone can sleep through is not
+      // a deadline.
+      if (opts?.deadline != null && Date.now() + wait >= opts.deadline) break;
+      await sleep(wait);
       retryAfterMs = 0;
     }
 
