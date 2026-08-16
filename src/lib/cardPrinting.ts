@@ -14,12 +14,45 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { numberKey } from "@/lib/pokemontcg";
 import { normalizeForSearch } from "@/lib/text";
 import { setsAgree } from "@/lib/setName";
-import { isSpecificPrinting, ballPatternOf, rowToSummary } from "@/lib/types";
+import { isSpecificPrinting, ballPatternOf, rowToSummary, CARD_SUMMARY_COLUMNS } from "@/lib/types";
 import type { CardSummary, CardSummaryRow } from "@/lib/types";
 
 /** Is this row the plain printing — the one with no qualifier in its name? */
 export function isPlainPrinting(name: string): boolean {
   return !isSpecificPrinting(name);
+}
+
+/** Which catalogue's id scheme to prefer when the same physical card exists
+ *  under more than one. pokemontcg.io ids ("sv8-45") are the canonical
+ *  spine of the catalogue; "tcgdex-…" rows arrive when a set is too new for
+ *  it; "tcgp-…" rows come from the price sync. Lower is better. */
+function schemeRank(id: string): number {
+  if (id.startsWith("tcgp-")) return 2;
+  if (id.startsWith("tcgdex-")) return 1;
+  return 0;
+}
+
+/** If every row here is the SAME card — one physical printing held under
+ *  several id schemes because it was imported from several catalogues —
+ *  return the best row for it. Null when the rows are genuinely different
+ *  cards (different sets), which stays an unanswered question.
+ *
+ *  This is the miss that made brand-new sets scan slowly forever: a set
+ *  lands in TCGdex first, a scan saves "tcgdex-sv10-45 Litwick", the nightly
+ *  import later adds "sv10-45 Litwick", and from then on two identical plain
+ *  rows made the picker refuse — so every future scan of a card we hold
+ *  twice went out to an external API. Two copies of the same answer is not
+ *  ambiguity. */
+function soleCard<T extends { id: string; name: string; set_name?: string | null }>(
+  rows: T[]
+): T | null {
+  const first = rows[0];
+  for (const r of rows.slice(1)) {
+    if (!setsAgree(r.set_name, first.set_name)) return null;
+  }
+  return [...rows].sort(
+    (a, b) => schemeRank(a.id) - schemeRank(b.id) || a.id.localeCompare(b.id)
+  )[0];
 }
 
 /** Choose between rows that share a name and a collector number.
@@ -34,7 +67,7 @@ export function isPlainPrinting(name: string): boolean {
  *
  *  Returns null when the choice is genuinely unclear, which sends the caller
  *  down its existing slower path rather than guessing. */
-export function pickPrinting<T extends { id: string; name: string }>(
+export function pickPrinting<T extends { id: string; name: string; set_name?: string | null }>(
   rows: T[],
   hint: string | null | undefined
 ): T | null {
@@ -48,15 +81,16 @@ export function pickPrinting<T extends { id: string; name: string }>(
       return ball.words.some((w) => n.includes(w));
     });
     if (named.length === 1) return named[0];
-    // Several balls and a scan that couldn't name which: an unanswered
-    // question, not a choice.
-    if (named.length > 1) return null;
+    // Several rows naming a ball: fine if they are one card under several
+    // id schemes; an unanswered question, not a choice, if they aren't.
+    if (named.length > 1) return soleCard(named);
     // It saw a ball and no row carries one — fall through to the plain row,
     // which the caller will label with the pattern as a finish.
   }
 
   const plain = rows.filter((r) => isPlainPrinting(r.name));
   if (plain.length === 1) return plain[0];
+  if (plain.length > 1) return soleCard(plain);
   return null;
 }
 
@@ -79,14 +113,29 @@ export async function patternPrintingFor(
   if (isSpecificPrinting(base.name)) return null;
 
   try {
-    const { data } = await db
-      .from("cards")
-      .select("*")
-      .ilike("name", `${base.name.replace(/[%_]/g, " ")}%`)
-      .limit(40);
-    const rows = (data ?? []) as CardSummaryRow[];
-    const wantedNumber = numberKey(base.number);
     const baseName = normalizeForSearch(base.name);
+    let rows: CardSummaryRow[];
+    try {
+      // Indexed prefix on the normalized key (migration 066).
+      const { data, error } = await db
+        .from("cards")
+        .select(CARD_SUMMARY_COLUMNS)
+        .like("name_key", `${baseName}%`)
+        .order("name_key")
+        .order("id")
+        .limit(40);
+      if (error) throw error;
+      rows = (data ?? []) as unknown as CardSummaryRow[];
+    } catch {
+      // Pre-066 fallback: the old byte-wise prefix scan.
+      const { data } = await db
+        .from("cards")
+        .select(CARD_SUMMARY_COLUMNS)
+        .ilike("name", `${base.name.replace(/[%_]/g, " ")}%`)
+        .limit(40);
+      rows = (data ?? []) as unknown as CardSummaryRow[];
+    }
+    const wantedNumber = numberKey(base.number);
     const hits = rows.filter((r) => {
       if (r.id === base.id) return false;
       if (numberKey(r.number) !== wantedNumber) return false;
@@ -97,6 +146,9 @@ export async function patternPrintingFor(
     if (hits.length === 0) return null;
     // A scan that saw "a ball" without naming it may not pick between two.
     if (hits.length > 1 && ball.variant == null) return null;
+    // Same printing held under several id schemes is one answer, not an
+    // arbitrary draw — prefer the canonical row, deterministically.
+    hits.sort((a, b) => schemeRank(a.id) - schemeRank(b.id) || a.id.localeCompare(b.id));
     return rowToSummary(hits[0]);
   } catch {
     return null;
