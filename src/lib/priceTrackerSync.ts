@@ -174,12 +174,22 @@ export function freshSyncState(): SyncState {
  *  reasonable `state.indexedCards.toLocaleString()` throws and takes the
  *  whole admin page down with a blank client-side error. Persisted JSON
  *  outlives the code that wrote it, so the reader owns the defaults. */
+/** Where the sync got to, or null if it has genuinely never run.
+ *
+ *  THROWS when the read fails — the same hardening the card import needed
+ *  and for the same reason: a swallowed error returned null, null reads as
+ *  "never ran", and "never ran" restarts the pass at set 0. One flaky
+ *  SELECT threw away a mostly-finished pass and re-spent the day's credits
+ *  re-walking sets it had already priced. */
 export async function readSyncState(admin: SupabaseClient): Promise<SyncState | null> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from("app_state")
     .select("value")
     .eq("key", SYNC_STATE_KEY)
     .maybeSingle();
+  if (error) {
+    throw new Error(`couldn't read the price sync's progress: ${error.message}`);
+  }
   const stored = data?.value as Partial<SyncState> | undefined;
   if (!stored) return null;
   return { ...freshSyncState(), ...stored };
@@ -523,7 +533,15 @@ export function patchFor(ours: OurCard, theirs: TheirCard): Patch | null {
 const LOOP_CLAIM_KEY = "pt_sync_loop";
 const LOOP_TICK_MS = 10 * 60_000;
 const LOOP_HOT_GAP_MS = 7 * 60_000;
-const LOOP_REST_GAP_MS = 20 * 3600_000;
+/** Rest between full passes of the catalogue.
+ *
+ *  Three days, up from twenty hours. A daily re-walk of all 217 sets spent
+ *  the entire allowance every single day on prices that mostly hadn't
+ *  moved — Base Set does not reprice overnight — while the cards people
+ *  actually own are kept fresh separately by the nightly refresher. The
+ *  sweep exists to catch the catalogue at large drifting, and three days
+ *  is well inside how fast it drifts. */
+const LOOP_REST_GAP_MS = 72 * 3600_000;
 
 export function startPriceSyncLoop() {
   const tick = async () => {
@@ -531,10 +549,20 @@ export function startPriceSyncLoop() {
       if (!priceTrackerEnabled()) return;
       const admin = createAdminClient();
       const current = await readSyncState(admin);
-      // Rest once a pass is done; run hot while sets remain. A brand-new
-      // install (no state) counts as work to do.
-      const gap = current?.done ? LOOP_REST_GAP_MS : LOOP_HOT_GAP_MS;
-      const cutoff = new Date(Date.now() - gap).toISOString();
+
+      // A finished pass rests on the SYNC'S own clock, not the claim row's.
+      // The claim row records when a tick last ran — a different fact — and
+      // gating the rest on it is the bug the card import had: anything that
+      // took the hot path once collapsed a multi-day rest to minutes. The
+      // pass's own finishedAt cannot be confused with anything else, and an
+      // unparseable one rests rather than restarts.
+      if (current?.done) {
+        const finished = Date.parse(current.finishedAt ?? current.updatedAt ?? "");
+        if (!Number.isFinite(finished) || Date.now() - finished < LOOP_REST_GAP_MS) return;
+      }
+
+      // The claim row keeps its real job: one instance walking sets at a time.
+      const cutoff = new Date(Date.now() - LOOP_HOT_GAP_MS).toISOString();
       await admin
         .from("app_state")
         .upsert({ key: LOOP_CLAIM_KEY }, { onConflict: "key", ignoreDuplicates: true })
@@ -600,7 +628,15 @@ export async function runPriceSync(
   // answers with a plain-text "upstream error" page instead. The panel calls
   // repeatedly; each call stays well inside the timeout.
   const maxSets = Math.max(1, Math.min(60, opts.maxSets ?? 3));
-  const reserve = Math.max(0, opts.reserve ?? 2000);
+  // A quarter of the day's allowance stays out of the sweep's reach.
+  //
+  // 2,000 was not enough. The sweep spent 18,013 of 20,000 credits in a
+  // day and then idled for eleven hours, leaving every interactive lookup
+  // — the per-card Refresh button, the fill-missing pass after a scan, the
+  // grading lookups — to fight over the last tenth. Those are the requests
+  // a person is standing there waiting on; the sweep is nobody's wait. It
+  // finishes a pass later now, and the pass was already spanning days.
+  const reserve = Math.max(0, opts.reserve ?? 5000);
 
   const previous = await readSyncState(admin);
   const state =
@@ -891,12 +927,38 @@ export async function runPriceSync(
 
       for (const patch of patches) {
         const { id, tcgplayer_id, ...fields } = patch;
-        // The id goes in its OWN statement. It is uniquely indexed, so when
-        // the catalogue holds a duplicate the twin already owns that id and
-        // the write is rejected — and bundled in here, that rejection threw
-        // away the price, the artwork and the printing details along with
-        // it, silently, for precisely the cards that most needed fixing.
-        // The price is the point; the id is a bonus.
+        // THE ID GOES FIRST, AND A CONFLICT CANCELS THE PRICE.
+        //
+        // It used to go last, as a bonus after the price was already
+        // written, on the reasoning that a rejected id shouldn't cost us a
+        // good price. That reasoning was backwards, and it is the bug that
+        // put $706.96 on a Shuppet.
+        //
+        // tcgplayer_id is uniquely indexed, so a rejection means some OTHER
+        // card in the catalogue already owns this TCGplayer product. There
+        // are only two ways that happens: our catalogue holds a genuine
+        // twin of this card, or the matcher has paired two DIFFERENT cards
+        // to one product. In the second case the price we are about to
+        // write belongs to somebody else — which is exactly how a common
+        // and a secret rare two hundred numbers apart ended up holding the
+        // same number to the cent, and why the server log fills with
+        // hundreds of these warnings every sync.
+        //
+        // We cannot tell the two cases apart from here. But the costs are
+        // not symmetric: skipping a price on a genuine twin loses nothing,
+        // because the twin already carries it, while applying a mismatched
+        // one silently corrupts what somebody's collection is worth. So the
+        // unique index becomes what it always should have been — the proof
+        // that this match is real, checked BEFORE we trust anything else
+        // that came with it.
+        if (tcgplayer_id) {
+          const attached = await attachTcgPlayerId(admin, id, tcgplayer_id);
+          if (attached.conflict) {
+            state.idConflicts = (state.idConflicts ?? 0) + 1;
+            continue;
+          }
+          if (attached.saved) state.idsFilled += 1;
+        }
         const { error } = await admin
           .from("cards")
           .update({ ...fields, price_updated_at: new Date().toISOString() })
@@ -905,15 +967,8 @@ export async function runPriceSync(
           console.warn(`price sync: couldn't update ${id}: ${error.message}`);
           continue;
         }
-        let idSaved = false;
-        if (tcgplayer_id) {
-          const attached = await attachTcgPlayerId(admin, id, tcgplayer_id);
-          idSaved = attached.saved;
-          if (attached.conflict) state.idConflicts = (state.idConflicts ?? 0) + 1;
-        }
         if (fields.market_price != null) state.pricesFilled += 1;
         if (fields.image_small) state.imagesFilled += 1;
-        if (idSaved) state.idsFilled += 1;
         if (
           fields.rarity ||
           fields.supertype ||

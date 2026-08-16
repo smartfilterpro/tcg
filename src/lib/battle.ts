@@ -17,6 +17,16 @@
  */
 
 import { payCost, paymentNote } from "@/lib/energy";
+import {
+  activeModifiers,
+  firedTriggers,
+  resolveAttack,
+  type Action as FxAction,
+  type BoardView,
+  type CompiledCard,
+  type StackView,
+  type TargetRef,
+} from "@/lib/cardEffects";
 
 export interface BattleAttack {
   name: string;
@@ -58,6 +68,9 @@ export interface BattleCard {
   abilities?: Array<{ name: string; text: string }>;
   /** AI-compiled effect ops, executed when a Trainer is played. */
   fx?: { ops: Array<{ op: string; n?: number; note?: string }> } | null;
+  /** The compiled effect script (see cardEffects). Produced once per card by
+   *  the background sweep; never generated during a battle. */
+  eff?: CompiledCard | null;
 }
 
 export const STATUS_CONDITIONS = ["poisoned", "burned", "asleep", "paralyzed", "confused"] as const;
@@ -191,7 +204,13 @@ export type BattleAction = { override?: boolean } & (
   | { type: "promote"; benchIndex: number }
   | { type: "benchActive" }
   | { type: "useStadium" }
-  | { type: "attack"; attackIndex: number }
+  /** `flip` answers an attack whose text gates it on a coin ("if tails, this
+   *  attack does nothing"). Supplied by the caller, never rolled inside the
+   *  engine: the same board and the same coin must give the same result, or
+   *  the game cannot be replayed, tested or trusted. Absent means nobody
+   *  tossed, and the engine hands the attack back to the players rather
+   *  than reading silence as tails. */
+  | { type: "attack"; attackIndex: number; flip?: boolean }
   | { type: "setStatus"; side: "me" | "opp"; target: "active" | number; status: StatusCondition; on: boolean }
   | { type: "damage"; side: "me" | "opp"; target: "active" | number; delta: number }
   | { type: "knockout"; target: "active" | number }
@@ -274,6 +293,214 @@ function energyCount(stack: BattleStack): number {
 
 function hasStatus(stack: BattleStack, s: StatusCondition): boolean {
   return (stack.status ?? []).includes(s);
+}
+
+/** The board as an effect can see it: names, numbers, nothing writable.
+ *
+ *  Built fresh per resolution rather than kept alongside the state. It is a
+ *  projection, and a stale projection is how a rules engine ends up applying
+ *  a bonus for a Pokémon that left the bench two turns ago. */
+function stackView(s: BattleStack): StackView {
+  return {
+    name: s.face.name,
+    types: s.face.types ?? [],
+    hp: s.face.hp ?? null,
+    damage: s.damage,
+    status: s.status ?? [],
+    energy: s.attached.filter((c) => c.cat === "energy").length,
+    attached: s.attached.map((c) => c.name),
+  };
+}
+
+function boardView(me: SideState, them: SideState): BoardView {
+  return {
+    me: {
+      active: me.active ? stackView(me.active) : null,
+      bench: me.bench.map(stackView),
+      handCount: me.hand.length,
+      deckCount: me.deck.length,
+    },
+    them: {
+      active: them.active ? stackView(them.active) : null,
+      bench: them.bench.map(stackView),
+      handCount: them.hand.length,
+      deckCount: them.deck.length,
+    },
+  };
+}
+
+/** Everything in play on one side, with whatever it compiled to.
+ *
+ *  Tools and other attachments count: a Tool's whole job is to sit under a
+ *  Pokémon and change it, so leaving attachments out would drop exactly the
+ *  cards this system exists for. */
+function inPlayCards(side: SideState): Array<{ compiled?: CompiledCard | null; name: string; who: TargetRef }> {
+  const out: Array<{ compiled?: CompiledCard | null; name: string; who: TargetRef }> = [];
+  const add = (stack: BattleStack, who: TargetRef) => {
+    out.push({ compiled: stack.face.eff, name: stack.face.name, who });
+    for (const a of stack.attached) out.push({ compiled: a.eff, name: a.name, who });
+  };
+  if (side.active) add(side.active, "self");
+  for (const b of side.bench) add(b, "myBench");
+  return out;
+}
+
+/** Sum the damage modifiers that point at a given role. */
+function damageMods(
+  side: SideState,
+  board: BoardView,
+  kind: "attackDamage" | "damageTaken"
+): { total: number; noWeakness: boolean } {
+  const mods = activeModifiers(inPlayCards(side), board);
+  let total = 0;
+  let noWeakness = false;
+  for (const m of mods) {
+    if (m.mod === kind && (m.who === "self" || m.who === "myActive")) total += m.n;
+    if (m.mod === "noWeakness" && (m.who === "self" || m.who === "myActive")) noWeakness = true;
+  }
+  return { total, noWeakness };
+}
+
+/** Carry out compiled actions against the board.
+ *
+ *  Returns the sentence describing what it did, and mutates as it goes.
+ *
+ *  Anything needing a decision — which Benched Pokémon, which card out of
+ *  the deck — is DESCRIBED rather than done. The engine picking a target for
+ *  you is not automation, it is playing your game for you, and it is wrong
+ *  about half the time by construction. Those become an instruction in the
+ *  log, which is what the app did for everything before this existed.
+ *
+ *  `actor` is the side the effect belongs to, `foe` the other one, and
+ *  `attackerStack` whoever just attacked — the one thing a trigger needs
+ *  that neither side can name on its own. */
+function applyFx(
+  actions: FxAction[],
+  actor: SideState,
+  foe: SideState,
+  attackerStack: BattleStack | null
+): string {
+  const said: string[] = [];
+
+  const pick = (who: TargetRef): BattleStack[] => {
+    switch (who) {
+      case "self":
+      case "myActive":
+        return actor.active ? [actor.active] : [];
+      case "myBench":
+        return actor.bench;
+      case "myAll":
+        return [...(actor.active ? [actor.active] : []), ...actor.bench];
+      case "theirActive":
+        return foe.active ? [foe.active] : [];
+      case "theirBench":
+        return foe.bench;
+      case "theirAll":
+        return [...(foe.active ? [foe.active] : []), ...foe.bench];
+      case "attacker":
+        return attackerStack ? [attackerStack] : [];
+      case "chosen":
+        return [];
+    }
+  };
+
+  const hurt = (stack: BattleStack, n: number) => {
+    stack.damage = Math.min(990, stack.damage + n);
+    return `${n} to ${stack.face.name} (now ${stack.damage}${stack.face.hp ? ` / ${stack.face.hp} HP` : ""})`;
+  };
+
+  for (const a of actions) {
+    switch (a.do) {
+      case "damage":
+      case "damageCounters": {
+        // Counters are the unit the cards are printed in; ten damage each.
+        const amount = a.do === "damageCounters" ? a.n * 10 : a.n;
+        const targets = pick(a.who);
+        if (targets.length === 0) {
+          said.push(
+            a.who === "chosen"
+              ? `place ${amount} damage on a Pokémon of your choice`
+              : `place ${amount} damage`
+          );
+          break;
+        }
+        said.push(targets.map((t) => hurt(t, amount)).join(", "));
+        break;
+      }
+      case "heal": {
+        const targets = pick(a.who);
+        if (targets.length === 0) break;
+        for (const t of targets) t.damage = Math.max(0, t.damage - a.n);
+        said.push(`healed ${a.n} from ${targets.map((t) => t.face.name).join(", ")}`);
+        break;
+      }
+      case "status": {
+        const targets = pick(a.who);
+        const s = a.status.toLowerCase() as StatusCondition;
+        if (!STATUS_CONDITIONS.includes(s)) break;
+        for (const t of targets) {
+          t.status = [...new Set([...(t.status ?? []), s])];
+        }
+        if (targets.length > 0) said.push(`${targets.map((t) => t.face.name).join(", ")} is now ${s}`);
+        break;
+      }
+      case "clearStatus": {
+        for (const t of pick(a.who)) {
+          t.status = a.status ? (t.status ?? []).filter((x) => x !== a.status) : [];
+        }
+        said.push("status cleared");
+        break;
+      }
+      case "draw": {
+        let drew = 0;
+        for (let i = 0; i < a.n; i++) {
+          const c = actor.deck.shift();
+          if (!c) break;
+          actor.hand.push(c);
+          drew += 1;
+        }
+        said.push(`drew ${drew}`);
+        break;
+      }
+      case "millDeck": {
+        let n = 0;
+        for (let i = 0; i < a.n; i++) {
+          const c = actor.deck.shift();
+          if (!c) break;
+          actor.discard.push(c);
+          n += 1;
+        }
+        said.push(`discarded ${n} from the top of the deck`);
+        break;
+      }
+      case "manual":
+        said.push(a.note);
+        break;
+      // Everything below needs a choice. Described, never decided.
+      case "searchDeckToHand":
+        said.push(`search your deck for ${a.what ?? "a card"} (deck pile → 🔍 Search)`);
+        break;
+      case "searchDeckToBench":
+        said.push(`search your deck for ${a.what ?? "a Pokémon"} and bench it`);
+        break;
+      case "attachEnergyFromDiscard":
+        said.push(`attach ${a.n} energy from your discard pile`);
+        break;
+      case "discardEnergy":
+        said.push(`discard ${a.n} energy`);
+        break;
+      case "discardHand":
+        said.push(a.n ? `discard ${a.n} from your hand` : "discard your hand");
+        break;
+      case "shuffleHandIntoDeckDraw":
+        said.push(`shuffle your hand into your deck and draw ${a.n}`);
+        break;
+      case "switch":
+        said.push(a.side === "mine" ? "switch your Active" : "your opponent switches their Active");
+        break;
+    }
+  }
+  return said.length > 0 ? `. ${said.join("; ")}` : "";
 }
 
 /** Parse "80", "150+", "20×", "" → base number + variable marker. */
@@ -846,31 +1073,64 @@ export function applyAction(
       if (!payment.ok) warnings.push(paymentNote(payment));
       const { base, variable } = parseDamage(attack.damage);
       const target = opp.active;
-      let dmg = base;
-      const mods: string[] = [];
       const myTypes = me.active.face.types ?? [];
-      if (dmg > 0 && target.face.weak && myTypes.includes(target.face.weak)) {
-        dmg *= 2;
-        mods.push("weakness ×2");
-      }
-      if (dmg > 0 && target.face.resist && myTypes.includes(target.face.resist)) {
-        dmg = Math.max(0, dmg - 30);
-        mods.push("resistance −30");
-      }
+
+      // EVERYTHING IS WORKED OUT BEFORE ANYTHING IS APPLIED.
+      //
+      // The old order dealt the printed damage on the spot and left the
+      // card's own text to the players, which is how a coin-flip attack
+      // that missed still hit: the log from the game that prompted this
+      // reads "30 damage to Seel", then "healed 30 from the opposing Seel",
+      // then "flipped a coin: TAILS". Resolving first means a miss is a
+      // miss rather than something to undo by hand.
+      const board = boardView(me, opp);
+      const mine = damageMods(me, board, "attackDamage");
+      const theirs = damageMods(opp, board, "damageTaken");
+      const resolved = resolveAttack({
+        compiled: me.active.face.eff,
+        attackIndex: action.attackIndex,
+        base,
+        board,
+        flip: action.flip,
+        weakness: !!target.face.weak && myTypes.includes(target.face.weak),
+        resistance: !!target.face.resist && myTypes.includes(target.face.resist),
+        attackerMods: mine.total,
+        defenderMods: theirs.total,
+        noWeakness: theirs.noWeakness,
+      });
+
       let text = `attacked with ${attack.name}`;
       if (warnings.length > 0) text += ` (${warnings.join(", ")})`;
       if (hasStatus(me.active, "confused")) {
         text += " (confused — remember the coin flip: tails = 30 damage to itself instead)";
       }
-      if (dmg > 0) {
-        target.damage = Math.min(990, target.damage + dmg);
-        text += ` — ${dmg} damage to ${target.face.name}${mods.length ? ` (${mods.join(", ")})` : ""} (now ${target.damage}${target.face.hp ? ` / ${target.face.hp} HP` : ""})`;
+      if (action.flip !== undefined) {
+        text += ` — flipped ${action.flip ? "HEADS" : "TAILS"} 🪙`;
       }
-      if (variable) {
+      if (resolved.fizzled) {
+        text += " — no effect";
+      } else if (resolved.total > 0) {
+        target.damage = Math.min(990, target.damage + resolved.total);
+        text += ` — ${resolved.total} damage to ${target.face.name}${resolved.steps.length ? ` (${resolved.steps.join(", ")})` : ""} (now ${target.damage}${target.face.hp ? ` / ${target.face.hp} HP` : ""})`;
+      }
+      // Only ask the players to do the maths when the engine genuinely
+      // couldn't. A compiled attack has already counted the bench.
+      if (variable && resolved.manual) {
         text += ` — ${attack.damage.includes("+") || attack.damage.includes("×") || attack.damage.includes("x") ? "this attack has a +/× damage effect" : "damage varies"}: read the card and adjust with the damage buttons`;
       }
+      // The card's own text, and then whatever of it the engine did itself.
       if (attack.text) {
         text += `. Effect: ${attack.text.length > 220 ? attack.text.slice(0, 220) + "…" : attack.text}`;
+      }
+      if (!resolved.fizzled && resolved.effects.length > 0) {
+        text += applyFx(resolved.effects, me, opp, target);
+      }
+      // Reactions on the defending side — an ability that answers being hit.
+      if (!resolved.fizzled && resolved.total > 0) {
+        const after = boardView(opp, me);
+        for (const t of firedTriggers(inPlayCards(opp), "damagedByAttack", after)) {
+          text += `. ${t.source}: ${applyFx(t.actions, opp, me, me.active).replace(/^\. /, "")}`;
+        }
       }
       if (target.face.hp && target.damage >= target.face.hp) {
         const ko = knockOut(oppId, "active", `${text} —`);

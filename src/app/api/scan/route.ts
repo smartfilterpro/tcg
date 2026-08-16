@@ -240,6 +240,59 @@ async function matchFromLocalDb(
  *  one of them was unlucky. */
 const EXTERNAL_BUDGET_MS = 12_000;
 
+/** How many cards may be looked up at once.
+ *
+ *  Unchanged from the old batch size — the point of the pool is not to hit
+ *  other people's servers harder, it is to stop fast cards waiting behind
+ *  slow ones. */
+const MATCH_CONCURRENCY = 4;
+
+/** Run `fn` over `items`, at most `limit` at a time, keeping order.
+ *
+ *  A worker takes the next index the moment it is free, so nothing waits on
+ *  a neighbour. That is the whole difference from batching. */
+async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker)
+  );
+  return out;
+}
+
+/** Give up on a promise once the deadline passes, and carry on.
+ *
+ *  The work is abandoned rather than cancelled — the request will finish
+ *  somewhere and its answer thrown away. That is the honest cost of a
+ *  fetch with no abort signal threaded through it, and it is much cheaper
+ *  than the alternative, which is a whole scan waiting on one card. */
+async function withinDeadline<T>(promise: Promise<T>, deadline: number, fallback: T): Promise<T> {
+  const left = deadline - Date.now();
+  if (left <= 0) return fallback;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), left);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Where a scan's time went, per stage and per card.
  *
  *  "It took 57 seconds" is not a diagnosis. The model reading the photo, the
@@ -441,14 +494,24 @@ async function runScan(opts: {
       };
     });
 
-    const results: ScanMatch[] = [];
     const matchStartedAt = Date.now();
-    const BATCH = 4;
-    for (let i = 0; i < detectedCards.length; i += BATCH) {
-      const batch = detectedCards.slice(i, i + BATCH);
-      const matched = await Promise.all(
-        batch.map(async (detected) => {
+    // A POOL, NOT BATCHES.
+    //
+    // This used to run in fixed batches of four, and a batch finishes when
+    // its slowest member does — so six cards that resolved in milliseconds
+    // sat waiting on one that took half a minute, twice over. A seven-card
+    // scan spent 62 seconds matching against 9 seconds of model time, and
+    // almost all of it was cards doing nothing.
+    //
+    // Same concurrency, no barrier: a worker that finishes starts the next
+    // card immediately instead of waiting for its neighbours. Order is
+    // preserved by index because the results line up with the photos.
+    const results: ScanMatch[] = await mapPool(
+      detectedCards,
+      MATCH_CONCURRENCY,
+      async (detected) => {
           const cardStartedAt = Date.now();
+          const cardDeadline = cardStartedAt + EXTERNAL_BUDGET_MS;
           const note = (path: string, swapped?: boolean) =>
             timings.cards.push({
               name: detected.name,
@@ -475,7 +538,7 @@ async function runScan(opts: {
           // 39.5 seconds while the rest of the scan waited: a batch finishes
           // when its slowest member does.
           let { match, candidates } = await matchDetectedCard(detected, {
-            deadline: cardStartedAt + EXTERNAL_BUDGET_MS,
+            deadline: cardDeadline,
             timeoutMs: 8_000,
             attempts: 2,
           });
@@ -490,11 +553,20 @@ async function runScan(opts: {
           const primaryHasNumber =
             !key || candidates.some((c) => numberKey(c.number) === key);
           if (detected.name && (candidates.length === 0 || !primaryHasNumber)) {
-            const alt = await searchTcgdex({
-              name: detected.name,
-              number: detected.collectorNumber ?? undefined,
-              pageSize: 6,
-            });
+            // The budget covers THIS too. It used to gate only the primary
+            // matcher, so a card could spend its whole twelve seconds there
+            // and then another nineteen here, unbounded — which is how one
+            // card reached 31.2 seconds against a 12-second budget. A budget
+            // that only covers the first half of the work is not a budget.
+            const alt = await withinDeadline(
+              searchTcgdex({
+                name: detected.name,
+                number: detected.collectorNumber ?? undefined,
+                pageSize: 6,
+              }),
+              cardDeadline,
+              [] as CardSummary[]
+            );
             const altNumberMatches = key
               ? alt.filter((c) => numberKey(c.number) === key)
               : alt;
@@ -526,10 +598,8 @@ async function runScan(opts: {
             swappedHere
           );
           return { detected, match, candidates } satisfies ScanMatch;
-        })
-      );
-      results.push(...matched);
-    }
+      }
+    );
 
     // How many of each of these they already own.
     //
