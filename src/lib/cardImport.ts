@@ -78,12 +78,26 @@ export function freshImportState(): CardImportState {
   };
 }
 
+/** Where the import got to, or null if it has genuinely never run.
+ *
+ *  THROWS when the read itself fails, and that distinction is the whole
+ *  point. It used to swallow the error and return null, which every caller
+ *  reads as "never imported" — and the answer to "never imported" is
+ *  "start at page 1". So a single flaky SELECT threw away a finished
+ *  catalogue and re-walked twenty thousand cards.
+ *
+ *  Failing loudly is right here. Not knowing where we are should stop the
+ *  job and say so; it should never be indistinguishable from being at the
+ *  beginning. */
 export async function readImportState(admin: SupabaseClient): Promise<CardImportState | null> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from("app_state")
     .select("value")
     .eq("key", IMPORT_STATE_KEY)
     .maybeSingle();
+  if (error) {
+    throw new Error(`couldn't read the import's progress: ${error.message}`);
+  }
   return (data?.value as CardImportState | undefined) ?? null;
 }
 
@@ -464,9 +478,46 @@ export function startCardImportLoop() {
     try {
       const { createAdminClient } = await import("@/lib/supabase/admin");
       const admin = createAdminClient();
-      const current = await readImportState(admin);
-      const gap = current?.done ? IMPORT_REST_GAP_MS : IMPORT_HOT_GAP_MS;
-      const cutoff = new Date(Date.now() - gap).toISOString();
+
+      // READ OUR OWN PROGRESS WITH THE ERROR IN VIEW.
+      //
+      // readImportState swallows its error and returns null, and null is
+      // indistinguishable from "never imported" — which this loop, and
+      // runCardImport under it, both treat as "start at page 1". So a single
+      // flaky SELECT re-imported the entire 20,479-card catalogue, and the
+      // server log shows it happening several times a day: complete at
+      // 05:58, complete again at 14:01, running again at 14:12. That is also
+      // why pokemontcg.io keeps answering 500 and 502 — we are walking their
+      // whole database on repeat.
+      //
+      // Not knowing where we are is a reason to do nothing, never a reason
+      // to begin again.
+      const { data, error: readErr } = await admin
+        .from("app_state")
+        .select("value")
+        .eq("key", IMPORT_STATE_KEY)
+        .maybeSingle();
+      if (readErr) return;
+      const current = (data?.value as CardImportState | undefined) ?? null;
+
+      // A FINISHED CATALOGUE RESTS ON ITS OWN CLOCK.
+      //
+      // The week-long pause used to live entirely in the claim row's
+      // timestamp, which is a different fact in a different row: it says
+      // when a tick last ran, not when the catalogue last finished. Anything
+      // that made this tick take the hot path — the null above, an instance
+      // starting fresh — also collapsed the rest period to nine minutes.
+      // Asking the import's own finishedAt cannot be confused that way.
+      if (current?.done) {
+        const finished = Date.parse(current.finishedAt ?? current.updatedAt ?? "");
+        // An unparseable timestamp rests too. A catalogue that is complete
+        // and undated is not a catalogue that needs importing again.
+        if (!Number.isFinite(finished) || Date.now() - finished < IMPORT_REST_GAP_MS) return;
+      }
+
+      // The claim is now only a lock between instances — "is someone else
+      // already walking pages?" — so it always uses the short gap.
+      const cutoff = new Date(Date.now() - IMPORT_HOT_GAP_MS).toISOString();
       await admin
         .from("app_state")
         .upsert({ key: IMPORT_LOOP_CLAIM_KEY }, { onConflict: "key", ignoreDuplicates: true })
