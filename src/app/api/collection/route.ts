@@ -172,23 +172,28 @@ export async function POST(req: Request) {
     const existingByKey = new Map(
       (existing ?? []).map((r) => [`${r.card_id}|${r.variant ?? "normal"}`, r])
     );
+    // One statement for the whole save. This looped one UPDATE or INSERT per
+    // (card, finish) — a 30-card scan review paid 30 sequential round trips
+    // after already holding every existing quantity in hand. The unique key
+    // (user_id, card_id, variant) from migration 002 makes it a single
+    // upsert with the summed quantities computed here.
     let added = 0;
-    for (const [key, w] of wanted) {
-      const row = existingByKey.get(key);
-      if (row) {
-        const { error } = await supabase
-          .from("collection_items")
-          .update({ quantity: (row.quantity as number) + w.qty, updated_at: new Date().toISOString() })
-          .eq("id", row.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from("collection_items")
-          .insert({ user_id: user.id, card_id: w.cardId, variant: w.variant, quantity: w.qty });
-        if (error) throw error;
-      }
+    const stamp = new Date().toISOString();
+    const upsertRows = [...wanted.values()].map((w) => {
       added += w.qty;
-    }
+      const row = existingByKey.get(`${w.cardId}|${w.variant}`);
+      return {
+        user_id: user.id,
+        card_id: w.cardId,
+        variant: w.variant,
+        quantity: ((row?.quantity as number) ?? 0) + w.qty,
+        updated_at: stamp,
+      };
+    });
+    const { error: itemErr } = await supabase
+      .from("collection_items")
+      .upsert(upsertRows, { onConflict: "user_id,card_id,variant" });
+    if (itemErr) throw itemErr;
 
     // 4) Fill gaps on anything that landed without a price or a picture.
     //

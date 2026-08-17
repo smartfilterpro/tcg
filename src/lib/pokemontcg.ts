@@ -476,6 +476,23 @@ export function numberKey(n: string | null | undefined): string {
   return (n ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "");
 }
 
+/** Comparison key that KEEPS letters: "SWSH095" → "swsh95", "TG12" → "tg12",
+ *  "112a" → "112a", while "073", "73" and "73/86" still all reduce to "73".
+ *
+ *  The digits-only key above is right for fuzzy external scoring, where a
+ *  promo prefix on one side only ("SWSH095" vs a source that stores "095")
+ *  must still connect. It is WRONG as the sole test of a confident match:
+ *  letters on a collector number are part of the card's identity — a promo
+ *  read as SWSH095 is not the #95 of some unrelated set, and a "112a"
+ *  alternate is not card 112. Confident paths compare with this key. */
+export function strictNumberKey(n: string | null | undefined): string {
+  return (n ?? "")
+    .split("/")[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .replace(/(^|[^0-9])0+(?=\d)/g, "$1");
+}
+
 /** Search cards by (partial) name and/or collector number / set size.
  *  `nameTokens` matches on word-parts only (punctuation-blind) — use as a
  *  fallback when the exact name phrase finds nothing. */
@@ -665,5 +682,15 @@ export async function matchDetectedCard(
     return { c, score };
   });
   scored.sort((a, b) => b.score - a.score);
-  return { match: scored[0].c, candidates: scored.map((s) => s.c) };
+  // A floor on confidence: when a collector number WAS read and the best
+  // candidate matched on nothing but the name — score zero: wrong number,
+  // no total agreement, no set agreement — that candidate is a guess wearing
+  // a match's clothes, and it used to be returned as the answer. A promo
+  // whose number exists only in a newer catalogue would come back as some
+  // old printing of the same Pokémon, confidently, and get saved. Offer the
+  // name-only findings as candidates for a person to choose from; don't
+  // pre-select one.
+  const best = scored[0];
+  const match = detected.collectorNumber && best.score === 0 ? null : best.c;
+  return { match, candidates: scored.map((s) => s.c) };
 }

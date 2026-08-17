@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
-import { matchDetectedCard, numberKey, cleanCardName } from "@/lib/pokemontcg";
+import { matchDetectedCard, numberKey, strictNumberKey, cleanCardName } from "@/lib/pokemontcg";
+import { normalizeForSearch } from "@/lib/text";
 import { searchTcgdex } from "@/lib/tcgdex";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
@@ -8,7 +9,15 @@ import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createObjectScanner, isEnvelope } from "@/lib/jsonStream";
-import { rowToSummary, defaultVariantFor, type CardSummaryRow } from "@/lib/types";
+import {
+  rowToSummary,
+  summaryToRow,
+  defaultVariantFor,
+  isSpecificPrinting,
+  CARD_SUMMARY_COLUMNS,
+  type CardSummaryRow,
+} from "@/lib/types";
+import { gapFill, CARD_COMPANIONS } from "@/lib/cardWrite";
 import { pickPrinting, patternPrintingFor } from "@/lib/cardPrinting";
 import { setsAgree } from "@/lib/setName";
 import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
@@ -163,16 +172,64 @@ async function matchFromLocalDb(
   supabase: SupabaseClient,
   detected: DetectedCard
 ): Promise<CardSummary | null> {
+  if (!detected.name) return null;
+  const wanted = normalizeForSearch(detected.name);
+  if (!wanted) return null;
+
+  let rows: CardSummaryRow[];
   try {
-    if (!detected.name) return null;
-    const key = numberKey(detected.collectorNumber);
-    const { data } = await supabase
+    // The indexed, spelling-blind key from migration 066: accents, case,
+    // apostrophes and hyphens all folded away, so a detected "Flabebe" or
+    // "Team Rockets Mewtwo ex" (apostrophe unreadable on a glossy card)
+    // still answers. A PREFIX match on purpose — printings the paid sync
+    // names the TCGplayer way, "Dragonair (Poké Ball Pattern)", must be in
+    // the candidate set when the photo says "Dragonair". Ordered so exact
+    // names and their printings sort ahead of longer names sharing the
+    // prefix ("Mew" before "Mewtwo"), which makes the limit safe.
+    const { data, error } = await supabase
       .from("cards")
-      .select("*")
-      // Exact (case-insensitive) name match; strip ilike wildcards
-      .ilike("name", detected.name.replace(/[%_]/g, ""))
-      .limit(25);
-    const all = (data ?? []) as CardSummaryRow[];
+      .select(CARD_SUMMARY_COLUMNS)
+      .like("name_key", `${wanted}%`)
+      .order("name_key")
+      .order("id")
+      .limit(100);
+    if (error) throw error;
+    rows = (data ?? []) as unknown as CardSummaryRow[];
+  } catch (errKeyed) {
+    // No name_key column until migration 066 runs — fall back to the old
+    // byte-exact shape rather than sending every card to an external API.
+    try {
+      const { data, error } = await supabase
+        .from("cards")
+        .select(CARD_SUMMARY_COLUMNS)
+        .ilike("name", detected.name.replace(/[%_]/g, ""))
+        .order("id")
+        .limit(60);
+      if (error) throw error;
+      rows = (data ?? []) as unknown as CardSummaryRow[];
+    } catch (errPlain) {
+      // A failed query is NOT "we don't have this card" — it used to be
+      // swallowed silently and logged as an external-path miss, hiding
+      // database trouble inside matching telemetry. Same remedy (external
+      // lookup), but say what actually happened.
+      console.warn(
+        `scan: local match query failed for "${detected.name}"`,
+        errPlain ?? errKeyed
+      );
+      return null;
+    }
+  }
+
+  try {
+    // Keep only rows that ARE this name: identical under normalization, or
+    // a named printing of it (parenthetical suffix). The prefix query alone
+    // would let "Mewtwo" answer for "Mew".
+    const all = rows.filter((r) => {
+      const n = normalizeForSearch(r.name);
+      return n === wanted || (n.startsWith(wanted) && isSpecificPrinting(r.name));
+    });
+    const key = strictNumberKey(detected.collectorNumber);
+    const setHint = detected.setNameHint?.trim() || null;
 
     // NO NUMBER IS NOT NO ANSWER.
     //
@@ -189,7 +246,6 @@ async function matchFromLocalDb(
     // outside, which is the case the strictness was really for.
     if (!key) {
       let byName = all;
-      const setHint = detected.setNameHint?.trim();
       if (setHint) {
         const bySet = byName.filter((r) => setsAgree(r.set_name, setHint));
         if (bySet.length > 0) byName = bySet;
@@ -202,13 +258,25 @@ async function matchFromLocalDb(
         );
         if (byTotal.length > 0) byName = byTotal;
       }
-      const numbers = new Set(byName.map((r) => numberKey(r.number)));
+      const numbers = new Set(byName.map((r) => strictNumberKey(r.number)));
       if (numbers.size !== 1) return null;
       const picked = pickPrinting(byName, detected.rarityHint);
       return picked ? rowToSummary(picked) : null;
     }
 
-    let hits = all.filter((r) => numberKey(r.number) === key);
+    // Strict key: letters on a collector number are identity, not noise. The
+    // loose digits-only key here matched a promo read as "SWSH095" against
+    // the #95 of an unrelated set and called it a confident local hit.
+    let hits = all.filter((r) => strictNumberKey(r.number) === key);
+    // The set, when the scanner read one, gets a say — this path used to
+    // ignore it entirely, which is how reprints sharing a collector number
+    // (a Trick or Trade Haunter keeps the original's number) could come back
+    // as the wrong set's card. Narrowing only: an unrecognisable set hint
+    // refutes nothing.
+    if (setHint) {
+      const bySet = hits.filter((r) => setsAgree(r.set_name, setHint));
+      if (bySet.length > 0) hits = bySet;
+    }
     // Same name+number can exist in several sets ("025/198" vs "025/159") —
     // use the printed set total to disambiguate when we read one. A set size
     // we don't hold can't refute anything, so it is only allowed to narrow.
@@ -227,9 +295,62 @@ async function matchFromLocalDb(
     // our own database. Choosing the right one keeps the fast path fast.
     const picked = pickPrinting(hits, detected.rarityHint);
     return picked ? rowToSummary(picked) : null;
-  } catch {
+  } catch (err) {
+    console.warn(`scan: local match failed for "${detected.name}"`, err);
     return null; // any local hiccup → just use the external APIs
   }
+}
+
+/** Remember a card the catalogue couldn't answer, so it can next time.
+ *
+ *  The scan never wrote its external matches anywhere — only SAVING a card
+ *  did. A card scanned and then skipped, dismissed, or lost to a closed tab
+ *  paid the full external round trip again on every future scan, by every
+ *  member. One write ends that: the next scan of this card is a local hit.
+ *
+ *  Guarded against manufacturing the duplicate-printing miss it exists to
+ *  prevent: if the catalogue already holds this card under ANOTHER id scheme
+ *  (same normalized name, same strict number, agreeing set), nothing is
+ *  written — the local matcher's job is to find that row, not this code's
+ *  job to shadow it. Writes go through gapFill so a thin external record can
+ *  never blank a price or image a richer source already stored. */
+async function stashExternalMatch(admin: SupabaseClient, card: CardSummary): Promise<void> {
+  const wanted = normalizeForSearch(card.name);
+  const strict = strictNumberKey(card.number);
+  if (!wanted || !card.id || !card.setId || !card.setName) return;
+
+  let rows: Array<{ id: string; number: string; set_name: string | null }>;
+  try {
+    const { data, error } = await admin
+      .from("cards")
+      .select("id, number, set_name")
+      .like("name_key", `${wanted}%`)
+      .limit(60);
+    if (error) throw error;
+    rows = (data ?? []) as typeof rows;
+  } catch {
+    // Pre-066 fallback: byte-exact name. Weaker guard, same idea.
+    const { data } = await admin
+      .from("cards")
+      .select("id, number, set_name")
+      .ilike("name", card.name.replace(/[%_]/g, ""))
+      .limit(60);
+    rows = (data ?? []) as typeof rows;
+  }
+  const alreadyHeld = rows.some(
+    (r) =>
+      r.id === card.id ||
+      (strictNumberKey(r.number) === strict && setsAgree(r.set_name, card.setName))
+  );
+  if (alreadyHeld) return;
+
+  const row = gapFill(summaryToRow(card) as unknown as Record<string, unknown>, {
+    companions: CARD_COMPANIONS,
+  });
+  const { error } = await admin
+    .from("cards")
+    .upsert([row], { onConflict: "id", ignoreDuplicates: true });
+  if (error) throw error;
 }
 
 /** How long one card may spend on external lookups before the scan moves on.
@@ -335,6 +456,12 @@ async function runScan(opts: {
     const stream = client.messages.stream({
       model: SCAN_MODEL,
       max_tokens: 16000,
+      // Reading a card face is perception, not reasoning. Left unset, this
+      // model THINKS before answering — a silent 1.5–5s of deliberation per
+      // scan that showed up in modelMs and helped nothing: the names and
+      // numbers come off the image, not from working anything out. Turning
+      // it off is the single largest scan-latency win in this file.
+      thinking: { type: "disabled" },
       system: SYSTEM,
       output_config: {
         format: { type: "json_schema", schema: SCAN_SCHEMA as unknown as Record<string, unknown> },
@@ -405,8 +532,17 @@ async function runScan(opts: {
     }
 
     const response = await stream.finalMessage();
+    // The model is done HERE. This stamp used to sit after usage logging and
+    // JSON parsing, so three serialized ledger writes (150–600ms) were billed
+    // to "model time" in every scan log line — telemetry blaming the wrong
+    // suspect. And nothing about the ledger needs to hold up matching: let it
+    // land whenever it lands, and let a failure be its own quiet log line
+    // rather than a failed scan someone already paid the model for.
+    timings.modelMs = Date.now() - scanStartedAt;
 
-    await logAiUsage(supabase, userId, "scan", SCAN_MODEL, response.usage);
+    void logAiUsage(supabase, userId, "scan", SCAN_MODEL, response.usage).catch((err) =>
+      console.warn(`scan ${jobId}: usage logging failed`, err)
+    );
 
     // Thrown, not returned: nothing is listening to this call any more, so
     // the failure has to land on the job where the client will find it.
@@ -453,7 +589,6 @@ async function runScan(opts: {
           : "The scan came back malformed — please try again."
       );
     }
-    timings.modelMs = Date.now() - scanStartedAt;
 
     // Match each detected card against the reference database (in parallel,
     // capped to avoid hammering the API).
@@ -579,6 +714,17 @@ async function runScan(opts: {
             const altNumberMatches = key
               ? alt.filter((c) => numberKey(c.number) === key)
               : alt;
+            // "A name and a number are not a card" — promo bundles reprint
+            // at the original collector number, so taking the first
+            // number-match blind can cross sets. Prefer a candidate whose
+            // number matches with its letters intact and whose set agrees
+            // with what the scanner read; stable sort keeps the original
+            // order among equals.
+            const strict = strictNumberKey(detected.collectorNumber);
+            const altRank = (c: CardSummary) =>
+              (strict && strictNumberKey(c.number) === strict ? 0 : 2) +
+              (detected.setNameHint && setsAgree(c.setName, detected.setNameHint) ? 0 : 1);
+            altNumberMatches.sort((a, b) => altRank(a) - altRank(b));
             if (altNumberMatches.length > 0) {
               // Number-exact fallback wins; keep primary results as alternatives
               match = altNumberMatches[0];
@@ -589,6 +735,14 @@ async function runScan(opts: {
               candidates = alt;
               usedTcgdex = true;
             }
+          }
+          // Off the hot path on purpose: the scan's answer doesn't wait on
+          // the catalogue learning it.
+          if (match) {
+            const learned = match;
+            void stashExternalMatch(admin, learned).catch((err) =>
+              console.warn(`scan: couldn't stash "${learned.name}" (${learned.id})`, err)
+            );
           }
           let swappedHere = false;
           if (match) {
@@ -616,43 +770,50 @@ async function runScan(opts: {
     // the matched ids and the user's session — one query instead of a round
     // trip, and it means the results screen can say "×3 now" instead of
     // making someone remember.
-    try {
-      const ids = [...new Set(results.filter((r) => r.match).map((r) => r.match!.id))];
-      if (ids.length > 0) {
-        const { data: owned } = await supabase
-          .from("collection_items")
-          .select("card_id, quantity")
-          .eq("user_id", userId)
-          .in("card_id", ids);
-        const countById = new Map<string, number>();
-        for (const row of owned ?? []) {
-          const id = row.card_id as string;
-          countById.set(id, (countById.get(id) ?? 0) + ((row.quantity as number) ?? 0));
+    // Two independent garnishes — neither reads the other's answer, so they
+    // used to cost two round trips back to back for no reason. Both are
+    // best-effort: a missing count shows as "new" (never claims ownership),
+    // and finish memory failing never breaks a scan.
+    await Promise.all([
+      (async () => {
+        try {
+          const ids = [...new Set(results.filter((r) => r.match).map((r) => r.match!.id))];
+          if (ids.length === 0) return;
+          const { data: owned } = await supabase
+            .from("collection_items")
+            .select("card_id, quantity")
+            .eq("user_id", userId)
+            .in("card_id", ids);
+          const countById = new Map<string, number>();
+          for (const row of owned ?? []) {
+            const id = row.card_id as string;
+            countById.set(id, (countById.get(id) ?? 0) + ((row.quantity as number) ?? 0));
+          }
+          for (const r of results) {
+            if (r.match) r.owned = countById.get(r.match.id) ?? 0;
+          }
+        } catch {
+          // Best-effort — see above.
         }
-        for (const r of results) {
-          if (r.match) r.owned = countById.get(r.match.id) ?? 0;
+      })(),
+      // Apply the scanner's learned finish memory: if this exact guess on
+      // this exact card has been corrected by members before, suggest the
+      // corrected finish instead of repeating the mistake.
+      (async () => {
+        try {
+          const matchedIds = results.filter((r) => r.match).map((r) => r.match!.id);
+          const override = await loadFinishOverrides(supabase, matchedIds);
+          for (const r of results) {
+            if (!r.match) continue;
+            const predicted = defaultVariantFor(r.match, r.detected.rarityHint);
+            const learned = override(r.match.id, predicted);
+            if (learned) r.suggestedVariant = learned;
+          }
+        } catch {
+          // Best-effort — see above.
         }
-      }
-    } catch {
-      // Best-effort: a missing count shows as "new", which is the safe
-      // reading — it never claims someone owns something they don't.
-    }
-
-    // Apply the scanner's learned finish memory: if this exact guess on this
-    // exact card has been corrected by members before, suggest the corrected
-    // finish instead of repeating the mistake.
-    try {
-      const matchedIds = results.filter((r) => r.match).map((r) => r.match!.id);
-      const override = await loadFinishOverrides(supabase, matchedIds);
-      for (const r of results) {
-        if (!r.match) continue;
-        const predicted = defaultVariantFor(r.match, r.detected.rarityHint);
-        const learned = override(r.match.id, predicted);
-        if (learned) r.suggestedVariant = learned;
-      }
-    } catch {
-      // Memory is best-effort — a failure here never breaks a scan.
-    }
+      })(),
+    ]);
 
     timings.matchMs = Date.now() - matchStartedAt;
     timings.totalMs = Date.now() - scanStartedAt;

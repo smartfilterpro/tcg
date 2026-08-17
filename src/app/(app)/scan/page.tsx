@@ -203,7 +203,13 @@ export default function ScanPage() {
       );
 
       if (job.status === "done") return job.cards as ScanMatch[];
-      await new Promise((r) => setTimeout(r, 1200));
+      // A fixed tick charges every scan half a tick of pure dead time at the
+      // finish line. While the model is still reading, a leisurely poll is
+      // plenty; once every expected card has been read the job is in its
+      // final matching stretch, so lean in and catch "done" quickly.
+      const read = job.cards?.length ?? 0;
+      const nearEnd = job.expected != null && read >= job.expected && read > 0;
+      await new Promise((r) => setTimeout(r, nearEnd ? 400 : 1000));
     }
   }
 

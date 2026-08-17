@@ -233,7 +233,12 @@ export async function POST(req: Request) {
       fetchAllRows(() =>
         supabase
           .from("collection_items")
-          .select("quantity, card:cards(*)")
+          // Exactly what the builder reads below — cards(*) also dragged
+          // images, price maps and compiled battle effects for every card
+          // someone owns into a request that uses none of them.
+          .select(
+            "quantity, card:cards(id, name, supertype, subtypes, types, hp, rarity, set_name, battle_data, text_attempts, text_failed_at)"
+          )
           .eq("user_id", user.id)
           .order("created_at", { ascending: false })
           .order("id")
@@ -868,10 +873,12 @@ export async function POST(req: Request) {
         // Trade before you buy: check which group members (sharing their
         // collection) already own the wishlist cards.
         try {
-          const { data: profiles } = await admin.from("profiles").select("*");
-          const sharers = (profiles ?? []).filter(
-            (p) => p.id !== user.id && p.share_collection === true
-          );
+          const { data: sharerRows } = await admin
+            .from("profiles")
+            .select("id, display_name, email")
+            .eq("share_collection", true)
+            .neq("id", user.id);
+          const sharers = sharerRows ?? [];
           if (sharers.length > 0) {
             const nameOf = new Map(
               sharers.map((p) => [

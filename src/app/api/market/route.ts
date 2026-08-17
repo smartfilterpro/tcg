@@ -97,7 +97,18 @@ export async function GET() {
       comments = data ?? [];
     }
 
-    const { data: profiles } = await supabase.from("profiles").select("*");
+    // Only the people who actually appear on the board — this read the whole
+    // profiles table (every column of every member) to label at most a
+    // hundred posts and their comments.
+    const authorIds = [
+      ...new Set([
+        ...(posts ?? []).map((p) => p.user_id as string),
+        ...comments.map((c) => c.user_id as string),
+      ]),
+    ];
+    const { data: profiles } = authorIds.length
+      ? await supabase.from("profiles").select("id, display_name, email").in("id", authorIds)
+      : { data: [] };
     const nameById = new Map(
       (profiles ?? []).map((p) => [p.id as string, (p.display_name || p.email) as string])
     );

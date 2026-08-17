@@ -129,6 +129,10 @@ export async function identifyPhoto(
     const res = await client.messages.create({
       model: SCAN_MODEL,
       max_tokens: 400,
+      // Perception, not reasoning — same as the phone scanner. Left unset the
+      // model deliberates before answering, which adds seconds per photo and
+      // reads nothing extra off the cardboard.
+      thinking: { type: "disabled" },
       system: READ_SYSTEM,
       output_config: {
         format: { type: "json_schema", schema: READ_SCHEMA as unknown as Record<string, unknown> },
@@ -151,16 +155,21 @@ export async function identifyPhoto(
       ],
     });
 
-    await logAiUsage(admin, adminUserId, "bulk_scan", SCAN_MODEL, res.usage);
-    const cost = estimateCostUsd(SCAN_MODEL, tokensFrom(res.usage));
-    // Two writers can race here (both passes identify concurrently); the
-    // increment is read-modify-write but a lost cent on a race is noise
-    // next to the premium — correctness lives in ai_usage's rows.
-    const { data: job } = await admin.from("bulk_jobs").select("ai_cost_usd").eq("id", jobId).maybeSingle();
-    await admin
-      .from("bulk_jobs")
-      .update({ ai_cost_usd: Number(job?.ai_cost_usd ?? 0) + cost, updated_at: new Date().toISOString() })
-      .eq("id", jobId);
+    // Bookkeeping rides behind the answer, not in front of it: three ledger
+    // round trips were serialized between the model finishing and the match
+    // starting, on every single photo of an 8,000-card job. Two writers can
+    // race the cost increment (both passes identify concurrently); the
+    // read-modify-write may lose a cent on a race, which is noise next to
+    // the premium — correctness lives in ai_usage's rows.
+    void (async () => {
+      await logAiUsage(admin, adminUserId, "bulk_scan", SCAN_MODEL, res.usage);
+      const cost = estimateCostUsd(SCAN_MODEL, tokensFrom(res.usage));
+      const { data: job } = await admin.from("bulk_jobs").select("ai_cost_usd").eq("id", jobId).maybeSingle();
+      await admin
+        .from("bulk_jobs")
+        .update({ ai_cost_usd: Number(job?.ai_cost_usd ?? 0) + cost, updated_at: new Date().toISOString() })
+        .eq("id", jobId);
+    })().catch((err) => console.warn(`bulk job ${jobId}: usage logging failed`, err));
 
     const block = res.content.find((b) => b.type === "text");
     const parsed = JSON.parse(block && block.type === "text" ? block.text : "{}") as {

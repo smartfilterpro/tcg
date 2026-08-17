@@ -16,7 +16,7 @@ export async function GET(_req: Request, { params }: Params) {
 
     const { data: friend } = await supabase
       .from("profiles")
-      .select("*")
+      .select("id, display_name, email, share_collection")
       .eq("id", id)
       .maybeSingle();
     if (!friend || friend.share_collection !== true) {

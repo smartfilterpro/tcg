@@ -599,7 +599,17 @@ export function startPriceSyncLoop() {
         );
       }
     } catch (err) {
-      console.error("price sync loop error", err);
+      // One Supabase node with a skewed clock intermittently rejects the
+      // service key as "issued at future". Transient, theirs, and already
+      // handled correctly (the tick does nothing rather than restarting the
+      // pass) — so it earns one quiet line, not a stack trace that reads
+      // like the sync is broken.
+      const message = err instanceof Error ? err.message : String(err);
+      if (/jwt issued at future/i.test(message)) {
+        console.log(`price sync loop: skipped a tick (${message}) — clock skew upstream, retries next tick`);
+      } else {
+        console.error("price sync loop error", err);
+      }
     }
   };
   setTimeout(tick, 3 * 60_000);

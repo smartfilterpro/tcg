@@ -29,19 +29,33 @@ export async function GET() {
     // by hand.
     const free = await isFreeTier(user, profile);
 
-    // select("*") — share_collection only exists after migration 008
-    const { data: profiles, error: profErr } = await supabase
-      .from("profiles")
-      .select("*")
-      .order("created_at");
-    if (profErr) throw profErr;
-
-    const me = (profiles ?? []).find((p) => p.id === user.id);
-    const migrated = me != null && "share_collection" in me;
-
-    const sharers = (profiles ?? []).filter(
-      (p) => p.id !== user.id && p.share_collection === true
-    );
+    // Two narrow reads instead of every column of every member: my own row,
+    // and the members actually sharing. The filter moving server-side is
+    // what stops this route scaling with total signups. share_collection
+    // only exists after migration 008 — a missing column fails the query,
+    // which is the "not migrated" answer.
+    const [meRes, sharersRes] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("id, display_name, email, share_collection")
+        .eq("id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("profiles")
+        .select("id, display_name, email")
+        .eq("share_collection", true)
+        .neq("id", user.id)
+        .order("created_at"),
+    ]);
+    const profErr = meRes.error ?? sharersRes.error;
+    if (profErr && !/share_collection/i.test(profErr.message ?? "")) throw profErr;
+    const migrated = !profErr && meRes.data != null;
+    const me = (meRes.data ?? null) as {
+      share_collection?: boolean;
+      display_name?: string | null;
+      email?: string | null;
+    } | null;
+    const sharers = migrated ? (sharersRes.data ?? []) : [];
 
     const friends: Friend[] = await Promise.all(
       sharers.map(async (p) => {
@@ -68,8 +82,12 @@ export async function GET() {
         .neq("user_id", user.id)
         .order("created_at", { ascending: false })
         .limit(50);
+      const ownerIds = [...new Set((decks ?? []).map((d) => d.user_id as string))];
+      const { data: owners } = ownerIds.length
+        ? await supabase.from("profiles").select("id, display_name, email").in("id", ownerIds)
+        : { data: [] };
       const nameById = new Map(
-        (profiles ?? []).map((p) => [p.id as string, (p.display_name || p.email) as string])
+        (owners ?? []).map((p) => [p.id as string, (p.display_name || p.email) as string])
       );
       sharedDecks = ((decks ?? []) as Deck[]).map((d) => ({
         ...d,

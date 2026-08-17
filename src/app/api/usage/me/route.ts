@@ -21,6 +21,17 @@ export async function GET() {
     daysBack.setUTCHours(0, 0, 0, 0);
     const since = monthStart < daysBack ? monthStart : daysBack;
 
+    const isAdmin = profile?.role === "admin";
+
+    // Kicked off alongside the usage read — the two answers don't feed each
+    // other, and serializing them doubled the meter's load time. The credit
+    // cycle is per-user (signup anniversary; Stripe billing period once that
+    // lands), so it deliberately does NOT share monthStart. Null on failure:
+    // pre-migration-026 the meter shows the legacy view and nothing breaks.
+    const creditsPromise: Promise<Awaited<ReturnType<typeof creditSummary>> | null> = isAdmin
+      ? Promise.resolve(null)
+      : creditSummary(user, profile).catch(() => null);
+
     const { data } = await fetchAllRows(() =>
       supabase
         .from("ai_usage")
@@ -55,27 +66,7 @@ export async function GET() {
     const peak = Math.max(...daily, 0.000001);
     const normalized = daily.map((v) => v / peak);
 
-    const isAdmin = profile?.role === "admin";
-
-    // Credits: the account the app now meters against. The credit cycle is
-    // per-user (signup anniversary; Stripe billing period once that lands),
-    // so it deliberately does NOT share monthStart above — the old percent
-    // fields stay only until the Phase 5 meter replaces the panel.
-    let credits: {
-      balance: number;
-      plan: string;
-      pooled: boolean;
-      cycleStart: string;
-      monthlyGrant: number;
-      spentByReason: Record<string, number>;
-    } | null = null;
-    if (!isAdmin) {
-      try {
-        credits = await creditSummary(user, profile);
-      } catch {
-        // Pre-migration-026: the meter shows the legacy view and nothing breaks.
-      }
-    }
+    const credits = await creditsPromise;
 
     const budget =
       profile?.ai_budget_usd == null ? null : Number(profile.ai_budget_usd);
