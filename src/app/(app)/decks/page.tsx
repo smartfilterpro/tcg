@@ -930,6 +930,28 @@ export default function DecksPage() {
   const [styleSaved, setStyleSaved] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [format, setFormat] = useState("any");
+  // "collection" builds from the binder; "all" is the dream deck — any real
+  // card, and the result carries a computed buy list for the gap.
+  const [poolMode, setPoolMode] = useState<"collection" | "all">("collection");
+  // Set when arriving from the Meta page's "Build this deck" button — the
+  // server grounds the build in that archetype's tournament list.
+  const [archetypeSeed, setArchetypeSeed] = useState<string | null>(null);
+
+  // Read the hand-off from the Meta page once, then clean the URL so a
+  // reload doesn't re-arm it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const archetype = params.get("archetype");
+    if (params.get("pool") === "all" || archetype) {
+      setPoolMode("all");
+      if (archetype) {
+        setArchetypeSeed(archetype);
+        setPrompt(`Build the trending "${archetype}" deck`);
+        setFormat("standard");
+      }
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, []);
   const [editRequest, setEditRequest] = useState<Deck | null>(null);
   const [building, setBuilding] = useState(false);
   const [buildStep, setBuildStep] = useState(0);
@@ -1111,7 +1133,12 @@ export default function DecksPage() {
       const res = await fetch("/api/decks/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, format }),
+        body: JSON.stringify({
+          prompt,
+          format,
+          pool: poolMode,
+          ...(archetypeSeed ? { archetype: archetypeSeed } : {}),
+        }),
       });
       const start = await safeJson(res);
       if (!res.ok) throw new Error((start.error as string) || "Deck build failed");
@@ -1252,6 +1279,18 @@ export default function DecksPage() {
           <div className="flex shrink-0 gap-2">
             <select
               className="input w-auto text-sm"
+              title="Card pool — your binder, or every card ever printed (with a buy list)"
+              value={poolMode}
+              onChange={(e) => {
+                setPoolMode(e.target.value === "all" ? "all" : "collection");
+                if (e.target.value !== "all") setArchetypeSeed(null);
+              }}
+            >
+              <option value="collection">🎒 My collection</option>
+              <option value="all">🌟 Any cards</option>
+            </select>
+            <select
+              className="input w-auto text-sm"
               title="Tournament format — filters which of your cards are allowed"
               value={format}
               onChange={(e) => setFormat(e.target.value)}
@@ -1272,7 +1311,16 @@ export default function DecksPage() {
         {/* Spell the chosen format out — "Standard" and "Expanded" are
             tournament jargon, and a native <select> can't carry
             descriptions on its options. */}
-        <p className="mb-0 mt-1.5 text-xs text-slate-500">{FORMAT_NOTES[format] ?? ""}</p>
+        <p className="mb-0 mt-1.5 text-xs text-slate-500">
+          {poolMode === "all" && (
+            <>
+              🌟 Dream deck: builds with any real card, grounded in current tournament results —
+              the result includes a priced buy list for everything you don&apos;t own
+              {archetypeSeed ? `, aimed at ${archetypeSeed}` : ""}.{" "}
+            </>
+          )}
+          {FORMAT_NOTES[format] ?? ""}
+        </p>
         {building && (
           <div className="mt-2 flex items-center gap-2">
             <FanMark size={16} className="animate-spin-slow shrink-0" />

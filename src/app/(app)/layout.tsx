@@ -49,6 +49,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     { label: "Collection", href: "/" },
     { label: "Scan", href: "/scan", locked },
     { label: "Decks", href: "/decks" },
+    { label: "Meta", href: "/meta" },
     { label: "Battle", href: "/battles" },
     { label: "Grade", href: "/grade", locked },
     { label: "Friends", href: "/friends" },
