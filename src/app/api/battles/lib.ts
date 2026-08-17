@@ -10,6 +10,7 @@ import { logAiUsage } from "@/lib/usage";
 import { askForJson } from "@/lib/aiJson";
 import type { Deck, Profile } from "@/lib/types";
 import { readCardTextOnce } from "@/lib/cardText";
+import { normalizeForSearch } from "@/lib/text";
 
 /** AI card reader: for cards NO database knows (photo-scanned customs),
  *  read the card's own picture once and extract its battle data. Cached in
@@ -206,42 +207,87 @@ export async function expandDeck(
         .map((e) => e.name)
     ),
   ].slice(0, 25);
-  for (const name of unnamed) {
-    // Try the exact name, then basic-energy aliases ("Basic Fighting
-    // Energy" ↔ "Fighting Energy") — decks and card records disagree here.
+  // The exact name, plus basic-energy aliases ("Basic Fighting Energy" ↔
+  // "Fighting Energy") — decks and card records disagree here.
+  const variantsOf = (name: string): string[] => {
     const variants = [name];
     const stripped = name.replace(/^basic\s+/i, "").trim();
     if (stripped && stripped !== name) variants.push(stripped);
     if (/energy$/i.test(name) && !/^basic\s/i.test(name)) variants.push(`Basic ${name}`);
-    let meta: CardMeta | null = null;
-    for (const variant of variants) {
-      const { data } = await admin
+    return variants;
+  };
+  if (unnamed.length > 0) {
+    // ONE query for every name at once, against the normalized name_key
+    // (migration 066). The loop this replaces ran up to six sequential
+    // catalogue queries per unresolved name — up to 150 round trips before
+    // a battle could start, all to answer "which row is Fighting Energy".
+    let batched = false;
+    try {
+      const keys = [
+        ...new Set(unnamed.flatMap(variantsOf).map(normalizeForSearch).filter(Boolean)),
+      ];
+      const { data, error } = await admin
         .from("cards")
         .select("*")
-        .ilike("name", variant.replace(/[%_]/g, ""))
-        .not("image_small", "is", null)
-        .limit(1);
-      if (data?.[0]) {
-        meta = rowToMeta(data[0]);
-        break;
+        .in("name_key", keys)
+        .order("id")
+        .limit(1000);
+      if (error) throw error;
+      const byKey = new Map<string, Array<Record<string, unknown>>>();
+      for (const row of data ?? []) {
+        const k = normalizeForSearch((row.name as string) ?? "");
+        const list = byKey.get(k);
+        if (list) list.push(row);
+        else byKey.set(k, [row]);
       }
-    }
-    // No record with an image — take one without (combat data and category
-    // still matter even when there's no art to show).
-    if (!meta) {
-      for (const variant of variants) {
-        const { data } = await admin
-          .from("cards")
-          .select("*")
-          .ilike("name", variant.replace(/[%_]/g, ""))
-          .limit(1);
-        if (data?.[0]) {
-          meta = rowToMeta(data[0]);
+      for (const name of unnamed) {
+        let meta: CardMeta | null = null;
+        for (const variant of variantsOf(name)) {
+          const rows = byKey.get(normalizeForSearch(variant));
+          if (!rows || rows.length === 0) continue;
+          // Prefer a row with art; combat data and category still matter
+          // even when there's no picture to show.
+          meta = rowToMeta(rows.find((r) => r.image_small != null) ?? rows[0]);
           break;
         }
+        metaByName.set(name, meta);
+      }
+      batched = true;
+    } catch {
+      // Pre-066 (no name_key column): the old per-name lookups below.
+    }
+    if (!batched) {
+      for (const name of unnamed) {
+        const variants = variantsOf(name);
+        let meta: CardMeta | null = null;
+        for (const variant of variants) {
+          const { data } = await admin
+            .from("cards")
+            .select("*")
+            .ilike("name", variant.replace(/[%_]/g, ""))
+            .not("image_small", "is", null)
+            .limit(1);
+          if (data?.[0]) {
+            meta = rowToMeta(data[0]);
+            break;
+          }
+        }
+        if (!meta) {
+          for (const variant of variants) {
+            const { data } = await admin
+              .from("cards")
+              .select("*")
+              .ilike("name", variant.replace(/[%_]/g, ""))
+              .limit(1);
+            if (data?.[0]) {
+              meta = rowToMeta(data[0]);
+              break;
+            }
+          }
+        }
+        metaByName.set(name, meta);
       }
     }
-    metaByName.set(name, meta);
   }
 
   // Backfill card knowledge (attacks/weakness/retreat for Pokémon, printed

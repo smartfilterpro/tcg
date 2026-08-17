@@ -74,7 +74,13 @@ export async function GET() {
       }
       throw error;
     }
-    const { data: profiles } = await supabase.from("profiles").select("*");
+    // Just the counterparties, not the whole membership.
+    const partyIds = [
+      ...new Set((offers ?? []).flatMap((o) => [o.from_user as string, o.to_user as string])),
+    ];
+    const { data: profiles } = partyIds.length
+      ? await supabase.from("profiles").select("id, display_name, email").in("id", partyIds)
+      : { data: [] };
     const nameById = new Map(
       (profiles ?? []).map((p) => [p.id as string, (p.display_name || p.email) as string])
     );

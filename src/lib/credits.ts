@@ -116,23 +116,48 @@ interface FamilyContext {
   myCap: number | null;
 }
 
+/** How long a resolved family answer may be reused. Family membership is
+ *  asked on EVERY metered AI call and every meter render, and for most users
+ *  the answer is a permanent "no" — yet each ask cost a round trip (four,
+ *  for actual members). Sixty seconds means a new member, a cap change, or a
+ *  removed kid takes effect within a minute, which is well inside how fast
+ *  anyone can observe it, and everything between is free. */
+const FAMILY_TTL_MS = 60_000;
+const familyCache = new Map<string, { at: number; ctx: FamilyContext | null }>();
+
 async function familyContext(admin: SupabaseClient, userId: string): Promise<FamilyContext | null> {
+  const hit = familyCache.get(userId);
+  if (hit && Date.now() - hit.at < FAMILY_TTL_MS) return hit.ctx;
+  const ctx = await familyContextFresh(admin, userId);
+  // A crude bound beats a leak; the cache refills instantly.
+  if (familyCache.size > 5_000) familyCache.clear();
+  familyCache.set(userId, { at: Date.now(), ctx });
+  return ctx;
+}
+
+async function familyContextFresh(
+  admin: SupabaseClient,
+  userId: string
+): Promise<FamilyContext | null> {
+  // The group's owner rides along on the membership row (one FK hop), so
+  // resolving a member takes two round-trip stages, not three.
   const { data: me } = await admin
     .from("family_members")
-    .select("group_id, credit_cap")
+    .select("group_id, credit_cap, group:family_groups(owner_user)")
     .eq("user_id", userId)
     .maybeSingle();
   if (!me) return null;
-  const [{ data: group }, { data: members }] = await Promise.all([
-    admin.from("family_groups").select("owner_user").eq("id", me.group_id).single(),
+  const groupRel = me.group as { owner_user?: string } | Array<{ owner_user?: string }> | null;
+  const ownerId =
+    (Array.isArray(groupRel) ? groupRel[0]?.owner_user : groupRel?.owner_user) ?? "";
+  const [{ data: members }, { data: owner }] = await Promise.all([
     admin.from("family_members").select("user_id").eq("group_id", me.group_id),
+    admin
+      .from("profiles")
+      .select("created_at, billing_anchor")
+      .eq("id", ownerId)
+      .maybeSingle(),
   ]);
-  const ownerId = group?.owner_user as string;
-  const { data: owner } = await admin
-    .from("profiles")
-    .select("created_at, billing_anchor")
-    .eq("id", ownerId)
-    .single();
   const memberIds = [...new Set([...(members ?? []).map((m) => m.user_id as string), ownerId])];
   return {
     groupId: me.group_id as string,
@@ -202,34 +227,64 @@ async function ensureGrants(
   // attempt at the same (user, reason, ref) is a no-op. Anything else is a
   // real fault and gets logged instead of vanishing.
   for (const row of rows) {
+    const key = `${row.user_id}|${row.reason}|${row.ref_id}`;
+    if (grantedRecently.has(key)) continue;
     const { error } = await admin.from("credit_ledger").insert(row);
     if (error && error.code !== "23505") {
       console.error(`credit grant failed (${row.reason}):`, error.message);
+      continue; // a real failure must retry next call, not be memoized away
     }
+    if (grantedRecently.size > 10_000) grantedRecently.clear();
+    grantedRecently.add(key);
   }
 }
+
+/** Grants this process has already landed (or confirmed as duplicates).
+ *  The idempotency key is (user, reason, ref) in the database — that stays
+ *  the source of truth. This just stops every single AI call from paying
+ *  one or two guaranteed-no-op INSERT round trips to re-prove it: a grant
+ *  that exists once exists forever, and a new cycle changes the ref, which
+ *  changes the key, which misses this set and inserts normally. */
+const grantedRecently = new Set<string>();
 
 async function sumDeltas(
   admin: SupabaseClient,
   userIds: string[],
   opts?: { since?: Date; negativeOnly?: boolean }
 ): Promise<number> {
-  // Paged. PostgREST caps a response at 1,000 rows, and the ledger gains a
-  // row per AI call — a few months of real use passes a thousand, at which
-  // point an unpaged sum silently stops counting the rest and the balance
-  // is simply wrong. Ordered totally so paging can't drop or repeat rows.
-  const { data } = await fetchAllRows<{ delta: number }>(() => {
-    let q = admin
-      .from("credit_ledger")
-      .select("delta")
-      .in("user_id", userIds)
-      .order("created_at")
-      .order("id");
-    if (opts?.since) q = q.gte("created_at", opts.since.toISOString());
-    if (opts?.negativeOnly) q = q.lt("delta", 0);
-    return q;
-  });
-  return data.reduce((s, r) => s + (r.delta ?? 0), 0);
+  // One aggregate in the database (migration 067). The ledger gains a row
+  // per AI call, and this sum runs before every one of them — shipping the
+  // whole ledger over the wire a thousand rows a page to add integers in
+  // Node meant checking the balance got slower with every use of the thing
+  // being checked.
+  try {
+    const { data, error } = await admin.rpc("sum_credit_deltas", {
+      p_user_ids: userIds,
+      p_since: opts?.since?.toISOString() ?? null,
+      p_negative_only: opts?.negativeOnly ?? false,
+    });
+    if (error) throw error;
+    // bigint may arrive as a number or a numeric string depending on driver.
+    const n = typeof data === "string" ? parseInt(data, 10) : (data as number);
+    if (Number.isFinite(n)) return n;
+    throw new Error(`sum_credit_deltas returned ${JSON.stringify(data)}`);
+  } catch {
+    // Pre-067 fallback: the paged client-side sum. Paged because PostgREST
+    // caps a response at 1,000 rows and an unpaged sum silently undercounts;
+    // ordered totally so paging can't drop or repeat rows.
+    const { data } = await fetchAllRows<{ delta: number }>(() => {
+      let q = admin
+        .from("credit_ledger")
+        .select("delta")
+        .in("user_id", userIds)
+        .order("created_at")
+        .order("id");
+      if (opts?.since) q = q.gte("created_at", opts.since.toISOString());
+      if (opts?.negativeOnly) q = q.lt("delta", 0);
+      return q;
+    });
+    return data.reduce((s, r) => s + (r.delta ?? 0), 0);
+  }
 }
 
 /** Credits that were BOUGHT or GIVEN outright, and survive a plan ending.
@@ -423,6 +478,8 @@ export async function checkCredits(
   }
 }
 
+const adminRoleCache = new Map<string, { at: number; isAdmin: boolean }>();
+
 /** Debit one AI call's actual cost. Called from logAiUsage so every metered
  *  call flows through a single choke point. Service-role write; best-effort —
  *  a failed debit must not fail the user's request. */
@@ -444,14 +501,24 @@ export async function debitCredits(
     //
     // The spend is not lost: ai_usage keeps every row, and that is the cost
     // record. The ledger is the account, and an unmetered account has
-    // nothing to account for. One primary-key lookup, after a model call
-    // that took seconds.
-    const { data: me } = await admin
-      .from("profiles")
-      .select("role")
-      .eq("id", userId)
-      .maybeSingle();
-    if (me?.role === "admin") return;
+    // nothing to account for. The role is remembered briefly so back-to-back
+    // calls don't re-ask; a demotion takes effect within a minute, and the
+    // stakes of the window are one debit row either way.
+    const cached = adminRoleCache.get(userId);
+    let isAdminUser: boolean;
+    if (cached && Date.now() - cached.at < FAMILY_TTL_MS) {
+      isAdminUser = cached.isAdmin;
+    } else {
+      const { data: me } = await admin
+        .from("profiles")
+        .select("role")
+        .eq("id", userId)
+        .maybeSingle();
+      isAdminUser = me?.role === "admin";
+      if (adminRoleCache.size > 5_000) adminRoleCache.clear();
+      adminRoleCache.set(userId, { at: Date.now(), isAdmin: isAdminUser });
+    }
+    if (isAdminUser) return;
     await admin.from("credit_ledger").insert({
       user_id: userId,
       delta: -creditsForUsd(usd),

@@ -4,7 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
 import { checkCredits } from "@/lib/credits";
 import { createClient } from "@/lib/supabase/server";
-import { itemPrice, variantLabel, type CollectionItem } from "@/lib/types";
+import { itemPrice, variantLabel, CARD_SUMMARY_COLUMNS, type CollectionItem } from "@/lib/types";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { tradingOff, TRADING_OFF_ERROR } from "@/lib/tradeBoard";
 import { completeWithRoom, answerText, noAnswerReply } from "@/lib/aiAnswer";
@@ -138,7 +138,7 @@ export async function POST(req: Request) {
     // The friend must be sharing; my own items are always readable.
     const { data: friend } = await supabase
       .from("profiles")
-      .select("*")
+      .select("id, display_name, email, share_collection")
       .eq("id", body.friendId)
       .maybeSingle();
     if (!friend || friend.share_collection !== true) {
@@ -150,11 +150,14 @@ export async function POST(req: Request) {
 
     // Paged: Supabase caps responses at 1000 rows — big collections were
     // getting silently cut off from the advisor's context.
+    // Narrow card columns: the summary reads name/set/number and the price
+    // fields, and cards(*) was shipping battle_data and compiled effects for
+    // two entire collections into a chat request.
     const [{ data: myItems }, { data: theirItems }] = await Promise.all([
       fetchAllRows(() =>
         supabase
           .from("collection_items")
-          .select("*, card:cards(*)")
+          .select(`*, card:cards(${CARD_SUMMARY_COLUMNS})`)
           .eq("user_id", user.id)
           .order("created_at")
           .order("id")
@@ -162,7 +165,7 @@ export async function POST(req: Request) {
       fetchAllRows(() =>
         supabase
           .from("collection_items")
-          .select("*, card:cards(*)")
+          .select(`*, card:cards(${CARD_SUMMARY_COLUMNS})`)
           .eq("user_id", body.friendId)
           .order("created_at")
           .order("id")

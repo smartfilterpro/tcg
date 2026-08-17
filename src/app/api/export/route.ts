@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
+import { CARD_SUMMARY_COLUMNS } from "@/lib/types";
 
 /** Token-authenticated collection export for Claude Cowork / external tools.
  *
@@ -49,7 +50,9 @@ export async function GET(req: Request) {
     fetchAllRows(() =>
       admin
         .from("collection_items")
-        .select("quantity, variant, notes, price_override, card:cards(*)")
+        // Every field the payload below reads, and nothing else — cards(*)
+        // shipped battle_data and compiled effects for a whole collection.
+        .select(`quantity, variant, notes, price_override, card:cards(${CARD_SUMMARY_COLUMNS})`)
         .eq("user_id", tokenRow.user_id)
         .order("created_at")
         .order("id")

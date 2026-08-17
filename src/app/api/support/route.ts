@@ -60,7 +60,20 @@ export async function GET() {
       messages = data ?? [];
     }
 
-    const { data: profiles } = await supabase.from("profiles").select("*");
+    // Only the people in these threads — this read every column of every
+    // member to label a page of tickets.
+    const participantIds = [
+      ...new Set([
+        ...(tickets ?? []).map((t) => t.user_id as string),
+        ...messages.map((m) => m.user_id as string),
+      ]),
+    ];
+    const { data: profiles } = participantIds.length
+      ? await supabase
+          .from("profiles")
+          .select("id, display_name, email, role")
+          .in("id", participantIds)
+      : { data: [] };
     const profById = new Map((profiles ?? []).map((p) => [p.id as string, p]));
     const nameOf = (id: string) => {
       const p = profById.get(id);
