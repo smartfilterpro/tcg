@@ -1153,6 +1153,38 @@ export default function DecksPage() {
     }
   }
 
+  /** Which "Copy for TCG Live" button just fired, and how it went:
+   *  "<key>:ok", "<key>:warn:<n>" (copied, n lines without a set code) or
+   *  "<key>:err". Cleared after a moment so the label returns. */
+  const [liveCopied, setLiveCopied] = useState<string | null>(null);
+
+  async function copyForLive(cards: DeckCardEntry[], key: string) {
+    try {
+      const res = await fetch("/api/decks/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cards }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Export failed");
+      await navigator.clipboard.writeText(json.text as string);
+      const warned = (json.warnings as string[] | undefined)?.length ?? 0;
+      setLiveCopied(warned > 0 ? `${key}:warn:${warned}` : `${key}:ok`);
+    } catch {
+      setLiveCopied(`${key}:err`);
+    }
+    setTimeout(() => setLiveCopied(null), 4000);
+  }
+
+  const liveLabel = (key: string) =>
+    liveCopied === `${key}:ok`
+      ? "Copied ✓ — paste in TCG Live"
+      : liveCopied?.startsWith(`${key}:warn:`)
+        ? `Copied ✓ — ${liveCopied.split(":")[2]} card(s) may need picking by hand`
+        : liveCopied === `${key}:err`
+          ? "Couldn't copy — try again"
+          : "📋 Copy for TCG Live";
+
   async function saveDeck() {
     if (!built) return;
     const res = await fetch("/api/decks", {
@@ -1352,6 +1384,13 @@ export default function DecksPage() {
                     Save deck
                   </button>
                 )}
+                <button
+                  className="btn-secondary text-sm"
+                  title="Copy this list in the official client's import format"
+                  onClick={() => copyForLive(built.cards, "built")}
+                >
+                  {liveLabel("built")}
+                </button>
                 <button className="btn-secondary text-sm" onClick={() => setBuilt(null)}>
                   Discard
                 </button>
@@ -1467,10 +1506,19 @@ export default function DecksPage() {
               <ModalClose onClose={() => setViewing(null)} />
             </div>
             {viewingIsFamily ? (
-              <p className="mt-2 text-sm text-brand-ink3">
-                Built by {viewing.owner_name ?? "someone in your family"} — you can read it and
-                try the opening hand, but only they can change it.
-              </p>
+              <div className="mt-2">
+                <p className="text-sm text-brand-ink3">
+                  Built by {viewing.owner_name ?? "someone in your family"} — you can read it and
+                  try the opening hand, but only they can change it.
+                </p>
+                <button
+                  className="btn mt-1.5 text-sm text-poke-blue hover:bg-poke-blue/10"
+                  title="Copy this list in the official client's import format"
+                  onClick={() => copyForLive(viewing.cards ?? [], viewing.id)}
+                >
+                  {liveLabel(viewing.id)}
+                </button>
+              </div>
             ) : (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <button
@@ -1509,6 +1557,13 @@ export default function DecksPage() {
                   <option value="friends">🤝 Pals only</option>
                 </select>
               )}
+              <button
+                className="btn text-sm text-poke-blue hover:bg-poke-blue/10"
+                title="Copy this list in the official client's import format"
+                onClick={() => copyForLive(viewing.cards ?? [], viewing.id)}
+              >
+                {liveLabel(viewing.id)}
+              </button>
               <button
                 className="btn text-sm text-red-600 hover:bg-red-50"
                 onClick={() => deleteDeck(viewing.id)}
