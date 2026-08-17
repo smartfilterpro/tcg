@@ -103,6 +103,35 @@ export async function getBattleDataById(id: string): Promise<CardBattleData | nu
   }
 }
 
+/** Every set's PTCGO/Live abbreviation ("OBF", "MEW", "SVI") — the code the
+ *  official client's deck importer keys on. Nothing else in the app needs
+ *  it, so it isn't a cards column; the deck export fetches this list and
+ *  caches it in app_state. */
+export async function fetchSetCodes(): Promise<
+  Array<{ id: string; name: string; code: string | null }>
+> {
+  const out: Array<{ id: string; name: string; code: string | null }> = [];
+  for (let page = 1; page <= 5; page++) {
+    const json = await apiFetchJson(
+      `${BASE}/sets?select=id,name,ptcgoCode&pageSize=250&page=${page}`,
+      ATTEMPTS,
+      { timeoutMs: 15_000 }
+    );
+    const data = (json.data as Array<Record<string, unknown>> | undefined) ?? [];
+    for (const s of data) {
+      const id = String(s.id ?? "");
+      if (!id) continue;
+      out.push({
+        id,
+        name: String(s.name ?? ""),
+        code: typeof s.ptcgoCode === "string" && s.ptcgoCode.trim() ? s.ptcgoCode.trim() : null,
+      });
+    }
+    if (data.length < 250) break;
+  }
+  return out;
+}
+
 function headers(): Record<string, string> {
   const h: Record<string, string> = {};
   const key = (process.env.POKEMONTCG_API_KEY ?? "").trim();
