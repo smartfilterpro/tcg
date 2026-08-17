@@ -1382,6 +1382,10 @@ export default function AdminPage() {
             <DedupeCardsPanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">📈 Trending decks</h2>
+            <MetaDecksPanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">📦 Sealed product check</h2>
             <SealedProbePanel />
           </div>
@@ -4730,6 +4734,150 @@ function SealedProbePanel() {
           </details>
         </>
       )}
+    </div>
+  );
+}
+
+interface AdminMetaDeck {
+  id: string;
+  archetype: string;
+  format: string;
+  share: number | null;
+  placements: number | null;
+  source: "curated" | "limitless";
+  notes: string | null;
+  core_cards: Array<{ name: string; count: number }>;
+  updated_at: string;
+}
+
+function MetaDecksPanel() {
+  const [decks, setDecks] = useState<AdminMetaDeck[]>([]);
+  const [migrated, setMigrated] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [archetype, setArchetype] = useState("");
+  const [share, setShare] = useState("");
+  const [notes, setNotes] = useState("");
+  const [cardsText, setCardsText] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/meta-decks");
+      const json = await res.json();
+      if (res.ok) {
+        setMigrated(json.migrated !== false);
+        setDecks(json.decks ?? []);
+      }
+    } catch {}
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function save() {
+    if (!archetype.trim() || !cardsText.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/meta-decks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          archetype,
+          share: share.trim() === "" ? null : Number(share),
+          notes,
+          cardsText,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't save");
+      setArchetype("");
+      setShare("");
+      setNotes("");
+      setCardsText("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save");
+    }
+    setBusy(false);
+  }
+
+  async function remove(id: string) {
+    if (!confirm("Remove this archetype from the trending page?")) return;
+    await fetch("/api/admin/meta-decks", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    load();
+  }
+
+  function edit(d: AdminMetaDeck) {
+    setArchetype(d.archetype);
+    setShare(d.share == null ? "" : String(d.share));
+    setNotes(d.notes ?? "");
+    setCardsText(d.core_cards.map((c) => `${c.count} ${c.name}`).join("\n"));
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="m-0 text-xs leading-[1.6] text-brand-ink3">
+        What the Meta page shows. The nightly LimitlessTCG pull fills this table on its own;
+        rows saved here are <b>curated</b> — the sync never overwrites them, so a hand-written
+        archetype survives every pull. Cards are one per line: &quot;4 Charizard ex&quot;.
+      </p>
+      {!migrated && (
+        <p className="m-0 text-xs text-brand-negative">Run migration 068 to enable this.</p>
+      )}
+      {decks.length > 0 && (
+        <ul className="m-0 space-y-1 p-0">
+          {decks.map((d) => (
+            <li key={d.id} className="flex items-center gap-2 text-xs text-brand-ink3">
+              <span className="font-semibold">{d.archetype}</span>
+              {d.share != null && <span>{d.share}%</span>}
+              <span className="text-brand-ink4">
+                {d.core_cards.length} cards · {d.source}
+              </span>
+              <button className="text-poke-blue hover:underline" onClick={() => edit(d)}>
+                edit
+              </button>
+              <button className="text-brand-negative hover:underline" onClick={() => remove(d.id)}>
+                remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <input
+          className="input text-sm"
+          placeholder="Archetype (e.g. Charizard ex)"
+          value={archetype}
+          onChange={(e) => setArchetype(e.target.value)}
+        />
+        <input
+          className="input w-24 text-sm"
+          placeholder="Share %"
+          value={share}
+          onChange={(e) => setShare(e.target.value)}
+        />
+      </div>
+      <textarea
+        className="input h-32 w-full font-mono text-xs"
+        placeholder={"4 Charizard ex\n3 Pidgeot ex\n4 Rare Candy\n…"}
+        value={cardsText}
+        onChange={(e) => setCardsText(e.target.value)}
+      />
+      <input
+        className="input w-full text-sm"
+        placeholder="Notes shown on the Meta page (optional)"
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+      />
+      {error && <p className="m-0 text-xs text-brand-negative">{error}</p>}
+      <button className="btn-primary text-sm" disabled={busy || !migrated} onClick={save}>
+        {busy ? "Saving…" : "Save archetype"}
+      </button>
     </div>
   );
 }

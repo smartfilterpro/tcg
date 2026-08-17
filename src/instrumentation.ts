@@ -14,5 +14,7 @@ export async function register() {
     startPriceSyncLoop();
     const { startCardImportLoop } = await import("@/lib/cardImport");
     startCardImportLoop();
+    const { startMetaSyncLoop } = await import("@/lib/metaSync");
+    startMetaSyncLoop();
   }
 }

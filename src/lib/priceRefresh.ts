@@ -60,6 +60,9 @@ export interface PriceRefreshSummary {
   trackerPriced?: number;
   /** Given artwork by the paid tracker, on the same lookups. */
   trackerArt?: number;
+  /** How many of the held rows THIS run added (the rest are carried from
+   *  earlier runs, still waiting on a decision). */
+  newlyHeld?: number;
   /** Set when the run failed partway — shown in the admin panel. */
   error?: string;
 }
@@ -143,6 +146,18 @@ export async function refreshStalePrices(
   };
 
   try {
+  // What earlier runs already put in front of a human. A held card is
+  // waiting on a DECISION, not on another lookup — re-checking it buys the
+  // same answer we already refused to write. These used to stay in the
+  // rotation: a flagged card was never stamped, so it sat at the front of
+  // the stale queue and was re-fetched (sometimes on paid budget) and
+  // re-flagged every single run — the same ~65 cards, hourly. Worse, a
+  // BLANK card whose only claim was untrusted could never be priced at
+  // all, so it kept the backlog non-zero and the whole loop on the hourly
+  // cadence forever.
+  const heldAlready = await readHeldList(admin);
+  const heldIds = new Set(heldAlready.map((s) => s.id));
+
   // Only cards someone actually owns are worth refreshing. Paged — Supabase
   // caps responses at 1000 rows, which was hiding most owned cards from the
   // refresh rotation.
@@ -153,7 +168,8 @@ export async function refreshStalePrices(
   const ownedIds = [...new Set((owned ?? []).map((r) => r.card_id as string))].filter(
     // Custom entries have no API price source — unless PokeTrace can try a
     // name+number search for them.
-    (id) => !id.startsWith("custom-") || poketraceEnabled()
+    (id) =>
+      (!id.startsWith("custom-") || poketraceEnabled()) && !heldIds.has(id)
   );
   if (ownedIds.length === 0) return summary;
 
@@ -438,6 +454,16 @@ export async function refreshStalePrices(
               image: (card.image_small as string | null) ?? null,
               rarity: (card.rarity as string | null) ?? null,
             });
+            // Stamped as checked even though nothing was written: the card
+            // now waits on the review queue, not the refresh rotation. The
+            // review buttons re-stamp on decision either way, and a "keep"
+            // means the feed's claim can resurface once the card is stale
+            // again — days from now, not next hour.
+            await admin
+              .from("cards")
+              .update({ price_updated_at: new Date().toISOString() })
+              .eq("id", card.id)
+              .then(() => {});
             return; // don't auto-apply a wild swing
           }
 
@@ -504,6 +530,19 @@ export async function refreshStalePrices(
     console.error("price refresh failed", err);
   }
 
+  // The held list is CARRIED, not replaced. Each run used to overwrite the
+  // summary with only its own flags, which is why flagged cards had to stay
+  // artificially stale to remain visible — the churn this run no longer
+  // pays. Read the stored list again HERE, not at the start: an admin who
+  // resolved rows while this run was fetching keeps their decisions.
+  summary.newlyHeld = summary.suspicious.length;
+  const stillHeld = await readHeldList(admin);
+  const newIds = new Set(summary.suspicious.map((s) => s.id));
+  summary.suspicious = [
+    ...summary.suspicious,
+    ...stillHeld.filter((s) => !newIds.has(s.id)),
+  ].slice(0, 400); // bounded: the blob rides in one app_state row
+
   // Remember the run for the admin dashboard (best-effort — app_state exists
   // after migration 022).
   await admin
@@ -512,6 +551,25 @@ export async function refreshStalePrices(
     .then(() => {});
 
   return summary;
+}
+
+/** The held rows as currently stored — the review queue's source of truth.
+ *  Empty on any failure: pre-migration-022 there is nowhere to store them,
+ *  and a transient read error only means one run re-checks a few cards. */
+async function readHeldList(
+  admin: SupabaseClient
+): Promise<PriceRefreshSummary["suspicious"]> {
+  try {
+    const { data } = await admin
+      .from("app_state")
+      .select("value")
+      .eq("key", STATE_KEY)
+      .maybeSingle();
+    const value = data?.value as Partial<PriceRefreshSummary> | null;
+    return Array.isArray(value?.suspicious) ? value.suspicious : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Fill in a held card's picture and printing details.
@@ -583,6 +641,7 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
       freeArt: value.freeArt ?? 0,
       trackerPriced: value.trackerPriced ?? 0,
       trackerArt: value.trackerArt ?? 0,
+      ...(value.newlyHeld != null ? { newlyHeld: value.newlyHeld } : {}),
       ...(value.error ? { error: value.error } : {}),
     };
   } catch {
@@ -594,10 +653,17 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
  *  is a backlog to clear or a routine to keep. Cheap: a HEAD count. */
 async function unpricedOwnedCount(admin: SupabaseClient): Promise<number> {
   try {
+    // A blank card whose only claim is sitting in the review queue is not a
+    // backlog the refresh can clear — counting it kept the loop on the
+    // hourly cadence indefinitely, re-running a full 400-card pass for
+    // cards only a human can resolve.
+    const held = new Set((await readHeldList(admin)).map((s) => s.id));
     const { data: owned } = await fetchAllRows<{ card_id: string }>(() =>
       admin.from("collection_items").select("card_id").order("card_id")
     );
-    const ids = [...new Set((owned ?? []).map((r) => r.card_id))];
+    const ids = [...new Set((owned ?? []).map((r) => r.card_id))].filter(
+      (id) => !held.has(id)
+    );
     if (ids.length === 0) return 0;
     let missing = 0;
     for (let i = 0; i < ids.length; i += 200) {
@@ -644,7 +710,8 @@ export function startPriceRefreshLoop() {
       const summary = await refreshStalePrices();
       console.log(
         `price refresh: checked ${summary.checked}, updated ${summary.updated}, ` +
-          `${summary.suspicious.length} suspicious, ${summary.unpriced} without data` +
+          `${summary.suspicious.length} held for review (${summary.newlyHeld ?? 0} new), ` +
+          `${summary.unpriced} without data` +
           (backlog > 0 ? ` (backlog was ${backlog} unpriced, running hourly)` : "") +
           (summary.error ? ` — FAILED: ${summary.error}` : "")
       );
