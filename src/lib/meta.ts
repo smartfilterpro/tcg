@@ -17,6 +17,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { normalizeForSearch } from "@/lib/text";
+import { buyLinkFor } from "@/lib/buyLink";
 
 export interface MetaCoreCard {
   name: string;
@@ -45,6 +46,8 @@ export interface MetaCardView extends MetaCoreCard {
   image: string | null;
   /** Household members / sharing friends holding copies, best two. */
   heldBy: Array<{ name: string; qty: number }>;
+  /** Where to buy the missing copies (only set when some are missing). */
+  buyUrl?: string;
 }
 
 export interface MetaDeckView {
@@ -100,24 +103,32 @@ async function catalogueByNameKey(
   image: Map<string, string>;
   idsByKey: Map<string, string[]>;
   keyById: Map<string, string>;
+  tcgpIdByKey: Map<string, string>;
 }> {
   const price = new Map<string, number>();
   const image = new Map<string, string>();
   const idsByKey = new Map<string, string[]>();
   const keyById = new Map<string, string>();
+  const tcgpIdByKey = new Map<string, string>();
   try {
     for (let i = 0; i < keys.length; i += CHUNK) {
       const { data, error } = await admin
         .from("cards")
-        .select("id, name, market_price, image_small")
+        .select("id, name, market_price, image_small, tcgplayer_id")
         .in("name_key", keys.slice(i, i + CHUNK))
         .limit(1000);
       if (error) throw error;
       for (const row of data ?? []) {
         const k = normalizeForSearch((row.name as string) ?? "");
         const p = row.market_price as number | null;
-        if (p != null && p > 0 && (!price.has(k) || p < price.get(k)!)) price.set(k, p);
+        const priced = p != null && p > 0 && (!price.has(k) || p < price.get(k)!);
+        if (priced) price.set(k, p!);
         if (!image.has(k) && row.image_small) image.set(k, row.image_small as string);
+        // The buy link follows the price: when this printing supplied the
+        // number shown, its product page is the page that number came from.
+        if (row.tcgplayer_id != null && (priced || !tcgpIdByKey.has(k))) {
+          tcgpIdByKey.set(k, String(row.tcgplayer_id));
+        }
         const list = idsByKey.get(k);
         if (list) list.push(row.id as string);
         else idsByKey.set(k, [row.id as string]);
@@ -128,7 +139,7 @@ async function catalogueByNameKey(
     // Pre-066: no name_key column. Coverage still works off the member's
     // own collection names; prices and helpers just stay blank.
   }
-  return { price, image, idsByKey, keyById };
+  return { price, image, idsByKey, keyById, tcgpIdByKey };
 }
 
 /** People whose collections may cover a gap: the member's household, plus
@@ -224,7 +235,10 @@ export async function metaDecksFor(userId: string): Promise<{
       )
     ),
   ].filter(Boolean);
-  const { price, image, idsByKey, keyById } = await catalogueByNameKey(admin, allKeys);
+  const { price, image, idsByKey, keyById, tcgpIdByKey } = await catalogueByNameKey(
+    admin,
+    allKeys
+  );
 
   // Who else could cover a gap — household first, sharing friends after.
   const helpers = await helperNames(admin, userId);
@@ -271,6 +285,9 @@ export async function metaDecksFor(userId: string): Promise<{
           price: price.get(k) ?? null,
           image: image.get(k) ?? null,
           heldBy: holders,
+          ...(owned < c.count
+            ? { buyUrl: buyLinkFor({ tcgplayerId: tcgpIdByKey.get(k) ?? null, name: c.name }) }
+            : {}),
         };
       }
     );

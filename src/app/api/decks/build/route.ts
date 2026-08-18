@@ -13,6 +13,7 @@ import { analyzeDeck, analysisSummary, type DeckMathEntry } from "@/lib/deckMath
 import { normalizeForSearch } from "@/lib/text";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { rowToSummary, CARD_SUMMARY_COLUMNS } from "@/lib/types";
+import { buyLinkFor } from "@/lib/buyLink";
 import type { CardSummary, CardSummaryRow, DeckCardEntry } from "@/lib/types";
 import { errorJson, safeMessage } from "@/lib/apiError";
 
@@ -762,6 +763,7 @@ export async function POST(req: Request) {
             reason: string;
             card?: CardSummary | null;
             owners?: Array<{ userId: string; name: string; qty: number }>;
+            buyUrl?: string;
           }>;
         };
         try {
@@ -866,6 +868,10 @@ export async function POST(req: Request) {
         // cards we haven't imported yet — and a name that resolves nowhere
         // is removed and said out loud, never shipped as if it existed.
         const resolvedByKey = new Map<string, CardSummary>();
+        // The winning printing's TCGplayer product id, where we hold one —
+        // it turns a buy link into the exact product page instead of a
+        // search. Empty in collection mode; those fall back to search links.
+        const tcgpIdByKey = new Map<string, string>();
         if (poolMode === "all") {
           const keys = [
             ...new Set(
@@ -884,15 +890,20 @@ export async function POST(req: Request) {
             for (let i = 0; i < keys.length; i += 100) {
               const { data, error: qErr } = await admin
                 .from("cards")
-                .select(CARD_SUMMARY_COLUMNS)
+                .select(`${CARD_SUMMARY_COLUMNS}, tcgplayer_id`)
                 .in("name_key", keys.slice(i, i + 100))
                 .limit(1000);
               if (qErr) throw qErr;
-              for (const raw of (data ?? []) as unknown as CardSummaryRow[]) {
+              for (const raw of (data ?? []) as unknown as Array<
+                CardSummaryRow & { tcgplayer_id?: number | string | null }
+              >) {
                 const k = normalizeForSearch(raw.name);
                 const summary = rowToSummary(raw);
                 const prev = resolvedByKey.get(k);
-                if (!prev || score(summary) < score(prev)) resolvedByKey.set(k, summary);
+                if (!prev || score(summary) < score(prev)) {
+                  resolvedByKey.set(k, summary);
+                  if (raw.tcgplayer_id != null) tcgpIdByKey.set(k, String(raw.tcgplayer_id));
+                }
               }
             }
           } catch {
@@ -1110,6 +1121,16 @@ export async function POST(req: Request) {
           } catch {
             suggestion.card = null;
           }
+        }
+
+        // Every wishlist/buy-list row gets a destination: the exact product
+        // page when the resolution found a TCGplayer id, a search otherwise
+        // — affiliate-wrapped when the program link is configured.
+        for (const s of deck.missing_suggestions ?? []) {
+          s.buyUrl = buyLinkFor({
+            tcgplayerId: tcgpIdByKey.get(normalizeForSearch(s.name)) ?? null,
+            name: s.name,
+          });
         }
 
         // Trade before you buy: check which group members (sharing their

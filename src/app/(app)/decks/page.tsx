@@ -870,11 +870,29 @@ function UpgradeList({
                   </a>
                 </div>
               )}
+              {u.buyUrl && (
+                <a
+                  href={u.buyUrl}
+                  target="_blank"
+                  // "sponsored" is the rel search engines and the FTC expect
+                  // on a paid link; harmless while the links are plain.
+                  rel="noreferrer sponsored"
+                  className="mt-1 inline-block rounded bg-amber-600 px-2 py-0.5 font-semibold text-white hover:bg-amber-700"
+                >
+                  Buy on TCGplayer ↗
+                </a>
+              )}
             </div>
           </li>
           );
         })}
       </ul>
+      {suggestions.some((u) => u.buyUrl && !u.buyUrl.startsWith("https://www.tcgplayer.com")) && (
+        <p className="mb-0 mt-2 text-[11px] text-amber-700">
+          TrainerDeck earns a small commission on TCGplayer purchases made through these links —
+          at no extra cost to you.
+        </p>
+      )}
     </div>
   );
 }
