@@ -430,6 +430,9 @@ export interface DeckSuggestion {
   /** Group members (sharing their collection) who own copies — trade
    *  before you buy. */
   owners?: Array<{ userId: string; name: string; qty: number }>;
+  /** Where "buy it" points — a TCGplayer product/search URL, affiliate-
+   *  wrapped when the program link is configured (see lib/buyLink). */
+  buyUrl?: string;
 }
 
 export interface Deck {

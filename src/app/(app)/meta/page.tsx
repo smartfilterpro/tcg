@@ -19,6 +19,7 @@ interface MetaCard {
   price: number | null;
   image: string | null;
   heldBy: Array<{ name: string; qty: number }>;
+  buyUrl?: string;
 }
 
 interface MetaDeck {
@@ -44,6 +45,7 @@ const CATEGORY_ORDER: Record<string, number> = { pokemon: 0, trainer: 1, energy:
 export default function MetaPage() {
   const [decks, setDecks] = useState<MetaDeck[]>([]);
   const [hasLimitless, setHasLimitless] = useState(false);
+  const [affiliate, setAffiliate] = useState(false);
   const [migrated, setMigrated] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +60,7 @@ export default function MetaPage() {
         setMigrated(json.migrated !== false);
         setDecks(json.decks ?? []);
         setHasLimitless(json.hasLimitless === true);
+        setAffiliate(json.affiliate === true);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Couldn't load the meta");
       }
@@ -175,6 +178,16 @@ export default function MetaPage() {
                             {c.heldBy.map((h) => `${h.name} has ${h.qty}`).join(", ")}
                           </span>
                         )}
+                        {c.buyUrl && gap > 0 && (
+                          <a
+                            href={c.buyUrl}
+                            target="_blank"
+                            rel="noreferrer sponsored"
+                            className="text-xs font-semibold text-amber-700 hover:underline"
+                          >
+                            buy ↗
+                          </a>
+                        )}
                       </li>
                     );
                   })}
@@ -197,18 +210,29 @@ export default function MetaPage() {
         );
       })}
 
-      {hasLimitless && (
+      {(hasLimitless || affiliate) && (
         <p className="text-center text-xs text-slate-400">
-          Tournament data via{" "}
-          <a
-            href="https://limitlesstcg.com"
-            target="_blank"
-            rel="noreferrer"
-            className="hover:underline"
-          >
-            LimitlessTCG
-          </a>
-          .
+          {hasLimitless && (
+            <>
+              Tournament data via{" "}
+              <a
+                href="https://limitlesstcg.com"
+                target="_blank"
+                rel="noreferrer"
+                className="hover:underline"
+              >
+                LimitlessTCG
+              </a>
+              .
+            </>
+          )}
+          {affiliate && (
+            <>
+              {" "}
+              TrainerDeck earns a small commission on TCGplayer purchases made through buy
+              links — at no extra cost to you.
+            </>
+          )}
         </p>
       )}
     </div>

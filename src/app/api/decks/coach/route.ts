@@ -71,6 +71,38 @@ interface CoachRequest {
   /** Present only for a SAVED deck. The freshly-built deck on screen has no
    *  row yet, so there is nothing to edit until it is saved. */
   deckId?: string | null;
+  /** The conversation so far, for a deck with no row to store one under
+   *  (the just-built preview). Saved decks IGNORE this — their thread is
+   *  read from the table, so a client can't rewrite what the coach said. */
+  history?: Array<{ role: "user" | "assistant"; content: string }>;
+}
+
+/** How much conversation rides along to the model. Long enough that "the
+ *  swap you suggested earlier" resolves; short enough that a months-old
+ *  thread doesn't crowd out the deck itself. */
+const HISTORY_TURNS = 12;
+const HISTORY_CHARS = 6_000;
+
+/** Turn stored/client history into legal alternating turns ending just
+ *  before the new question: first turn user, no consecutive same-role
+ *  turns (merged), oversized turns trimmed from the front. */
+function normalizeHistory(
+  raw: Array<{ role?: string; content?: string }> | undefined
+): Anthropic.MessageParam[] {
+  const turns: Array<{ role: "user" | "assistant"; content: string }> = [];
+  for (const m of (raw ?? []).slice(-HISTORY_TURNS)) {
+    if (m?.role !== "user" && m?.role !== "assistant") continue;
+    const content = String(m.content ?? "").slice(0, HISTORY_CHARS);
+    if (!content.trim()) continue;
+    const prev = turns[turns.length - 1];
+    if (prev && prev.role === m.role) prev.content += `\n\n${content}`;
+    else turns.push({ role: m.role, content });
+  }
+  while (turns.length > 0 && turns[0].role !== "user") turns.shift();
+  // The new question is the next user turn, so the history must end on the
+  // assistant's side.
+  while (turns.length > 0 && turns[turns.length - 1].role !== "assistant") turns.pop();
+  return turns.map((t) => ({ role: t.role, content: t.content }));
 }
 
 export interface CoachResult {
@@ -141,30 +173,54 @@ async function runCoach(
   const savedId = (deckId ?? "").trim();
   const canEdit = savedId.length > 0;
 
+  // The conversation so far. A saved deck's thread comes from the TABLE —
+  // the client's copy is never trusted to quote the coach — and an unsaved
+  // build's from the request, since it has no row to store one under.
+  let priorTurns: Anthropic.MessageParam[] = [];
+  if (canEdit) {
+    try {
+      const { data: stored } = await supabase
+        .from("deck_chat_messages")
+        .select("role, content")
+        .eq("deck_id", savedId)
+        .order("created_at", { ascending: false })
+        .order("id")
+        .limit(HISTORY_TURNS);
+      priorTurns = normalizeHistory([...(stored ?? [])].reverse());
+    } catch {
+      // Pre-069: the coach still answers, it just doesn't remember.
+    }
+  } else {
+    priorTurns = normalizeHistory(body.history);
+  }
+
+  // The deck and collection ride in the SYSTEM prompt rather than the first
+  // user turn: with a conversation in front of it, a context block posing
+  // as an old message would sit in the middle of the thread pretending
+  // somebody said it.
+  //
+  // Lines, not JSON. A 60-card deck as JSON repeats "name", "quantity",
+  // "category", "card_id" and "reason" on every entry — 57% of this payload
+  // was field names and punctuation.
+  const context =
+    `THE PLAYER'S DECK — "${deck.name ?? "Untitled"}"` +
+    (canEdit ? ` (deck_id: ${savedId})` : " (not saved yet — it cannot be edited)") +
+    `\n` +
+    (deck.strategy ? `Their notes: ${deck.strategy}\n` : "") +
+    `Cards, one per line, as: qty name [category] — why it's in the deck\n` +
+    (deck.cards ?? [])
+      .map(
+        (c) =>
+          `${c.quantity}x ${c.name} [${c.category}]` + (c.reason ? ` — ${c.reason}` : "")
+      )
+      .join("\n") +
+    `\n\n${briefing}` +
+    `\n\nTHE PLAYER'S FULL COLLECTION (every card they own, by name):\n` +
+    (collectionList || "(nothing scanned yet)");
+
   const messages: Anthropic.MessageParam[] = [
-    {
-      role: "user",
-      // Lines, not JSON. A 60-card deck as JSON repeats "name",
-      // "quantity", "category", "card_id" and "reason" on every entry —
-      // 57% of this payload was field names and punctuation.
-      content:
-        `THE PLAYER'S DECK — "${deck.name ?? "Untitled"}"` +
-        (canEdit ? ` (deck_id: ${savedId})` : " (not saved yet — it cannot be edited)") +
-        `\n` +
-        (deck.strategy ? `Their notes: ${deck.strategy}\n` : "") +
-        `Cards, one per line, as: qty name [category] — why it's in the deck\n` +
-        (deck.cards ?? [])
-          .map(
-            (c) =>
-              `${c.quantity}x ${c.name} [${c.category}]` +
-              (c.reason ? ` — ${c.reason}` : "")
-          )
-          .join("\n") +
-        `\n\n${briefing}` +
-        `\n\nTHE PLAYER'S FULL COLLECTION (every card they own, by name):\n` +
-        (collectionList || "(nothing scanned yet)") +
-        `\n\nPLAYER'S QUESTION: ${question.trim()}`,
-    },
+    ...priorTurns,
+    { role: "user", content: `PLAYER'S QUESTION: ${question.trim()}` },
   ];
 
   let response!: Anthropic.Message;
@@ -191,7 +247,7 @@ async function runCoach(
       {
         model: MODEL,
         max_tokens: 16000,
-        system: canEdit ? SYSTEM + CAN_EDIT : SYSTEM,
+        system: (canEdit ? SYSTEM + CAN_EDIT : SYSTEM) + `\n\n${context}`,
         ...(canEdit ? { tools: [DECK_EDIT_TOOL] } : {}),
         // The last permitted round takes the tool away, so the model
         // answers with words instead of ending the turn on a proposal
@@ -238,17 +294,43 @@ async function runCoach(
     messages.push({ role: "user", content: results });
   }
 
-  if (response.stop_reason === "refusal") {
-    return {
-      answer: "I can only help with Pokémon TCG decks — try a question about this deck!",
-      edit: null,
-    };
+  const answer =
+    response.stop_reason === "refusal"
+      ? "I can only help with Pokémon TCG decks — try a question about this deck!"
+      : answerText(response) || noAnswerReply(response, "the deck coach");
+  const edit = response.stop_reason === "refusal" ? null : pendingEdit;
+
+  // Remember the exchange, so the NEXT question continues this one. Both
+  // sides written server-side after the answer exists — and stamped a
+  // millisecond apart, because two rows born in the same default now()
+  // have no order to read back. Best-effort: pre-069 the coach still
+  // answers, it just doesn't remember.
+  if (canEdit) {
+    try {
+      const admin = createAdminClient();
+      const at = Date.now();
+      await admin.from("deck_chat_messages").insert([
+        {
+          deck_id: savedId,
+          user_id: userId,
+          role: "user",
+          content: question.trim(),
+          created_at: new Date(at).toISOString(),
+        },
+        {
+          deck_id: savedId,
+          user_id: userId,
+          role: "assistant",
+          content: answer,
+          created_at: new Date(at + 1).toISOString(),
+        },
+      ]);
+    } catch {
+      // See above.
+    }
   }
-  const text = answerText(response);
-  return {
-    answer: text || noAnswerReply(response, "the deck coach"),
-    edit: pendingEdit,
-  };
+
+  return { answer, edit };
 }
 
 /* ------------------------------------------------------------------ route */
@@ -277,7 +359,26 @@ function isMissingJobsTable(message: string): boolean {
 export async function GET(req: Request) {
   try {
     await requireUser();
-    const jobId = new URL(req.url).searchParams.get("job");
+    const params = new URL(req.url).searchParams;
+
+    // ?thread=<deckId> — the stored conversation for a saved deck. RLS
+    // scopes it to the caller's own rows; an absent table (pre-069) reads
+    // as an empty thread, because the box works either way.
+    const threadDeck = (params.get("thread") ?? "").trim();
+    if (threadDeck) {
+      const supabase = await createClient();
+      const { data, error } = await supabase
+        .from("deck_chat_messages")
+        .select("role, content, created_at")
+        .eq("deck_id", threadDeck)
+        .order("created_at")
+        .order("id")
+        .limit(80);
+      if (error) return NextResponse.json({ messages: [], migrated: false });
+      return NextResponse.json({ messages: data ?? [], migrated: true });
+    }
+
+    const jobId = params.get("job");
     if (!jobId) return NextResponse.json({ error: "No job id." }, { status: 400 });
 
     const supabase = await createClient();
@@ -339,7 +440,14 @@ export async function POST(req: Request) {
     }
 
     const supabase = await createClient();
-    const body: CoachRequest = { deck, question, deckId: raw.deckId ?? null };
+    const body: CoachRequest = {
+      deck,
+      question,
+      deckId: raw.deckId ?? null,
+      // Bounded here and normalized again in runCoach — it arrives from a
+      // browser and is only trusted for the unsaved-deck case anyway.
+      history: Array.isArray(raw.history) ? raw.history.slice(-24) : undefined,
+    };
     const deckId = (raw.deckId ?? "").trim() || null;
 
     // Service role for the job row. The RLS policy lets a member READ their
@@ -389,6 +497,25 @@ export async function POST(req: Request) {
       });
 
     return NextResponse.json({ jobId, migrated: true });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+/** DELETE ?thread=<deckId> — clear the caller's conversation for one deck.
+ *  RLS limits the delete to their own rows, so the deck id alone is safe. */
+export async function DELETE(req: Request) {
+  try {
+    await requireUser();
+    const threadDeck = (new URL(req.url).searchParams.get("thread") ?? "").trim();
+    if (!threadDeck) return NextResponse.json({ error: "No deck id." }, { status: 400 });
+    const supabase = await createClient();
+    const { error } = await supabase
+      .from("deck_chat_messages")
+      .delete()
+      .eq("deck_id", threadDeck);
+    if (error && !/deck_chat_messages/.test(error.message ?? "")) throw error;
+    return NextResponse.json({ ok: true });
   } catch (err) {
     return errorResponse(err);
   }
