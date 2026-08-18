@@ -163,6 +163,74 @@ export async function runDeckEditProposal(
     ownedByName.set(key, (ownedByName.get(key) ?? 0) + ((i.quantity as number) ?? 0));
   }
 
+  // CHURN GUARD. A real proposal swapped out "Bubbly Water Energy" and
+  // added "Basic Water Energy" — the same fuel wearing two names — which
+  // reads to a player as the coach removing a card and putting it back.
+  // Exactly "<type> Energy" (with or without "Basic") IS the basic energy
+  // card, so a swap between two such names of one type is provably a no-op
+  // and is refused with instructions. A swap where one side is a SPECIAL
+  // energy of that type ("Speed Lightning Energy") can be legitimate, so
+  // anything unproven passes with a pointed caution instead.
+  const PLAIN_ENERGY_RE =
+    /^(?:basic\s+)?(grass|fire|water|lightning|psychic|fighting|darkness|metal|fairy)\s+energy$/i;
+  const TYPE_TAIL_RE =
+    /(grass|fire|water|lightning|psychic|fighting|darkness|metal|fairy)\s+energy$/i;
+  let churnCaution = "";
+  {
+    const outs = applied.filter((a) => a.to < a.from);
+    const ins = applied.filter((a) => a.to > a.from);
+    const pairs = outs.flatMap((o) => {
+      const t = o.name.trim().toLowerCase().match(TYPE_TAIL_RE)?.[1];
+      if (!t) return [];
+      return ins
+        .filter(
+          (i) =>
+            i.name.trim().toLowerCase().match(TYPE_TAIL_RE)?.[1] === t &&
+            i.name.trim().toLowerCase() !== o.name.trim().toLowerCase()
+        )
+        .map((i) => ({ out: o, add: i }));
+    });
+    if (pairs.length > 0) {
+      // Prove plainness: by name shape, or by a catalogue row that is
+      // Energy with no rules text (special energy always carries text).
+      const provenPlain = async (name: string): Promise<boolean> => {
+        if (PLAIN_ENERGY_RE.test(name.trim())) return true;
+        const { data } = await supabase
+          .from("cards")
+          .select("supertype, battle_data")
+          .ilike("name", name.replace(/[%_]/g, ""))
+          .limit(5);
+        const rows = data ?? [];
+        return (
+          rows.length > 0 &&
+          rows.every(
+            (r) =>
+              /energy/i.test((r.supertype as string | null) ?? "") &&
+              !((r.battle_data as { rules?: string[] } | null)?.rules?.length)
+          )
+        );
+      };
+      for (const p of pairs) {
+        if ((await provenPlain(p.out.name)) && (await provenPlain(p.add.name))) {
+          return {
+            forModel:
+              `That edit removes "${p.out.name}" and adds "${p.add.name}", and both are plain ` +
+              `basic energy of the same type — the same card under two names, which reads to ` +
+              `the player as taking a card out and putting it back. It was NOT offered. ` +
+              `Restate it as ONE net change to the name already in the deck ` +
+              `("${p.out.name}"), and only that name.`,
+            proposal: null,
+          };
+        }
+      }
+      churnCaution =
+        ` CAUTION: this swaps between energy names of the same type (${pairs
+          .map((p) => `"${p.out.name}" → "${p.add.name}"`)
+          .join(", ")}). If those are the same functional card, the player will read it as ` +
+        `churn — say explicitly, from their printed text, why they differ.`;
+    }
+  }
+
   const check = validateEdit(after, ownedByName);
   if (!check.ok) {
     // Only the rules of the game get here now. Not owning the cards does
@@ -186,6 +254,7 @@ export async function runDeckEditProposal(
       `${applied.map((a) => `${a.name} ${a.from}→${a.to}`).join(", ")}. ` +
       `Deck would be ${total} cards.` +
       (check.warnings.length ? ` Note: ${check.warnings.join(" ")}` : "") +
+      churnCaution +
       // Said every time, because this is the fact the model got wrong when
       // left to work it out: a saved deck is a record, not an inventory
       // claim, and nothing here consumes a collection.
