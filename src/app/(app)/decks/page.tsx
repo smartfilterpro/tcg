@@ -514,13 +514,47 @@ function CoachBox({
 }) {
   const credits = useCredits();
   const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<string | null>(null);
+  /** The conversation, oldest first. A saved deck's thread is loaded from
+   *  the server (it survives closing the deck and switching devices); an
+   *  unsaved build keeps its thread here and sends it along with each
+   *  question so the coach still remembers the exchange. */
+  const [thread, setThread] = useState<Array<{ role: "user" | "assistant"; content: string }>>(
+    []
+  );
+  const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<DeckEditProposal | null>(null);
   const [asking, setAsking] = useState(false);
   const [waited, setWaited] = useState(0);
   /** A server-side caveat worth reading alongside the answer — currently
    *  only "the background-job migration has not been run". */
   const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!deckId) return;
+    let live = true;
+    fetch(`/api/decks/coach?thread=${encodeURIComponent(deckId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (live && Array.isArray(j?.messages)) setThread(j.messages);
+      })
+      .catch(() => {
+        // An unloadable history is an empty one, not a broken coach.
+      });
+    return () => {
+      live = false;
+    };
+  }, [deckId]);
+
+  async function clearChat() {
+    setThread([]);
+    setEdit(null);
+    setError(null);
+    if (deckId) {
+      await fetch(`/api/decks/coach?thread=${encodeURIComponent(deckId)}`, {
+        method: "DELETE",
+      }).catch(() => {});
+    }
+  }
 
   /** Read one JSON body, saying what happened when it isn't JSON.
    *
@@ -544,12 +578,18 @@ function CoachBox({
   }
 
   async function ask() {
-    if (!question.trim() || asking) return;
+    const q = question.trim();
+    if (!q || asking) return;
     setAsking(true);
-    setAnswer(null);
+    setError(null);
     setEdit(null);
     setNote(null);
     setWaited(0);
+    // The question joins the thread immediately and the box empties — the
+    // conversation is the record, the input is just the doorway.
+    const priorThread = thread;
+    setThread((t) => [...t, { role: "user", content: q }]);
+    setQuestion("");
     const startedAt = Date.now();
     try {
       // Starting the answer and collecting it are two separate requests.
@@ -563,7 +603,14 @@ function CoachBox({
       const res = await resilientFetch("/api/decks/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deck, question, deckId: deckId ?? null }),
+        // A saved deck's history lives server-side; only the unsaved
+        // build's thread travels with the request.
+        body: JSON.stringify({
+          deck,
+          question: q,
+          deckId: deckId ?? null,
+          ...(deckId ? {} : { history: priorThread.slice(-12) }),
+        }),
       });
       const { json, failure } = await readJson<{
         jobId?: string;
@@ -573,11 +620,11 @@ function CoachBox({
         note?: string;
       }>(res);
       if (!json) {
-        setAnswer(`${failure} Try again — if it keeps happening, this is worth reporting.`);
+        setError(`${failure} Try again — if it keeps happening, this is worth reporting.`);
         return;
       }
       if (!res.ok) {
-        setAnswer(json.error || `The request failed (HTTP ${res.status}).`);
+        setError(json.error || `The request failed (HTTP ${res.status}).`);
         return;
       }
 
@@ -586,7 +633,7 @@ function CoachBox({
       // and the note is SHOWN rather than swallowed, because a background job
       // that silently isn't running is the same bug wearing a disguise.
       if (!json.jobId) {
-        setAnswer(json.answer ?? "No answer came back.");
+        setThread((t) => [...t, { role: "assistant", content: json.answer ?? "No answer came back." }]);
         setNote(json.note ?? null);
         if (json.edit) setEdit(json.edit);
         return;
@@ -604,7 +651,7 @@ function CoachBox({
         // spinner is owed an ending — and the job id makes the difference
         // between a shrug and something reportable.
         if (Date.now() > deadline) {
-          setAnswer(
+          setError(
             `That answer has been running for ${Math.round(
               POLL_LIMIT_MS / 60000
             )} minutes, which is far longer than it should take, so I've stopped waiting. ` +
@@ -622,26 +669,29 @@ function CoachBox({
           error?: string;
         }>(poll);
         if (!state) {
-          setAnswer(`${pollFailure} The answer may still be running — ask again in a moment.`);
+          setError(`${pollFailure} The answer may still be running — ask again in a moment.`);
           return;
         }
         if (state.error) {
-          setAnswer(state.error);
+          setError(state.error);
           return;
         }
         const job = state.job;
         // A job that vanished is not a job still running. Saying so beats
         // polling an id nothing will ever answer for.
         if (!job) {
-          setAnswer("That answer went missing before it finished — ask again.");
+          setError("That answer went missing before it finished — ask again.");
           return;
         }
         if (job.status === "error") {
-          setAnswer(job.error || "The coach failed.");
+          setError(job.error || "The coach failed.");
           return;
         }
         if (job.status === "done") {
-          setAnswer(job.result?.answer ?? "No answer came back.");
+          setThread((t) => [
+            ...t,
+            { role: "assistant", content: job.result?.answer ?? "No answer came back." },
+          ]);
           if (job.result?.edit) setEdit(job.result.edit);
           return;
         }
@@ -649,7 +699,7 @@ function CoachBox({
     } catch (err) {
       // resilientFetch gives up only after several attempts across a wake-up,
       // so reaching here means the connection is genuinely gone.
-      setAnswer(
+      setError(
         `Couldn't reach the server — ${
           err instanceof Error ? err.message : "the connection dropped"
         }. Nothing was changed.`
@@ -661,32 +711,56 @@ function CoachBox({
 
   return (
     <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <p className="mb-2 text-xs font-semibold text-slate-500">
-        🎓 Ask {AI_NAME} about this deck — how to pilot it, opening plays, rules, matchups
-        {deckId ? ", or ask for a change" : ""}
-      </p>
-      <div className="flex gap-2">
-        <input
-          className="input text-sm"
-          placeholder={
-            deckId
-              ? 'e.g. "What do I search for first turn?" or "Swap the Poké Pad for a Nest Ball"'
-              : 'e.g. "What do I search for first turn?" or "How do I beat water decks?"'
-          }
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && ask()}
-        />
-        {credits.empty ? (
-          <CreditLock plan={credits.credits?.plan} label="Out of credits" />
-        ) : (
-          <button className="btn-secondary shrink-0 text-sm" onClick={ask} disabled={asking}>
-            {asking ? "Thinking…" : "Ask"}
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <p className="m-0 text-xs font-semibold text-slate-500">
+          🎓 Chat with {AI_NAME} about this deck — piloting, rules, matchups
+          {deckId ? ", or ask for a change" : ""}
+        </p>
+        {thread.length > 0 && (
+          <button
+            className="shrink-0 text-[11px] text-slate-400 hover:text-slate-600 hover:underline"
+            title="Start the conversation over"
+            onClick={clearChat}
+          >
+            clear chat
           </button>
         )}
       </div>
+
+      {thread.length > 0 && (
+        <div className="mb-2 flex max-h-96 flex-col gap-2 overflow-y-auto">
+          {thread.map((m, i) =>
+            m.role === "user" ? (
+              <div
+                key={i}
+                className="ml-8 self-end rounded-lg bg-poke-blue/10 px-3 py-2 text-sm text-slate-800"
+              >
+                {m.content}
+              </div>
+            ) : (
+              <div
+                key={i}
+                className="mr-4 self-start rounded-lg bg-white px-3 py-2 text-sm leading-[1.6] text-slate-700 shadow-sm"
+              >
+                <Markdown text={m.content} />
+                {/* A proposed change belongs to the latest reply — earlier
+                    proposals were either approved or superseded. */}
+                {edit && i === thread.length - 1 && (
+                  <DeckEditCard
+                    proposal={edit}
+                    // The deck is on screen above this box, so a change that
+                    // isn't reflected there reads as one that didn't happen.
+                    onApplied={() => onEdited?.()}
+                  />
+                )}
+              </div>
+            )
+          )}
+        </div>
+      )}
+
       {asking && (
-        <p className="mt-2 text-xs text-slate-400">
+        <p className="mb-2 text-xs text-slate-400">
           <span className="animate-pulse">{AI_NAME} is thinking about your deck…</span>
           {/* The elapsed count and the reassurance appear only once the wait
               is long enough to worry about. A question that answers in eight
@@ -702,27 +776,38 @@ function CoachBox({
           )}
         </p>
       )}
-      {/* Shown ABOVE the answer, because it explains why the answer took as
-          long as it did — and because a background job that is quietly not
-          running is the original bug wearing a disguise. */}
+      {/* Explains why the answer took as long as it did — a background job
+          that is quietly not running is the original bug wearing a
+          disguise. */}
       {note && (
-        <p className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-[11.5px] leading-snug text-amber-900">
+        <p className="mb-2 rounded border border-amber-200 bg-amber-50 p-2 text-[11.5px] leading-snug text-amber-900">
           ⚠︎ {note}
         </p>
       )}
-      {answer && (
-        <div className="mt-2 rounded bg-white p-3 text-sm leading-[1.6] text-slate-700 shadow-sm">
-          <Markdown text={answer} />
-          {edit && (
-            <DeckEditCard
-              proposal={edit}
-              // The deck is on screen above this box, so a change that isn't
-              // reflected there reads as one that didn't happen.
-              onApplied={() => onEdited?.()}
-            />
-          )}
-        </div>
-      )}
+      {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
+
+      <div className="flex gap-2">
+        <input
+          className="input text-sm"
+          placeholder={
+            thread.length > 0
+              ? "Ask a follow-up…"
+              : deckId
+                ? 'e.g. "What do I search for first turn?" or "Swap the Poké Pad for a Nest Ball"'
+                : 'e.g. "What do I search for first turn?" or "How do I beat water decks?"'
+          }
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && ask()}
+        />
+        {credits.empty ? (
+          <CreditLock plan={credits.credits?.plan} label="Out of credits" />
+        ) : (
+          <button className="btn-secondary shrink-0 text-sm" onClick={ask} disabled={asking}>
+            {asking ? "Thinking…" : thread.length > 0 ? "Send" : "Ask"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
