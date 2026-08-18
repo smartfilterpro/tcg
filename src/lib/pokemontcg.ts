@@ -33,6 +33,7 @@ interface RawCard {
   rules?: string[];
   abilities?: Array<{ name: string; text?: string; type?: string }>;
   legalities?: { standard?: string; expanded?: string };
+  evolvesFrom?: string;
   regulationMark?: string;
 }
 
@@ -50,6 +51,11 @@ export interface CardBattleData {
   /** Evolution stage ("Basic", "Stage 1", …) — sources that don't fill
    *  subtypes (TCGdex, AI-read cards) report it here. */
   stage?: string | null;
+  /** What the card's own "Evolves from" line names. Load-bearing for the
+   *  coach: modern eras rewrite evolution lines (a Mega … ex can evolve
+   *  straight from the first stage), so a model's memory of the family
+   *  tree is exactly the thing NOT to trust. */
+  evolvesFrom?: string | null;
   /** HP for sources where the cards row lacks it (AI-read customs). */
   hp?: number | null;
   /** Trainer subtype ("Supporter" / "Item" / "Stadium" / "Tool"). */
@@ -81,6 +87,7 @@ function toBattleData(card: RawCard): CardBattleData | null {
     retreat: isPokemon ? card.convertedRetreatCost ?? 0 : 0,
     ...(rules.length > 0 ? { rules } : {}),
     ...(abilities.length > 0 ? { abilities } : {}),
+    ...(card.evolvesFrom?.trim() ? { evolvesFrom: card.evolvesFrom.trim() } : {}),
     ...(card.legalities
       ? {
           legal: {

@@ -20,6 +20,7 @@ interface TcgdexCard extends TcgdexBrief {
   hp?: number | string;
   types?: string[];
   stage?: string; // "Basic" | "Stage1" | "Stage2" | ...
+  evolveFrom?: string; // the printed "Evolves from" line
   trainerType?: string; // "Supporter" | "Item" | "Stadium" | "Tool" | ...
   energyType?: string; // "Basic" | "Special"
   effect?: string; // Trainer / Special Energy rules text
@@ -275,6 +276,7 @@ export function tcgdexBattleData(
         }
       : {}),
     stage: card.stage ? card.stage.replace(/^Stage(\d)$/, "Stage $1") : null,
+    ...(card.evolveFrom?.trim() ? { evolvesFrom: card.evolveFrom.trim() } : {}),
     hp: Number.isFinite(hpNum) && hpNum > 0 ? hpNum : null,
     trainerType: card.trainerType ?? null,
     ...(card.legal ? { legal: { std: card.legal.standard === true, exp: card.legal.expanded === true } } : {}),
