@@ -506,7 +506,12 @@ function CoachBox({
   deckId,
   onEdited,
 }: {
-  deck: { name: string; strategy: string | null; cards: DeckCardEntry[] };
+  deck: {
+    name: string;
+    strategy: string | null;
+    cards: DeckCardEntry[];
+    suggestions?: UpgradeSuggestion[];
+  };
   /** A saved deck's id. Absent for the deck that has just been built and not
    *  saved: there is no row to change, so no edits are offered. */
   deckId?: string | null;
@@ -604,9 +609,20 @@ function CoachBox({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // A saved deck's history lives server-side; only the unsaved
-        // build's thread travels with the request.
+        // build's thread travels with the request. Wishlist rows are
+        // slimmed to what the server reads — the stored ones carry whole
+        // card records and images.
         body: JSON.stringify({
-          deck,
+          deck: {
+            name: deck.name,
+            strategy: deck.strategy,
+            cards: deck.cards,
+            suggestions: (deck.suggestions ?? []).map((s) => ({
+              name: s.name,
+              quantity: s.quantity,
+              reason: s.reason,
+            })),
+          },
           question: q,
           deckId: deckId ?? null,
           ...(deckId ? {} : { history: priorThread.slice(-12) }),
@@ -1511,7 +1527,14 @@ export default function DecksPage() {
                 nameImages={nameImages}
               />
             )}
-            <CoachBox deck={{ name: built.name, strategy: built.strategy, cards: built.cards }} />
+            <CoachBox
+              deck={{
+                name: built.name,
+                strategy: built.strategy,
+                cards: built.cards,
+                suggestions: built.missing_suggestions ?? [],
+              }}
+            />
           </div>
         )}
       </div>
@@ -1711,6 +1734,10 @@ export default function DecksPage() {
                       name: viewing.name,
                       strategy: viewing.strategy,
                       cards: viewing.cards ?? [],
+                      // The saved wishlist rides along so the coach can
+                      // notice when a suggested card has since been acquired
+                      // and propose actually putting it in.
+                      suggestions: viewing.suggestions ?? [],
                     }}
                     deckId={viewing.id}
                     onEdited={() => reloadDeck(viewing.id)}

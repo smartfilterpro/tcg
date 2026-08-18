@@ -61,6 +61,13 @@ the facts in front of you say so. Where a card is marked as having no data
 on file, say you can't verify that card's text rather than recalling it —
 "I can't check that card" is a correct answer and a confident memory is not.
 
+WISHLIST REVIEW: when the deck context carries a SAVED WISHLIST section,
+read each line's ownership note — those suggestions were written when the
+deck was built, and the collection has moved on since. A wishlist card the
+player has since acquired is the first improvement to raise: propose adding
+it (naming what to cut), or say plainly why it no longer fits. Never advise
+buying a wishlist card the ownership note says they already own.
+
 SUGGEST NET CHANGES ONLY: never advise removing copies of a card and adding
 copies of the same card — or a functionally identical one — back. Basic
 energy is where this bites: every plain "<type> Energy" printing is the SAME
@@ -89,7 +96,16 @@ proposed change and approves it. So propose readily, but never say the deck
 has been changed. Say you have offered the change for them to approve.`;
 
 interface CoachRequest {
-  deck: { name?: string; strategy?: string | null; cards?: DeckCardEntry[] };
+  deck: {
+    name?: string;
+    strategy?: string | null;
+    cards?: DeckCardEntry[];
+    /** The wishlist saved with the deck ("cards to buy"). The coach checks
+     *  it against CURRENT ownership — the collection moves on after a deck
+     *  is saved, and "you now own the card we told you to buy" is the
+     *  cheapest good advice there is. */
+    suggestions?: Array<{ name?: string; quantity?: number; reason?: string | null }>;
+  };
   question: string;
   /** Present only for a SAVED deck. The freshly-built deck on screen has no
    *  row yet, so there is nothing to edit until it is saved. */
@@ -177,6 +193,11 @@ async function runCoach(
     .map(([n, q]) => `${q}x ${n}`)
     .slice(0, 800)
     .join("\n");
+  const ownedNorm = new Map<string, number>();
+  for (const [n, q] of owned) {
+    const k = normalizeForSearch(n);
+    ownedNorm.set(k, (ownedNorm.get(k) ?? 0) + q);
+  }
 
   // What the deck's cards actually SAY. The coach used to see names alone
   // and answered evolution and rules questions from memory — which is how
@@ -351,6 +372,32 @@ async function runCoach(
       .join("\n") +
     `\n\n${briefing}` +
     cardFacts +
+    // The wishlist saved with the deck, re-checked against what the player
+    // owns TODAY — the whole point of carrying it is that the collection
+    // moves on after a deck is saved, and the model shouldn't have to
+    // cross-reference an 800-line list to notice.
+    (() => {
+      const wishlist = (deck.suggestions ?? [])
+        .filter((s) => typeof s?.name === "string" && s.name.trim())
+        .slice(0, 12);
+      if (wishlist.length === 0) return "";
+      const lines = wishlist.map((s) => {
+        const name = s.name!.trim().slice(0, 120);
+        const k = normalizeForSearch(name);
+        const own = ownedNorm.get(k) ?? 0;
+        const inDeck = (deck.cards ?? [])
+          .filter((c) => normalizeForSearch(c.name) === k)
+          .reduce((t, c) => t + c.quantity, 0);
+        const flag =
+          own > inDeck ? " ← NOW OWNED beyond what the deck runs — see WISHLIST REVIEW" : "";
+        return (
+          `- ${s.quantity ?? 1}x ${name}` +
+          (s.reason ? ` (${trimTo(String(s.reason), 100)})` : "") +
+          `: owns ${own} now, deck runs ${inDeck}${flag}`
+        );
+      });
+      return `\n\nTHE DECK'S SAVED WISHLIST — suggested when it was built, ownership as of RIGHT NOW:\n${lines.join("\n")}`;
+    })() +
     `\n\nTHE PLAYER'S FULL COLLECTION (every card they own, by name):\n` +
     (collectionList || "(nothing scanned yet)");
 
