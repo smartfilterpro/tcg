@@ -43,6 +43,8 @@ export interface PriceRefreshSummary {
      *  claim on a blank card is exactly the case worth reviewing. */
     old: number | null;
     next: number;
+    /** Which feed proposed the number — the reviewer's first question. */
+    via?: string | null;
   }>;
   /** PokeTrace source stats (present only when POKETRACE_API_KEY is set). */
   pt?: {
@@ -298,6 +300,15 @@ export async function refreshStalePrices(
             nextMarket = fresh?.marketPrice ?? null;
             nextPrices = fresh?.prices ?? null;
           }
+          // Which feed said so. Carried onto every held entry, because a
+          // review queue full of numbers with no provenance can't answer
+          // the only question the reviewer actually has.
+          let via: string | null =
+            nextMarket != null
+              ? (card.id as string).startsWith("tcgdex-")
+                ? "TCGdex (Cardmarket)"
+                : "pokemontcg.io (TCGplayer)"
+              : null;
           // PokeTrace's daily-updated market number wins when it exists —
           // but not blindly, and not when it came from eBay.
           //
@@ -315,14 +326,18 @@ export async function refreshStalePrices(
           if (ptMarket != null) {
             if (ptSource === "tcgplayer") {
               nextMarket = ptMarket;
+              via = "PokéTrace (TCGplayer)";
             } else if (nextMarket == null) {
               // Nothing to check it against. Small numbers are worth having
               // even unverified; a large one is a claim, and a wrong large
               // one is worse than an honest blank.
-              if (ptMarket <= EBAY_TRUST_CEILING) nextMarket = ptMarket;
-              else ptUnverified = true;
+              if (ptMarket <= EBAY_TRUST_CEILING) {
+                nextMarket = ptMarket;
+                via = "PokéTrace (eBay average)";
+              } else ptUnverified = true;
             } else if (ptMarket <= nextMarket * SWING_RATIO && ptMarket >= nextMarket / SWING_RATIO) {
               nextMarket = ptMarket;
+              via = "PokéTrace (eBay average, corroborated)";
             }
             // Else: the free source and eBay disagree wildly. Keep the free
             // source, which is a per-single price by construction.
@@ -373,6 +388,7 @@ export async function refreshStalePrices(
             });
             if (nextMarket == null && found.market != null) {
               nextMarket = found.market;
+              via = "paid tracker (product mapping)";
               summary.trackerPriced = (summary.trackerPriced ?? 0) + 1;
             }
             // The same credit already bought the artwork. A card with no
@@ -453,6 +469,7 @@ export async function refreshStalePrices(
               number: (card.number as string | null) ?? null,
               image: (card.image_small as string | null) ?? null,
               rarity: (card.rarity as string | null) ?? null,
+              via: ptUnverified ? "PokéTrace (eBay average, uncorroborated)" : via,
             });
             // Stamped as checked even though nothing was written: the card
             // now waits on the review queue, not the refresh rotation. The
