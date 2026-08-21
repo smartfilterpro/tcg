@@ -65,6 +65,10 @@ export interface PriceRefreshSummary {
   /** How many of the held rows THIS run added (the rest are carried from
    *  earlier runs, still waiting on a decision). */
   newlyHeld?: number;
+  /** Claims refused outright this run — structurally impossible numbers
+   *  (bulk-rarity ceiling, >100× jumps, identical-price smears) that would
+   *  only have wasted a reviewer's attention. */
+  discarded?: number;
   /** Set when the run failed partway — shown in the admin panel. */
   error?: string;
 }
@@ -459,7 +463,39 @@ export async function refreshStalePrices(
             proposed > BULK_RARITY_CEILING_USD &&
             recent &&
             BULK_RARITIES.has(((card.rarity as string | null) ?? "").trim().toLowerCase());
-          if ((ptUnverified || swung || implausible) && proposed != null) {
+          // DISCARDED, not debated. Two shapes of claim are wrong by
+          // construction and deserve no place in a human's review queue:
+          // a bulk-rarity card from a recent set priced like a chase card
+          // (the product-mapping smear that once wrote $706.96 onto a
+          // Shuppet), and a >100× jump on a card that already holds a real
+          // price. Neither is a market move; both are a feed mapping the
+          // wrong product. The card keeps its honest price, gets stamped so
+          // it rotates normally, and one log line says what was refused —
+          // if the movement is somehow real, it will come back from a
+          // corroborating source, not from the same absurd number.
+          const megaJump =
+            old != null &&
+            old > 0 &&
+            proposed != null &&
+            proposed > 50 &&
+            proposed / old > 100;
+          if (proposed != null && (implausible || megaJump)) {
+            summary.discarded = (summary.discarded ?? 0) + 1;
+            if ((summary.discarded ?? 0) <= 5) {
+              console.log(
+                `price refresh: discarded ${card.name} ` +
+                  `${old == null ? "(no price)" : `$${old}`} → $${proposed} — ` +
+                  `${implausible ? "bulk-rarity ceiling" : ">100× jump"}${via ? `, via ${via}` : ""}`
+              );
+            }
+            await admin
+              .from("cards")
+              .update({ price_updated_at: new Date().toISOString() })
+              .eq("id", card.id)
+              .then(() => {});
+            return;
+          }
+          if ((ptUnverified || swung) && proposed != null) {
             summary.suspicious.push({
               id: card.id as string,
               name: card.name as string,
@@ -505,6 +541,39 @@ export async function refreshStalePrices(
         }
       })
     );
+  }
+
+  // The smear signature, caught at intake. One product's price appearing on
+  // two different cards of the same set — identical to the cent, above
+  // pocket change — is a mapping error, never a market: real TCGplayer
+  // market averages don't collide like that. Migration 064 cleaned exactly
+  // this shape out of STORED data once; this stops it at the door instead.
+  // The cards were already stamped when their entries were held, so they
+  // rotate normally either way.
+  {
+    const byKey = new Map<string, number[]>();
+    summary.suspicious.forEach((s, i) => {
+      if (s.next >= 5) {
+        const k = `${(s.set ?? "").toLowerCase()}|${s.next.toFixed(2)}`;
+        const list = byKey.get(k);
+        if (list) list.push(i);
+        else byKey.set(k, [i]);
+      }
+    });
+    const drop = new Set<number>();
+    for (const idxs of byKey.values()) {
+      if (idxs.length >= 2) idxs.forEach((i) => drop.add(i));
+    }
+    if (drop.size > 0) {
+      const dropped = summary.suspicious.filter((_, i) => drop.has(i));
+      summary.suspicious = summary.suspicious.filter((_, i) => !drop.has(i));
+      summary.discarded = (summary.discarded ?? 0) + dropped.length;
+      console.log(
+        `price refresh: discarded ${dropped.length} identical-price proposals ` +
+          `(same set, same cent — one product mapped onto several cards): ` +
+          dropped.slice(0, 3).map((d) => `${d.name} $${d.next.toFixed(2)}`).join(", ")
+      );
+    }
   }
 
   if (pt) summary.pt = pt;
@@ -659,6 +728,7 @@ export async function lastPriceRefresh(): Promise<PriceRefreshSummary | null> {
       trackerPriced: value.trackerPriced ?? 0,
       trackerArt: value.trackerArt ?? 0,
       ...(value.newlyHeld != null ? { newlyHeld: value.newlyHeld } : {}),
+      ...(value.discarded != null ? { discarded: value.discarded } : {}),
       ...(value.error ? { error: value.error } : {}),
     };
   } catch {
@@ -728,6 +798,7 @@ export function startPriceRefreshLoop() {
       console.log(
         `price refresh: checked ${summary.checked}, updated ${summary.updated}, ` +
           `${summary.suspicious.length} held for review (${summary.newlyHeld ?? 0} new), ` +
+          `${summary.discarded ?? 0} impossible claims discarded, ` +
           `${summary.unpriced} without data` +
           (backlog > 0 ? ` (backlog was ${backlog} unpriced, running hourly)` : "") +
           (summary.error ? ` — FAILED: ${summary.error}` : "")
