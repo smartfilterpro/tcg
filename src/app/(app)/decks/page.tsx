@@ -19,17 +19,6 @@ import CardZoom from "@/components/CardZoom";
 
 type UpgradeSuggestion = DeckSuggestion;
 
-/** Asking price for one card, from /api/prices/listings. Mirrors
- *  ListingPrice in lib/ebayListings — kept structural rather than imported
- *  so the client bundle doesn't pull the server-side eBay module in. */
-interface EbayAsk {
-  low: number;
-  median: number;
-  count: number;
-  currency: string;
-  url: string;
-}
-
 /** A card in the manual builder's pick list: your collection aggregated by
  *  card name (finishes combined — a deck list doesn't care about holos). */
 interface OwnedCard {
@@ -866,34 +855,13 @@ function UpgradeList({
     0
   );
 
-  // Live eBay asking prices for the cards being recommended. An ask is the
-  // wrong number for "what is my card worth" and the right one for "what
-  // will this cost me", which is the only question this panel asks.
-  const [asks, setAsks] = useState<Record<string, EbayAsk | null>>({});
-  useEffect(() => {
-    if (suggestions.length === 0) return;
-    let live = true;
-    fetch("/api/prices/listings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cards: suggestions.slice(0, 12).map((u) => ({
-          name: u.name,
-          number: u.card?.number ?? null,
-          setName: u.card?.setName ?? null,
-        })),
-      }),
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (live && j?.prices) setAsks(j.prices);
-      })
-      // Silent: a missing price line is invisible, a broken buy-list is not.
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [suggestions]);
+  // Where a row's Buy goes. Newly built decks carry a server-built link
+  // (affiliate-wrapped once the program key is set); decks saved before
+  // that existed still deserve a destination, so they fall back to a plain
+  // TCGplayer search for the name.
+  const buyHref = (u: UpgradeSuggestion) =>
+    u.buyUrl ??
+    `https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(u.name)}`;
 
   const imageFor = (u: UpgradeSuggestion) =>
     u.card?.imageSmall ??
@@ -936,30 +904,22 @@ function UpgradeList({
             <div className="min-w-0 text-xs text-amber-900">
               <div className="font-semibold">
                 {u.quantity}× {u.name}
-                {u.card?.marketPrice != null && (
-                  <span className="ml-1 font-normal text-amber-700">
-                    (~${(u.card.marketPrice * u.quantity).toFixed(2)})
-                  </span>
-                )}
                 {u.card && (
                   <span className="ml-1 font-normal text-amber-600">· {u.card.setName}</span>
                 )}
               </div>
               <div className="mt-0.5 text-amber-800">{u.reason}</div>
-              {asks[u.name] && (
+              {/* The number and the door match: this is TCGplayer's market
+                  price, and the Buy button below goes to TCGplayer. Quoting
+                  one marketplace's price next to another marketplace's
+                  door was just confusing. */}
+              {u.card?.marketPrice != null && (
                 <div className="mt-1 text-amber-800">
-                  eBay: from{" "}
-                  <span className="font-semibold">${asks[u.name]!.low.toFixed(2)}</span>
-                  {asks[u.name]!.count >= 3 && (
-                    <> · typically ${asks[u.name]!.median.toFixed(2)}</>
-                  )}{" "}
-                  {/* Owner decision: show the market, don't send people to
-                      it. The count is context for the price, not a door. */}
-                  {asks[u.name]!.count} listed
-                  {/* Said once per card rather than once per panel: someone
-                      scanning a single row shouldn't have to find a footnote
-                      to know this is an ask, not a sale. */}
-                  <span className="text-amber-600"> (asking, incl. shipping)</span>
+                  TCGplayer market:{" "}
+                  <span className="font-semibold">${u.card.marketPrice.toFixed(2)}</span> each
+                  {u.quantity > 1 && (
+                    <> · ${(u.card.marketPrice * u.quantity).toFixed(2)} for {u.quantity}</>
+                  )}
                 </div>
               )}
               {(u.owners?.length ?? 0) > 0 && (
@@ -971,18 +931,16 @@ function UpgradeList({
                   </a>
                 </div>
               )}
-              {u.buyUrl && (
-                <a
-                  href={u.buyUrl}
-                  target="_blank"
-                  // "sponsored" is the rel search engines and the FTC expect
-                  // on a paid link; harmless while the links are plain.
-                  rel="noreferrer sponsored"
-                  className="mt-1 inline-block rounded bg-amber-600 px-2 py-0.5 font-semibold text-white hover:bg-amber-700"
-                >
-                  Buy on TCGplayer ↗
-                </a>
-              )}
+              <a
+                href={buyHref(u)}
+                target="_blank"
+                // "sponsored" is the rel search engines and the FTC expect
+                // on a paid link; harmless while the links are plain.
+                rel="noreferrer sponsored"
+                className="mt-1 inline-block rounded bg-amber-600 px-2 py-0.5 font-semibold text-white hover:bg-amber-700"
+              >
+                Buy on TCGplayer ↗
+              </a>
             </div>
           </li>
           );
