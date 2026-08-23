@@ -225,7 +225,24 @@ const POOL_ALL = `CARD POOL — DREAM DECK MODE:
   ground the deck in what actually wins, and if a TARGET ARCHETYPE list is
   given, use it as the skeleton — adapt it only where you can say why.`;
 
+const POOL_FAMILY = `CARD POOL — THE WHOLE HOUSEHOLD:
+- Use ONLY cards from the provided collection, which is the COMBINED
+  collection of the player's family group — every member's cards with the
+  quantities added together. Respect each card's qty; it is the household
+  total.
+- The deck may therefore lean on cards the player personally doesn't hold.
+  That is the point — the household plays as one team, and moving a card
+  between family members is one tap in this app. When the deck's core
+  depends on such cards, say so in one line of the strategy so nobody is
+  surprised at the kitchen table.
+- EXCEPTION — basic energy: assume unlimited copies of all basic energy
+  (Grass, Fire, Water, Lightning, Psychic, Fighting, Darkness, Metal, plus
+  Fairy for older formats). Special energy cards are NOT exempt — those
+  must be owned by the household.`;
+
 const LIMITS_COLLECTION = `- Never include more copies than the player owns (except basic energy).`;
+const LIMITS_FAMILY = `- Never include more copies than the household owns in total (except basic
+  energy).`;
 const LIMITS_ALL = `- Copy limits come from the game rules alone — owning fewer copies is never
   a reason to cut a card in this mode.`;
 
@@ -248,16 +265,24 @@ Return an EMPTY array. In dream-deck mode the app computes the exact buy
 list — every card in your deck the player doesn't own, with real prices —
 so anything you put here would be discarded.`;
 
-function systemPrompt(pool: "collection" | "all"): string {
-  return SYSTEM_TEMPLATE.replace(
-    "POOL_RULES_GO_HERE",
-    pool === "all" ? POOL_ALL : POOL_COLLECTION
-  )
-    .replace("POOL_LIMITS_GO_HERE", pool === "all" ? LIMITS_ALL : LIMITS_COLLECTION)
-    .replace(
-      "UPGRADES_SECTION_GOES_HERE",
-      pool === "all" ? UPGRADES_ALL : UPGRADES_COLLECTION
-    );
+const UPGRADES_FAMILY = UPGRADES_COLLECTION.replace(
+  /the player does NOT own/g,
+  "the HOUSEHOLD does not own"
+).replace(
+  "The collection table is the COMPLETE truth of what the player owns",
+  "The collection table is the COMPLETE truth of what the whole household owns"
+);
+
+function systemPrompt(pool: "collection" | "family" | "all"): string {
+  const rules =
+    pool === "all" ? POOL_ALL : pool === "family" ? POOL_FAMILY : POOL_COLLECTION;
+  const limits =
+    pool === "all" ? LIMITS_ALL : pool === "family" ? LIMITS_FAMILY : LIMITS_COLLECTION;
+  const upgrades =
+    pool === "all" ? UPGRADES_ALL : pool === "family" ? UPGRADES_FAMILY : UPGRADES_COLLECTION;
+  return SYSTEM_TEMPLATE.replace("POOL_RULES_GO_HERE", rules)
+    .replace("POOL_LIMITS_GO_HERE", limits)
+    .replace("UPGRADES_SECTION_GOES_HERE", upgrades);
 }
 
 const BASIC_ENERGY_RE =
@@ -274,7 +299,8 @@ export async function POST(req: Request) {
       archetype?: string;
     };
     const fmt = format === "standard" || format === "expanded" ? format : null;
-    const poolMode: "collection" | "all" = pool === "all" ? "all" : "collection";
+    const poolMode: "collection" | "family" | "all" =
+      pool === "all" ? "all" : pool === "family" ? "family" : "collection";
     const targetArchetype =
       typeof archetype === "string" && archetype.trim().length <= 80
         ? archetype.trim() || null
@@ -286,14 +312,53 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: budget.message }, { status: 429 });
     }
 
+    // Whose binder feeds the pool. "family" is the whole household's cards
+    // with quantities combined — the family plays as one team, and moving a
+    // card between members is one tap in this app, so "what can WE field"
+    // is a question the builder should answer. Membership is resolved with
+    // the service role because family_members is deliberately unreadable by
+    // clients; someone who picked family without being in one (or alone in
+    // one) quietly builds from their own cards, and the strategy says so.
+    let poolUserIds = [user.id];
+    let familyFallback = false;
+    if (poolMode === "family") {
+      try {
+        const adminEarly = createAdminClient();
+        const { data: me } = await adminEarly
+          .from("family_members")
+          .select("group_id")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (me) {
+          const { data: members } = await adminEarly
+            .from("family_members")
+            .select("user_id")
+            .eq("group_id", me.group_id);
+          const ids = [...new Set((members ?? []).map((m) => m.user_id as string))];
+          if (ids.length > 1) poolUserIds = ids;
+        }
+        familyFallback = poolUserIds.length <= 1;
+      } catch {
+        familyFallback = true;
+      }
+    }
+    // What the PROMPT claims must match what the pool actually is — telling
+    // the model "this is the household's combined collection" over one
+    // person's cards would have it narrate borrowing that can't happen.
+    const effectivePool: "collection" | "family" | "all" =
+      poolMode === "family" && familyFallback ? "collection" : poolMode;
+
     // Gather everything the job needs BEFORE returning (request-scoped
     // resources like cookies aren't reliable in the detached task).
     const [{ data: items, error }, { data: playProfile }, { data: existingDecks }] =
       await Promise.all([
       // Paged: Supabase caps responses at 1000 rows, which silently hid the
-      // rest of a big collection from the builder.
+      // rest of a big collection from the builder. The service role reads
+      // the family pool: RLS family read policies exist, but the pool
+      // decision was made above, explicitly, and this route must not depend
+      // on which policies happen to be migrated.
       fetchAllRows(() =>
-        supabase
+        (poolUserIds.length > 1 ? createAdminClient() : supabase)
           .from("collection_items")
           // Exactly what the builder reads below — cards(*) also dragged
           // images, price maps and compiled battle effects for every card
@@ -301,7 +366,7 @@ export async function POST(req: Request) {
           .select(
             "quantity, card:cards(id, name, supertype, subtypes, types, hp, rarity, set_name, battle_data, text_attempts, text_failed_at)"
           )
-          .eq("user_id", user.id)
+          .in("user_id", poolUserIds)
           .order("created_at", { ascending: false })
           .order("id")
       ),
@@ -609,7 +674,11 @@ export async function POST(req: Request) {
           fmt
             ? `FORMAT: ${fmt === "standard" ? "Standard" : "Expanded"} — ${excluded} ineligible cards were already removed from the list below. Entries without legality data remain: exclude any YOU know are not legal in this format, and only suggest format-legal upgrade cards.`
             : null,
-          `PLAYER'S COLLECTION — ${leanCollection.length} unique cards${
+          `${
+            effectivePool === "family"
+              ? "THE HOUSEHOLD'S COMBINED COLLECTION"
+              : "PLAYER'S COLLECTION"
+          } — ${leanCollection.length} unique cards${
             droppedForSize > 0
               ? ` (${droppedForSize} more were too many to list — say so at the end of the strategy)`
               : ""
@@ -686,7 +755,9 @@ export async function POST(req: Request) {
             prompt?.trim() ||
             (poolMode === "all"
               ? "Build the strongest deck you can — any cards, money no object."
-              : "Build me the best deck you can from my collection.")
+              : effectivePool === "family"
+                ? "Build me the best deck you can from our family's combined cards."
+                : "Build me the best deck you can from my collection.")
           }`,
         ]
           .filter(Boolean)
@@ -705,7 +776,7 @@ export async function POST(req: Request) {
           system: [
             {
               type: "text" as const,
-              text: systemPrompt(poolMode),
+              text: systemPrompt(effectivePool),
               cache_control: { type: "ephemeral" as const },
             },
           ],
@@ -813,7 +884,7 @@ export async function POST(req: Request) {
             const revisionStream = client.messages.stream({
               model: MODEL,
               max_tokens: 32000,
-              system: systemPrompt(poolMode),
+              system: systemPrompt(effectivePool),
               output_config: {
                 format: {
                   type: "json_schema",
@@ -957,6 +1028,11 @@ export async function POST(req: Request) {
             ? `\n⚠️ Remaining flags: ${analysis.issues.join(" ")}`
             : ""
         }`;
+        if (poolMode === "family" && familyFallback) {
+          deck.strategy +=
+            `\n\nℹ️ "Family cards" was selected, but this account isn't in a family group ` +
+            `with other members — the deck was built from your own collection.`;
+        }
 
         // Verify the wishlist against BOTH ground truths the model can get
         // wrong: what the player owns, and what the built deck already runs.

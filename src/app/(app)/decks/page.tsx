@@ -1049,9 +1049,10 @@ export default function DecksPage() {
   const [styleSaved, setStyleSaved] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [format, setFormat] = useState("any");
-  // "collection" builds from the binder; "all" is the dream deck — any real
-  // card, and the result carries a computed buy list for the gap.
-  const [poolMode, setPoolMode] = useState<"collection" | "all">("collection");
+  // "collection" builds from the binder; "family" from the whole
+  // household's combined cards; "all" is the dream deck — any real card,
+  // with a computed buy list for the gap.
+  const [poolMode, setPoolMode] = useState<"collection" | "family" | "all">("collection");
   // Set when arriving from the Meta page's "Build this deck" button — the
   // server grounds the build in that archetype's tournament list.
   const [archetypeSeed, setArchetypeSeed] = useState<string | null>(null);
@@ -1430,14 +1431,16 @@ export default function DecksPage() {
           <div className="flex shrink-0 gap-2">
             <select
               className="input w-auto text-sm"
-              title="Card pool — your binder, or every card ever printed (with a buy list)"
+              title="Card pool — your binder, your whole family's cards, or every card ever printed (with a buy list)"
               value={poolMode}
               onChange={(e) => {
-                setPoolMode(e.target.value === "all" ? "all" : "collection");
-                if (e.target.value !== "all") setArchetypeSeed(null);
+                const v = e.target.value;
+                setPoolMode(v === "all" ? "all" : v === "family" ? "family" : "collection");
+                if (v !== "all") setArchetypeSeed(null);
               }}
             >
               <option value="collection">🎒 My collection</option>
+              <option value="family">👨‍👩‍👧 Family cards</option>
               <option value="all">🌟 Any cards</option>
             </select>
             <select
@@ -1468,6 +1471,12 @@ export default function DecksPage() {
               🌟 Dream deck: builds with any real card, grounded in current tournament results —
               the result includes a priced buy list for everything you don&apos;t own
               {archetypeSeed ? `, aimed at ${archetypeSeed}` : ""}.{" "}
+            </>
+          )}
+          {poolMode === "family" && (
+            <>
+              👨‍👩‍👧 Builds from your whole family&apos;s combined cards — the deck may lean on
+              another member&apos;s copies, and the strategy says when it does.{" "}
             </>
           )}
           {FORMAT_NOTES[format] ?? ""}
