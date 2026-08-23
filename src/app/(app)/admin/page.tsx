@@ -58,6 +58,7 @@ interface Analytics {
       number?: string | null;
       image?: string | null;
       rarity?: string | null;
+      via?: string | null;
     }>;
     pt?: {
       matched: number;
@@ -1920,6 +1921,7 @@ function PriceRefreshPanel({
       number?: string | null;
       image?: string | null;
       rarity?: string | null;
+      via?: string | null;
     }>;
     pt?: {
       matched: number;
@@ -1957,6 +1959,32 @@ function PriceRefreshPanel({
       setResult((r) => {
         const base = r ?? info;
         return base ? { ...base, suspicious: json.suspicious ?? [] } : base;
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Review failed");
+    }
+    setHoldBusy(null);
+  }
+
+  /** Keep every current price and empty the queue in one action — for the
+   *  day an upstream mapping smears one product across a set's commons. */
+  async function keepAll() {
+    const count = current?.suspicious?.length ?? 0;
+    if (!confirm(`Keep the CURRENT price on all ${count} held cards and clear the queue?`))
+      return;
+    setHoldBusy("__all__");
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/price-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "keep_all" }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Review failed");
+      setResult((r) => {
+        const base = r ?? info;
+        return base ? { ...base, suspicious: [] } : base;
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Review failed");
@@ -2051,7 +2079,16 @@ function PriceRefreshPanel({
       )}
       {(current?.suspicious?.length ?? 0) > 0 && (
         <div className="rounded-lg bg-yellow-50 p-2.5 text-xs text-yellow-800">
-          <b>Held for review (price jumped &gt;5×, not applied):</b>
+          <div className="flex items-start justify-between gap-2">
+            <b>Held for review (price jumped &gt;5×, not applied):</b>
+            <button
+              className="btn-secondary shrink-0 px-2.5 py-0.5 text-[11px]"
+              disabled={holdBusy != null}
+              onClick={keepAll}
+            >
+              Keep all {current!.suspicious.length}
+            </button>
+          </div>
           <span className="block text-yellow-700">
             Apply takes the feed&apos;s new price. Keep stands by the current one and stops
             it re-flagging tomorrow — if the feed still disagrees weeks from now, it comes
@@ -2100,6 +2137,9 @@ function PriceRefreshPanel({
                       </span>
                     </>
                   )}
+                  {/* Who said so — the fastest tell for a bad batch: one
+                      feed's name on every absurd number. */}
+                  {s.via && <span className="opacity-60"> · via {s.via}</span>}
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   <button

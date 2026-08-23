@@ -13,8 +13,14 @@ export async function POST(req: Request) {
   try {
     await requireAdmin();
     const { cardId, action } = (await req.json()) as { cardId?: string; action?: string };
-    if (!cardId || (action !== "apply" && action !== "keep")) {
-      return NextResponse.json({ error: "Need cardId and action: apply | keep." }, { status: 400 });
+    if (action !== "apply" && action !== "keep" && action !== "keep_all") {
+      return NextResponse.json(
+        { error: "Need action: apply | keep | keep_all." },
+        { status: 400 }
+      );
+    }
+    if (action !== "keep_all" && !cardId) {
+      return NextResponse.json({ error: "Need a cardId." }, { status: 400 });
     }
     const admin = createAdminClient();
     const { data: state } = await admin
@@ -26,6 +32,28 @@ export async function POST(req: Request) {
       suspicious?: Array<{ id: string; name: string; old: number; next: number }>;
     } | null;
     const held = summary?.suspicious ?? [];
+
+    // The whole queue at once, keeping every current price. This exists for
+    // the day an upstream mapping smears one product's price across a
+    // set's commons and two hundred obviously-wrong proposals pile up: each
+    // card is stamped as checked (so it rejoins the normal rotation instead
+    // of re-flagging), the queue empties, and if a feed still insists weeks
+    // from now, the claim comes back on its own.
+    if (action === "keep_all") {
+      const stamp = new Date().toISOString();
+      for (let i = 0; i < held.length; i += 100) {
+        await admin
+          .from("cards")
+          .update({ price_updated_at: stamp })
+          .in("id", held.slice(i, i + 100).map((s) => s.id));
+      }
+      await admin
+        .from("app_state")
+        .update({ value: { ...(summary ?? {}), suspicious: [] } })
+        .eq("key", "price_refresh");
+      return NextResponse.json({ ok: true, kept: held.length, suspicious: [] });
+    }
+
     const entry = held.find((s) => s.id === cardId);
     if (!entry) {
       return NextResponse.json({ error: "That card isn't held anymore." }, { status: 404 });
