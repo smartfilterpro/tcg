@@ -3597,6 +3597,17 @@ function CardEffectsPanel() {
         </p>
       )}
       <div className="flex flex-wrap gap-2">
+        {/* The catalogue's battle knowledge as a reviewable file: gaps =
+            only the cards battles can't run automatically yet (missing
+            text, failed reads, uncompiled, low-confidence compiles — each
+            with its printed text and the compiler's note), all = the whole
+            catalogue including trusted compiles. Summary line at the end. */}
+        <a className="btn-secondary text-sm" href="/api/admin/export/cards?mode=gaps" download>
+          ⬇️ Export gaps
+        </a>
+        <a className="btn-secondary text-sm" href="/api/admin/export/cards?mode=all" download>
+          ⬇️ Export all
+        </a>
         {running ? (
           <button
             className="btn-secondary text-sm"
