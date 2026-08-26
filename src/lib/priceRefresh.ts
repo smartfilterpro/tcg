@@ -111,8 +111,14 @@ const BULK_RARITY_MAX_AGE_YEARS = 3;
  *  the cent — $706.96 — which is a card wearing another card's product, and
  *  no amount of preferring TCGplayer over eBay catches that. Whatever
  *  upstream mapped them together, a Common at $706 is worth a human's glance
- *  before it becomes what someone's collection is "worth". */
-const BULK_RARITY_CEILING_USD = 50;
+ *  before it becomes what someone's collection is "worth".
+ *
+ *  Lowered from 50 after a $47.96 Wailmer common ducked under it — and
+ *  under migration 063's identical bar — and sat in a collection total for
+ *  weeks. A modern common genuinely above $25 is rarer than the mapping
+ *  errors this catches, and the cost of catching a real one is a review,
+ *  not a loss. */
+const BULK_RARITY_CEILING_USD = 25;
 
 /** How long between runs once every owned card has a price. Prices move
  *  slowly; a daily pass is plenty for maintenance. */
