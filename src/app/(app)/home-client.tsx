@@ -697,6 +697,7 @@ export default function CollectionPage({
             onClose={closeAdd}
             onPick={addCard}
             toast={toast}
+            allowPhoto={isAdmin}
             headerExtra={
               <select
                 className="input w-auto shrink-0"
@@ -949,6 +950,7 @@ export default function CollectionPage({
           onClose={closeAdd}
           onPick={addCard}
           toast={toast}
+          allowPhoto={isAdmin}
         />
       )}
 
@@ -1302,6 +1304,7 @@ export default function CollectionPage({
           candidates={[]}
           onClose={() => setChangingCard(false)}
           onPick={(card) => changeCard(selected, card)}
+          allowPhoto={isAdmin}
         />
       )}
 

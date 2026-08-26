@@ -45,7 +45,8 @@ export async function GET() {
  *  Upserts the shared card cache, then increments quantities per (card, finish). */
 export async function POST(req: Request) {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
+    const isAdmin = profile?.role === "admin";
     const supabase = await createClient();
     const body = (await req.json()) as {
       items?: Array<{ card: CardSummary; quantity: number; variant?: string }>;
@@ -85,9 +86,17 @@ export async function POST(req: Request) {
     const storagePrefix = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/card-photos/`;
     const candidateRows: Array<{ card_id: string; url: string; uploaded_by: string }> = [];
     for (const row of cardRows) {
-      // A user-attached photo (our storage bucket) is always kept as a
-      // candidate for admin review, whatever ends up displayed.
-      if (row.image_small?.startsWith(storagePrefix)) {
+      // Uploaded photos (our storage bucket) become the card's SHARED artwork,
+      // which makes them an admin-only input. The client no longer offers the
+      // upload to members, but the row shape still carries the URL field, so
+      // strip it here too — a member save must never set a card's image to a
+      // member photo, whichever client sent it.
+      if (!isAdmin) {
+        if (row.image_small?.startsWith(storagePrefix)) row.image_small = null;
+        if (row.image_large?.startsWith(storagePrefix)) row.image_large = row.image_small;
+      } else if (row.image_small?.startsWith(storagePrefix)) {
+        // An admin-attached photo is always kept as a candidate for review,
+        // whatever ends up displayed.
         candidateRows.push({ card_id: row.id, url: row.image_small, uploaded_by: user.id });
       }
       const existing = existingById.get(row.id);

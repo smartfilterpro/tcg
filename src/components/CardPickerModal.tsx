@@ -14,10 +14,12 @@ const ENERGY_TYPES = [
  *  promos, etc. — the database lags months behind new releases). */
 function ManualCardForm({
   initialName,
+  allowPhoto,
   onSubmit,
   onCancel,
 }: {
   initialName: string;
+  allowPhoto: boolean;
   onSubmit: (card: CardSummary) => void;
   onCancel: () => void;
 }) {
@@ -37,7 +39,7 @@ function ManualCardForm({
     if (!name.trim() || saving) return;
     setSaving(true);
     let photoUrl: string | null = null;
-    if (photo) photoUrl = await uploadCardPhoto(photo);
+    if (photo && allowPhoto) photoUrl = await uploadCardPhoto(photo);
     const parsedPrice = parseFloat(price);
     setSaving(false);
     onSubmit({
@@ -116,6 +118,7 @@ function ManualCardForm({
           onChange={(e) => setPrice(e.target.value)}
         />
       </div>
+      {allowPhoto && (
       <div className="flex items-center gap-2">
         <label className="btn-secondary cursor-pointer text-sm">
           {photo ? "📷 Change photo" : "📷 Photo of your card (optional)"}
@@ -136,6 +139,7 @@ function ManualCardForm({
           <img src={photoPreview} alt="card photo" className="h-14 rounded shadow-sm" />
         )}
       </div>
+      )}
       <div className="flex gap-2">
         <button type="submit" className="btn-primary text-sm" disabled={saving}>
           {saving ? "Saving…" : "Add this card"}
@@ -158,6 +162,7 @@ export default function CardPickerModal({
   onClose,
   toast,
   headerExtra,
+  allowPhoto = false,
 }: {
   initialQuery: string;
   candidates: CardSummary[];
@@ -165,6 +170,9 @@ export default function CardPickerModal({
   onClose: () => void;
   toast?: string | null;
   headerExtra?: React.ReactNode;
+  /** Card photos become the card's shared artwork, so uploading them is an
+   *  admin action — the server refuses them from anyone else regardless. */
+  allowPhoto?: boolean;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<CardSummary[]>(candidates);
@@ -287,6 +295,7 @@ export default function CardPickerModal({
         {manualMode ? (
           <ManualCardForm
             initialName={query}
+            allowPhoto={allowPhoto}
             onSubmit={(card) => {
               onPick(card);
               setManualMode(false);
