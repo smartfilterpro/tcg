@@ -16,5 +16,7 @@ export async function register() {
     startCardImportLoop();
     const { startMetaSyncLoop } = await import("@/lib/metaSync");
     startMetaSyncLoop();
+    const { startMtgPriceLoop } = await import("@/lib/scryfall");
+    startMtgPriceLoop();
   }
 }

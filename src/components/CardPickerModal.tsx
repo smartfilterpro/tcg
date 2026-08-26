@@ -163,6 +163,7 @@ export default function CardPickerModal({
   toast,
   headerExtra,
   allowPhoto = false,
+  game = "pokemon",
 }: {
   initialQuery: string;
   candidates: CardSummary[];
@@ -173,6 +174,11 @@ export default function CardPickerModal({
   /** Card photos become the card's shared artwork, so uploading them is an
    *  admin action — the server refuses them from anyone else regardless. */
   allowPhoto?: boolean;
+  /** Which game to search. Magic mode searches Scryfall (which has every
+   *  printing within days of preview season), so the Pokémon escape
+   *  hatches — the paid deep search and the manual-add form — don't render:
+   *  there is nothing they could find that the ordinary search can't. */
+  game?: "pokemon" | "mtg";
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<CardSummary[]>(candidates);
@@ -203,7 +209,9 @@ export default function CardPickerModal({
     setLoading(true);
     try {
       const res = await fetch(
-        `/api/cards/search?q=${encodeURIComponent(term)}${everySource ? "&deep=1" : ""}`
+        `/api/cards/search?q=${encodeURIComponent(term)}${everySource ? "&deep=1" : ""}${
+          game === "mtg" ? "&game=mtg" : ""
+        }`
       );
       const json = await res.json();
       if (res.ok) {
@@ -263,7 +271,11 @@ export default function CardPickerModal({
             autoFocus
             type="search"
             className="input w-full sm:w-auto sm:flex-1"
-            placeholder='🔍 Name, number, or set: — e.g. "Charizard", "101/190", "set:Trick or Trade"'
+            placeholder={
+              game === "mtg"
+                ? '🔍 Card name — e.g. "Lightning Bolt", or Scryfall syntax like "t:goblin set:mh3"'
+                : '🔍 Name, number, or set: — e.g. "Charizard", "101/190", "set:Trick or Trade"'
+            }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -277,11 +289,13 @@ export default function CardPickerModal({
         {/* Said out loud, because nobody guesses a prefix. Entering a bundle
             or a blister is the case this exists for: list the set once, then
             tap down it, instead of typing a name per card. */}
+        {game !== "mtg" && (
         <p className="-mt-1 mb-2 text-[11px] leading-snug text-brand-ink4">
           Tip: type <code className="font-mono">set:</code> and the set&apos;s name to list the
           whole set — <code className="font-mono">set:Trick or Trade BOOster Bundle 2024</code> —
           or put a card name in front of it to narrow to one card in that set.
         </p>
+        )}
         {toast && (
           <div className="mb-2 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">
             {toast}
@@ -337,6 +351,7 @@ export default function CardPickerModal({
             </p>
           )}
         </div>
+        {game !== "mtg" && (
         <div className="mt-3 space-y-1 border-t border-slate-100 pt-2 text-center">
           {/* The escalation, offered before the giving-up option.
               An ordinary search stops once our catalogue has answered, which
@@ -365,6 +380,7 @@ export default function CardPickerModal({
             </button>
           </div>
         </div>
+        )}
           </>
         )}
       </div>

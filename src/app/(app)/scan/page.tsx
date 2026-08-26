@@ -654,24 +654,31 @@ export default function ScanPage() {
                               : ""}
                           </option>
                         ))}
-                        <optgroup label="Stamped versions">
-                          {STAMP_VARIANTS.map((v) => (
-                            <option key={v} value={v}>
-                              {variantLabel(v)}
-                            </option>
-                          ))}
-                        </optgroup>
-                        {/* Ball-pattern reverse holos. The databases hold one
-                            entry for the whole family because the collector
-                            number is identical, so they can only be recorded
-                            here — by the one person who can see which it is. */}
-                        <optgroup label="Ball-pattern reverse holo">
-                          {PATTERN_VARIANTS.map((v) => (
-                            <option key={v} value={v}>
-                              {variantLabel(v)}
-                            </option>
-                          ))}
-                        </optgroup>
+                        {/* Stamps and ball patterns are Pokémon physical
+                            realities — a Magic row gets only its real
+                            finishes (normal / foil / etched). */}
+                        {row.card.game !== "mtg" && (
+                          <>
+                            <optgroup label="Stamped versions">
+                              {STAMP_VARIANTS.map((v) => (
+                                <option key={v} value={v}>
+                                  {variantLabel(v)}
+                                </option>
+                              ))}
+                            </optgroup>
+                            {/* Ball-pattern reverse holos. The databases hold one
+                                entry for the whole family because the collector
+                                number is identical, so they can only be recorded
+                                here — by the one person who can see which it is. */}
+                            <optgroup label="Ball-pattern reverse holo">
+                              {PATTERN_VARIANTS.map((v) => (
+                                <option key={v} value={v}>
+                                  {variantLabel(v)}
+                                </option>
+                              ))}
+                            </optgroup>
+                          </>
+                        )}
                       </select>
                     )}
                     {creditState.admin && row.card && !row.card.imageSmall && (
@@ -762,6 +769,7 @@ export default function ScanPage() {
           initialQuery={pickerRow.detected.name}
           candidates={pickerRow.candidates}
           allowPhoto={creditState.admin}
+          game={(pickerRow.card?.game ?? pickerRow.detected.game) === "mtg" ? "mtg" : "pokemon"}
           onClose={() => setPickerRow(null)}
           onPick={(card) => {
             const variant = defaultVariantFor(card, pickerRow.detected.rarityHint);

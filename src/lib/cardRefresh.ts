@@ -98,6 +98,51 @@ export async function refreshCard(
   }
 
   const id = card.id as string;
+
+  // Magic cards refresh from their one source and skip the whole Pokémon
+  // ladder below — none of those databases has ever heard of them.
+  if (id.startsWith("scry-")) {
+    const { scryToSummary } = await import("@/lib/scryfall");
+    try {
+      const res = await fetch(`https://api.scryfall.com/cards/${id.slice("scry-".length)}`, {
+        headers: { Accept: "application/json", "User-Agent": "TrainerDeck/1.0" },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) throw new Error(`Scryfall ${res.status}`);
+      const fresh = scryToSummary((await res.json()) as Parameters<typeof scryToSummary>[0]);
+      const mtgPatch: Record<string, unknown> = {
+        market_price: fresh.marketPrice,
+        prices: fresh.prices,
+        price_updated_at: new Date().toISOString(),
+      };
+      if (!card.image_small && fresh.imageSmall) {
+        mtgPatch.image_small = fresh.imageSmall;
+        mtgPatch.image_large = fresh.imageLarge;
+      }
+      const { error: writeErr } = await admin.from("cards").update(mtgPatch).eq("id", id);
+      if (writeErr) throw writeErr;
+      return {
+        ok: true,
+        priceFound: fresh.marketPrice != null,
+        imageFound: !!(card.image_small || fresh.imageSmall),
+        message:
+          fresh.marketPrice != null
+            ? "Price updated from Scryfall."
+            : "Scryfall has no USD price for this printing yet.",
+        card: { ...card, ...mtgPatch },
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        priceFound: hadPrice,
+        imageFound: !!card.image_small,
+        message: "Couldn't reach Scryfall — try again in a minute.",
+        detail: err instanceof Error ? err.message : String(err),
+        card,
+      };
+    }
+  }
+
   const patch: Record<string, unknown> = { price_updated_at: new Date().toISOString() };
   let tcgPlayerId: string | null = null;
 

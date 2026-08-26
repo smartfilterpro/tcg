@@ -198,7 +198,11 @@ export async function refreshStalePrices(
     if (cardsErr) throw cardsErr;
     cardChunks.push(chunk ?? []);
   }
-  const cards = cardChunks.flat();
+  // Magic cards never enter this refresh: their one price source is
+  // Scryfall (see lib/scryfall.ts), and every stage below — the free
+  // Pokémon databases, the paid tracker, the corroboration guards — is
+  // built around Pokémon sources that know nothing about them.
+  const cards = cardChunks.flat().filter((c) => (c as { game?: string }).game !== "mtg");
 
   // Cards with NO price lead, then stalest first.
   //

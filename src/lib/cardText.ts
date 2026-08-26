@@ -364,6 +364,14 @@ export async function readCardTextOnce(
    *  is otherwise locked out for a week after the bug is gone. */
   opts?: { force?: boolean; report?: ReadReport }
 ): Promise<CardBattleData | null> {
+  // Magic cards are never read off their pictures: Scryfall publishes the
+  // oracle text outright, and this reader extracts Pokémon-shaped data a
+  // Magic card doesn't have. Wiring oracle text in is deck-building work
+  // (phase 2), not a paid vision call.
+  if (card.id.startsWith("scry-")) {
+    opts?.report?.("Magic cards get their text from Scryfall, not from reading the picture");
+    return null;
+  }
   const art = card.image_large ?? card.image_small;
   if (!art) {
     opts?.report?.("this card has no picture stored, so there is nothing to read");
@@ -453,6 +461,8 @@ export async function ensureCardText(
   if (card.battle_data && !opts?.force) return card.battle_data as CardBattleData;
 
   const id = card.id;
+  // Magic cards: no free-database ladder, no vision read — see above.
+  if (id.startsWith("scry-")) return null;
   if (id.startsWith("custom-")) {
     // A photo-scanned card has no database entry anywhere; its picture is
     // the only source there has ever been.

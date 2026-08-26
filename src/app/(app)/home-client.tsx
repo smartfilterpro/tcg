@@ -91,7 +91,10 @@ export default function CollectionPage({
   // Cards and sealed product are different things with different rules, so
   // they get different tabs rather than one blended list. Sealed lives in
   // its own tables and never reaches anything card-shaped.
-  const [tab, setTab] = useState<"cards" | "sealed">("cards");
+  // "cards" is the Pokémon tab (its historical name — half the app links to
+  // it); "mtg" is Magic: The Gathering. One shared collection underneath,
+  // split by the game column, so a mixed bulk scan lands cards on both tabs.
+  const [tab, setTab] = useState<"cards" | "mtg" | "sealed">("cards");
   // What the sealed side is worth, so the Cards tab can answer "what is the
   // whole collection worth?" without making anyone add two numbers up.
   const [sealedValue, setSealedValue] = useState<number | null>(null);
@@ -267,6 +270,22 @@ export default function CollectionPage({
     };
   }, []);
 
+  /** Which game the open tab shows. Sealed keeps the game of "cards" so
+   *  the value chips it references stay consistent. */
+  const activeGame: "pokemon" | "mtg" = tab === "mtg" ? "mtg" : "pokemon";
+
+  /** The active game's slice of the collection — every list, facet and
+   *  total below reads from this, so the two tabs never bleed into each
+   *  other's counts. Absent game means Pokémon (rows predating the second
+   *  game, and databases the migration hasn't reached). */
+  const gameItems = useMemo(
+    () =>
+      (items ?? []).filter(
+        (i) => i.card && ((i.card.game ?? "pokemon") === activeGame)
+      ),
+    [items, activeGame]
+  );
+
   const facets = useMemo(() => {
     // Keyed by set NAME, not id: the same set can exist under two ids when
     // cards came from different databases (pokemontcg.io vs TCGdex), which
@@ -276,7 +295,7 @@ export default function CollectionPage({
     const rarities = new Set<string>();
     const supertypes = new Set<string>();
     const variants = new Set<string>();
-    for (const item of items ?? []) {
+    for (const item of gameItems) {
       const c = item.card;
       if (!c) continue;
       if (c.set_name) sets.add(c.set_name);
@@ -296,10 +315,10 @@ export default function CollectionPage({
       supertypes: [...supertypes].sort(),
       variants: [...variants].sort(),
     };
-  }, [items]);
+  }, [gameItems]);
 
   const filtered = useMemo(() => {
-    let list = (items ?? []).filter((i) => i.card);
+    let list = gameItems;
     // Punctuation/accent/space-blind matching — OCR'd or imported names can
     // carry odd characters that a strict substring match misses.
     const q = search.trim();
@@ -342,7 +361,7 @@ export default function CollectionPage({
         break;
     }
     return list;
-  }, [items, search, typeFilter, setFilter, rarityFilter, supertypeFilter, variantFilter, unpricedOnly, sort]);
+  }, [gameItems, search, typeFilter, setFilter, rarityFilter, supertypeFilter, variantFilter, unpricedOnly, sort]);
 
   /** One tile per card, not per finish.
    *
@@ -398,7 +417,7 @@ export default function CollectionPage({
   }, [items, selected]);
 
   const totals = useMemo(() => {
-    const all = (items ?? []).filter((i) => i.card);
+    const all = gameItems;
     return {
       cards: all.reduce((s, i) => s + i.quantity, 0),
       unique: all.length,
@@ -408,7 +427,7 @@ export default function CollectionPage({
       // the one person who knows what their cards are worth.
       unpriced: all.filter((i) => itemPrice(i) == null).reduce((s, i) => s + i.quantity, 0),
     };
-  }, [items]);
+  }, [gameItems]);
 
   async function updateQuantity(item: CollectionItem, quantity: number) {
     const res = await fetch(`/api/collection/${item.id}`, {
@@ -626,17 +645,30 @@ export default function CollectionPage({
   // tab would show YOUR boxes under someone else's name.
   const tabs = (
     <div className="mb-4 flex gap-1 border-b border-slate-200">
-      {(readOnly ? (["cards"] as const) : (["cards", "sealed"] as const)).map((t) => (
+      {(readOnly ? (["cards", "mtg"] as const) : (["cards", "mtg", "sealed"] as const)).map((t) => (
         <button
           key={t}
-          onClick={() => setTab(t)}
+          onClick={() => {
+            // The two games share no sets, types or rarities, so a filter
+            // carried across the switch guarantees an empty grid.
+            if (t !== tab && t !== "sealed") {
+              setSetFilter("");
+              setTypeFilter("");
+              setRarityFilter("");
+              setSupertypeFilter("");
+              setVariantFilter("");
+              setUnpricedOnly(false);
+              setAddVariant("auto");
+            }
+            setTab(t);
+          }}
           className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold capitalize ${
             tab === t
               ? "border-brand-accent text-brand-accent"
               : "border-transparent text-slate-400 hover:text-slate-600"
           }`}
         >
-          {t === "cards" ? "Cards" : "Sealed product"}
+          {t === "cards" ? "Pokémon" : t === "mtg" ? "Magic" : "Sealed product"}
         </button>
       ))}
     </div>
@@ -698,6 +730,7 @@ export default function CollectionPage({
             onPick={addCard}
             toast={toast}
             allowPhoto={isAdmin}
+            game={activeGame}
             headerExtra={
               <select
                 className="input w-auto shrink-0"
@@ -707,25 +740,34 @@ export default function CollectionPage({
               >
                 <option value="auto">Finish: Auto</option>
                 <option value="normal">Normal</option>
-                <option value="holofoil">Holo</option>
-                <option value="reverseHolofoil">Reverse Holo</option>
-                <optgroup label="Stamped versions">
-                  <option value="pcStamp">Pokémon Center Stamp</option>
-                  <option value="prereleaseStamp">Prerelease Stamp</option>
-                  <option value="staffStamp">Staff Stamp</option>
-                </optgroup>
-                {/* Ball-pattern reverse holos. The card databases hold ONE
-                    entry for the whole family because the collector number
-                    is the same on all of them, so a search returns a single
-                    result for what TCGplayer splits into several products.
-                    Which one you are holding is a thing only you can see. */}
-                <optgroup label="Ball-pattern reverse holo">
-                  {PATTERN_VARIANTS.map((v) => (
-                    <option key={v} value={v}>
-                      {variantLabel(v)}
-                    </option>
-                  ))}
-                </optgroup>
+                {activeGame === "mtg" ? (
+                  <>
+                    <option value="foil">Foil</option>
+                    <option value="etched">Etched Foil</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="holofoil">Holo</option>
+                    <option value="reverseHolofoil">Reverse Holo</option>
+                    <optgroup label="Stamped versions">
+                      <option value="pcStamp">Pokémon Center Stamp</option>
+                      <option value="prereleaseStamp">Prerelease Stamp</option>
+                      <option value="staffStamp">Staff Stamp</option>
+                    </optgroup>
+                    {/* Ball-pattern reverse holos. The card databases hold ONE
+                        entry for the whole family because the collector number
+                        is the same on all of them, so a search returns a single
+                        result for what TCGplayer splits into several products.
+                        Which one you are holding is a thing only you can see. */}
+                    <optgroup label="Ball-pattern reverse holo">
+                      {PATTERN_VARIANTS.map((v) => (
+                        <option key={v} value={v}>
+                          {variantLabel(v)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </>
+                )}
               </select>
             }
           />
@@ -881,6 +923,22 @@ export default function CollectionPage({
         )}
       </div>
 
+      {/* This game's slice is empty (the collection itself isn't, or the
+          earlier empty-state would have rendered). Say so, usefully. */}
+      {gameItems.length === 0 && (
+        <div className="card-panel mx-auto mt-8 max-w-md p-8 text-center">
+          <div className="text-4xl">{tab === "mtg" ? "🪄" : "📷"}</div>
+          <h2 className="mt-2 text-lg font-bold">
+            No {tab === "mtg" ? "Magic" : "Pokémon"} cards yet
+          </h2>
+          {!readOnly && (
+            <p className="mt-1 text-sm text-slate-500">
+              Scan some — a photo can even mix both games — or add them by search.
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
         {grouped.map((group) => {
           const item = group.items[0];
@@ -951,6 +1009,7 @@ export default function CollectionPage({
           onPick={addCard}
           toast={toast}
           allowPhoto={isAdmin}
+          game={activeGame}
         />
       )}
 
@@ -1305,6 +1364,7 @@ export default function CollectionPage({
           onClose={() => setChangingCard(false)}
           onPick={(card) => changeCard(selected, card)}
           allowPhoto={isAdmin}
+          game={(selected.card.game ?? "pokemon") === "mtg" ? "mtg" : "pokemon"}
         />
       )}
 

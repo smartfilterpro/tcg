@@ -404,6 +404,11 @@ export async function POST(req: Request) {
     for (const i of items ?? []) {
       const c = i.card as unknown as CardSummaryRow & { battle_data?: CardBattleData | null };
       if (!c) continue;
+      // The deck builder is Pokémon-only until the MTG format work lands
+      // (Commander/Standard rules, mana curve, its own coach prompt). A
+      // Magic card in the pool here would be offered as a Pokémon deck
+      // ingredient. Id prefix, so this works on a pre-072 database too.
+      if (c.id.startsWith("scry-")) continue;
       const prev = byId.get(c.id);
       if (prev) {
         prev.qty += i.quantity as number;

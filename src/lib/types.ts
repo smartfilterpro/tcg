@@ -1,9 +1,17 @@
 // Shared types across the app
 
+/** Which trading card game a card belongs to. Absent (older rows, older
+ *  clients) always means Pokémon — the app predates the second game. */
+export type CardGame = "pokemon" | "mtg";
+
 /** A normalized card summary — this is what we store in the `cards` table
- *  and pass around the UI. Derived from pokemontcg.io responses. */
+ *  and pass around the UI. Derived from pokemontcg.io responses (Pokémon)
+ *  or Scryfall (Magic: The Gathering). */
 export interface CardSummary {
-  id: string; // pokemontcg.io id, e.g. "sv8pt5-42"
+  id: string; // pokemontcg.io id ("sv8pt5-42") or "scry-<uuid>" for MTG
+  /** Optional so every existing construction site stays valid; readers use
+   *  cardGame() below, which folds absent to "pokemon". */
+  game?: CardGame;
   name: string;
   supertype: string | null; // Pokémon | Trainer | Energy
   subtypes: string[]; // e.g. ["Basic"], ["Item"], ["Special Illustration Rare"-ish live in rarity]
@@ -19,9 +27,13 @@ export interface CardSummary {
   imageSmall: string | null;
   imageLarge: string | null;
   marketPrice: number | null; // USD, best-effort from TCGplayer/cardmarket
-  /** Per-finish USD prices from TCGplayer, e.g. { normal, holofoil, reverseHolofoil }.
+  /** Per-finish USD prices from TCGplayer, e.g. { normal, holofoil, reverseHolofoil }
+   *  (Pokémon) or { normal, foil, etched } (MTG, from Scryfall).
    *  The keys double as the list of finishes that exist for this card. */
   prices: Record<string, number | null> | null;
+  /** TCGplayer product id when the source supplies one (Scryfall does, for
+   *  nearly every MTG card) — powers the buy link with no reconciliation. */
+  tcgplayerId?: number | null;
   /** Attacks, abilities, rules text, weakness, resistance, retreat and
    *  format legality — everything about how the card PLAYS.
    *
@@ -33,9 +45,14 @@ export interface CardSummary {
 
 /** What Claude vision extracts from a photo for each card it sees. */
 export interface DetectedCard {
+  /** Which game the card belongs to — the two layouts are unmistakable, so
+   *  the reader decides per card and a mixed pile scans in one photo. */
+  game?: CardGame;
   name: string;
   collectorNumber: string | null; // e.g. "042"
   setTotal: string | null; // the total after the slash, e.g. "191"
+  /** Pokémon: the set's NAME read off the symbol/text. MTG: the printed
+   *  set CODE from the bottom-left line (e.g. "MH3"). */
   setNameHint: string | null;
   rarityHint: string | null;
   confidence: "high" | "medium" | "low";
@@ -93,13 +110,27 @@ export function itemPrice(item: {
  *  One constant rather than three hand-typed lists, so the collection, the
  *  family view and the friend view cannot drift apart column by column. */
 export const CARD_SUMMARY_COLUMNS =
+  "id, game, name, supertype, subtypes, types, hp, number, rarity, set_id, set_name, " +
+  "set_series, set_printed_total, release_date, image_small, image_large, " +
+  "market_price, prices, price_updated_at";
+
+/** The same list minus columns newer than a not-yet-migrated database —
+ *  the retry shape for the pre-072 fallbacks at the query sites. */
+export const CARD_SUMMARY_COLUMNS_LEGACY =
   "id, name, supertype, subtypes, types, hp, number, rarity, set_id, set_name, " +
   "set_series, set_printed_total, release_date, image_small, image_large, " +
   "market_price, prices, price_updated_at";
 
+/** Which game a card (summary or row) belongs to, absent meaning Pokémon. */
+export function cardGame(card: { game?: string | null } | null | undefined): CardGame {
+  return card?.game === "mtg" ? "mtg" : "pokemon";
+}
+
 /** DB row shape of the cards table (snake_case). */
 export interface CardSummaryRow {
   id: string;
+  /** Only after migration 072 — absent means Pokémon. */
+  game?: CardGame | null;
   name: string;
   supertype: string | null;
   subtypes: string[] | null;
@@ -141,7 +172,13 @@ export const VARIANT_LABELS: Record<string, string> = {
   masterBall: "Master Ball pattern",
   friendBall: "Friend Ball pattern",
   loveBall: "Love Ball pattern",
+  // MTG finishes (Scryfall's vocabulary, our keys).
+  foil: "Foil",
+  etched: "Etched Foil",
 };
+
+/** MTG finish order for dropdowns. */
+const MTG_FINISH_ORDER = ["normal", "foil", "etched"];
 
 /** Stamped versions exist physically but not as separate database entries —
  *  the databases key on set+number, and a stamp doesn't change the number.
@@ -229,8 +266,10 @@ export function ballPatternOf(hint: string | null | undefined): {
   return null;
 }
 
-/** The finishes worth offering for this card. */
-export function manualVariantsFor(card: { name: string }): string[] {
+/** The finishes worth offering for this card. Stamps and ball patterns are
+ *  Pokémon physical realities — MTG gets none of them. */
+export function manualVariantsFor(card: { name: string; game?: string | null }): string[] {
+  if (cardGame(card) === "mtg") return [];
   return isSpecificPrinting(card.name) ? [] : [...MANUAL_VARIANTS];
 }
 
@@ -273,7 +312,21 @@ export function availableVariants(card: {
   prices?: Record<string, number | null> | null;
   rarity?: string | null;
   name?: string;
+  game?: string | null;
 }): string[] {
+  // MTG first, and separately: none of the Pokémon rarity heuristics below
+  // apply — "Rare" would grow a Reverse Holo that Magic has never printed.
+  // Scryfall states each printing's finishes outright via the price keys.
+  if (cardGame(card) === "mtg") {
+    const keys = card.prices ? Object.keys(card.prices) : [];
+    const known = keys.length > 0 ? keys : ["normal", "foil"];
+    return [...new Set(known)].sort((a, b) => {
+      const ai = MTG_FINISH_ORDER.indexOf(a);
+      const bi = MTG_FINISH_ORDER.indexOf(b);
+      return (ai < 0 ? MTG_FINISH_ORDER.length : ai) - (bi < 0 ? MTG_FINISH_ORDER.length : bi);
+    });
+  }
+
   const out = new Set<string>(card.prices ? Object.keys(card.prices) : []);
 
   const named = typeof card.name === "string" && isSpecificPrinting(card.name);
@@ -305,11 +358,21 @@ export function defaultVariantFor(
     /** Used only to tell a named printing from a plain card — the manual
      *  finishes are meaningless on a row that IS one of them. */
     name?: string;
+    game?: string | null;
   },
   rarityHint?: string | null
 ): string {
   const avail = availableVariants(card);
   const hint = (rarityHint ?? "").toLowerCase();
+  // MTG: two finishes, one question — did the scanner see foil? The same
+  // card-vetoes-a-finish rule applies: a foil-only printing is foil no
+  // matter what the light did.
+  if (cardGame(card) === "mtg") {
+    if (/holo|foil/.test(hint) && avail.includes("foil")) return "foil";
+    if (hint.includes("matte") && avail.includes("normal")) return "normal";
+    if (avail.length === 1) return avail[0];
+    return avail.includes("normal") ? "normal" : avail[0];
+  }
   // Stamped versions take priority — the stamp is the defining feature
   if (hint.includes("center") || hint.includes("pokemon center")) return "pcStamp";
   if (hint.includes("prerelease")) return "prereleaseStamp";
@@ -455,6 +518,7 @@ export interface Deck {
 export function rowToSummary(row: CardSummaryRow): CardSummary {
   return {
     id: row.id,
+    ...(row.game === "mtg" ? { game: "mtg" as const } : {}),
     name: row.name,
     supertype: row.supertype,
     subtypes: row.subtypes ?? [],
@@ -519,5 +583,14 @@ export function summaryToRow(c: CardSummary): Omit<CardSummaryRow, "price_update
     // it is null, so a source with no text can never blank text another
     // source found.
     ...(c.battleData ? { battle_data: c.battleData } : {}),
+    // Only when stated: a Pokémon summary omits it so the upsert payload
+    // still works on a pre-072 database (the column default covers it).
+    // MTG summaries only exist post-072 by construction.
+    //
+    // tcgplayerId deliberately does NOT ride this row: the column is unique
+    // (033) and typed text, so it goes through attachTcgPlayerId — which
+    // survives duplicates — never a bulk upsert that one collision could
+    // fail wholesale.
+    ...(c.game === "mtg" ? { game: "mtg" as const } : {}),
   };
 }
