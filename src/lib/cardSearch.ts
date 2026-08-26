@@ -383,8 +383,19 @@ export async function runCardSearch(
       }
 
       // Number searches can be over-constrained (printedTotal counts only
-      // the base set; promo-set codes vary) — relax progressively.
-      if (cards.length === 0 && (parsed.printedTotal || parsed.setName)) {
+      // the base set; promo-set codes vary) — relax progressively. Only
+      // when a name or number REMAINS, though: a set-only listing for a set
+      // the source doesn't carry used to fall through here with every
+      // constraint stripped, and an unconstrained query returns sixteen
+      // arbitrary cards — which then merged into the set listing as Gym
+      // Challenge trainers in the middle of a 2026 set. For a set-only
+      // query, "the source doesn't know this set" IS the answer; the
+      // TCGdex and paid-tracker set listings below still run.
+      if (
+        cards.length === 0 &&
+        (parsed.printedTotal || parsed.setName) &&
+        (parsed.name || parsed.number)
+      ) {
         cards = await safeSearch({ name: parsed.name, number: parsed.number, pageSize: 16 });
       }
       if (cards.length === 0 && parsed.number && !parsed.name) {

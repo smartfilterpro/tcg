@@ -456,35 +456,47 @@ export async function refreshStalePrices(
           // under review is the one it wanted to write.
           const proposed = nextMarket ?? ptMarket;
           // A bulk-rarity card from a recent set priced like a chase card,
-          // whichever source said so. Unknown release date counts as recent:
-          // the cards with no release_date are the ones freshly imported from
-          // a set nobody has catalogued yet, which is exactly when the
-          // upstream mappings are least settled.
+          // whichever source said so. Age is the whole verdict here, so
+          // "don't know" and "know it's new" get different treatment: a
+          // KNOWN-recent set's absurd claim is discarded outright, while a
+          // card with no release date on file — usually a fresh import, but
+          // sometimes a vintage row from the price sync, and vintage commons
+          // genuinely reach real money — is HELD for a human instead of
+          // silently refused forever.
           const releasedAt = Date.parse((card.release_date as string | null) ?? "");
-          const recent =
-            Number.isNaN(releasedAt) ||
+          const knownRecent =
+            !Number.isNaN(releasedAt) &&
             Date.now() - releasedAt < BULK_RARITY_MAX_AGE_YEARS * 365 * 86_400_000;
-          const implausible =
-            proposed != null &&
-            proposed > BULK_RARITY_CEILING_USD &&
-            recent &&
-            BULK_RARITIES.has(((card.rarity as string | null) ?? "").trim().toLowerCase());
+          const undated = Number.isNaN(releasedAt);
+          const isBulk = BULK_RARITIES.has(
+            ((card.rarity as string | null) ?? "").trim().toLowerCase()
+          );
+          const overCeiling =
+            proposed != null && proposed > BULK_RARITY_CEILING_USD && isBulk;
+          const implausible = overCeiling && knownRecent;
+          /** Same shape, unknown age: reviewed once, never auto-applied and
+           *  never auto-refused. */
+          const implausibleUndated = overCeiling && undated;
           // DISCARDED, not debated. Two shapes of claim are wrong by
           // construction and deserve no place in a human's review queue:
-          // a bulk-rarity card from a recent set priced like a chase card
-          // (the product-mapping smear that once wrote $706.96 onto a
-          // Shuppet), and a >100× jump on a card that already holds a real
-          // price. Neither is a market move; both are a feed mapping the
-          // wrong product. The card keeps its honest price, gets stamped so
-          // it rotates normally, and one log line says what was refused —
-          // if the movement is somehow real, it will come back from a
-          // corroborating source, not from the same absurd number.
+          // a bulk-rarity card from a KNOWN-recent set priced like a chase
+          // card (the product-mapping smear that once wrote $706.96 onto a
+          // Shuppet), and a >100× jump on a recent card that already holds
+          // a real price. Neither is a market move; both are a feed mapping
+          // the wrong product. The card keeps its honest price, gets
+          // stamped so it rotates normally, and one log line says what was
+          // refused — if the movement is somehow real, it will come back
+          // from a corroborating source, not from the same absurd number.
+          // Older and unknown-age cards never reach this branch: a vintage
+          // common really can be worth real money, so their spikes go to
+          // review instead.
           const megaJump =
             old != null &&
             old > 0 &&
             proposed != null &&
             proposed > 50 &&
-            proposed / old > 100;
+            proposed / old > 100 &&
+            knownRecent;
           if (proposed != null && (implausible || megaJump)) {
             summary.discarded = (summary.discarded ?? 0) + 1;
             if ((summary.discarded ?? 0) <= 5) {
@@ -501,7 +513,7 @@ export async function refreshStalePrices(
               .then(() => {});
             return;
           }
-          if ((ptUnverified || swung) && proposed != null) {
+          if ((ptUnverified || swung || implausibleUndated) && proposed != null) {
             summary.suspicious.push({
               id: card.id as string,
               name: card.name as string,
