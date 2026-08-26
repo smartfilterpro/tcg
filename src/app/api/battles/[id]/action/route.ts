@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/auth";
 import {
   applyAction,
   pushLog,
@@ -11,7 +10,7 @@ import {
   type BattleAction,
   type BattleState,
 } from "@/lib/battle";
-import { battleErrorResponse } from "../../lib";
+import { battleErrorResponse, requireBattleUser } from "../../lib";
 import { BOT_ID } from "@/lib/battleBot";
 import { runBotTurn } from "@/lib/battleBotTurn";
 
@@ -22,7 +21,7 @@ type Params = { params: Promise<{ id: string }> };
  *  never overwrite each other — the loser of the race re-reads and retries. */
 export async function POST(req: Request, { params }: Params) {
   try {
-    const { user } = await requireUser();
+    const { user } = await requireBattleUser();
     const { id } = await params;
     const { action } = (await req.json()) as { action?: BattleAction };
     if (!action || typeof action !== "object" || typeof action.type !== "string") {

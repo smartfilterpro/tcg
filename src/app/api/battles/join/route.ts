@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/auth";
 import { buildSide, pushLogRaw, type BattleState } from "@/lib/battle";
-import { battleErrorResponse, displayName, expandDeck, loadBattleDeck } from "../lib";
+import { battleErrorResponse, displayName, expandDeck, loadBattleDeck, requireBattleUser } from "../lib";
 
 // First battle with a deck fetches card data + compiles trainer effects.
 export const maxDuration = 120;
@@ -11,7 +10,7 @@ export const maxDuration = 120;
 /** POST: join a friend's waiting battle. Body: { code, deckId } */
 export async function POST(req: Request) {
   try {
-    const { user, profile } = await requireUser();
+    const { user, profile } = await requireBattleUser();
     const body = (await req.json()) as { code?: string; deckId?: string };
     const code = body.code?.trim().toUpperCase() ?? "";
     if (!code) return NextResponse.json({ error: "Enter the battle code." }, { status: 400 });

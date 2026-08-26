@@ -660,7 +660,7 @@ function BoardOff() {
         <p className="text-[13.5px] leading-[1.55] text-brand-ink2">
           A parent can switch the public board back on from Family settings, and can set how
           many {APP_NAME} credits each profile may spend in a cycle. Everything else — your
-          collection, decks, values and battles — is yours and isn&apos;t affected by this.
+          collection, decks and values — is yours and isn&apos;t affected by this.
         </p>
       </div>
     </div>
@@ -954,7 +954,7 @@ export default function TradesPage() {
         <h1 className="font-display text-[22px] font-bold">Trading is paused</h1>
         <p className="mt-2 text-sm leading-[1.6] text-brand-ink3">
           We&apos;ve switched the trade board off for now. Nothing has been deleted — your
-          collection, decks, grading and battles all work exactly as before.
+          collection, decks and grading all work exactly as before.
         </p>
         <Link className="btn-primary mt-4 inline-flex" href="/">
           Back to your collection

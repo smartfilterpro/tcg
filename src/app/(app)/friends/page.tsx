@@ -370,8 +370,8 @@ export default function FriendsPage() {
         <div>
           <h1 className="font-display text-[26px] font-bold tracking-[-.025em]">Friends</h1>
           <p className="mt-[3px] max-w-[70ch] text-sm leading-[1.6] text-brand-ink3">
-            Members who share their collection show up here. Browse their binder and borrow a
-            shared deck for a battle{TRADING_ENABLED ? `, and work trades out card for card with ${AI_NAME}` : ""}.
+            Members who share their collection show up here. Browse their binder and look
+            through the decks they share{TRADING_ENABLED ? `, and work trades out card for card with ${AI_NAME}` : ""}.
           </p>
         </div>
       )}
@@ -529,13 +529,10 @@ export default function FriendsPage() {
             <div className="rounded-[18px] border border-brand-line bg-white p-[22px]">
               <div className="mb-1.5 flex items-baseline justify-between gap-3">
                 <div className="font-display text-[17px] font-bold">Decks shared with you</div>
-                <span className="shrink-0 text-[12.5px] text-brand-ink5">
-                  borrowable in battles
-                </span>
               </div>
               <p className="mb-[14px] text-[13.5px] leading-[1.55] text-brand-ink3">
-                Pick one of these when you start a battle and you play it as if it were yours —
-                handy when a kid wants a go with a proper deck. Share yours from the Decks page.
+                Open one to see how it&apos;s built — handy when a friend has a deck worth
+                learning from. Share yours from the Decks page.
               </p>
               {decksLocked ? (
                 <p className="text-sm text-brand-ink4">

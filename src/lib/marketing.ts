@@ -58,8 +58,8 @@ export const FREE_LIMITS: string[] = [
 ];
 
 export const FREE_LIMITS_NOTE =
-  "Everything else keeps working when your credits run out: your collection, your decks, " +
-  "price tracking and battles never stop.";
+  "Everything else keeps working when your credits run out: your collection, your decks " +
+  "and price tracking never stop.";
 
 export const TIERS: Tier[] = [
   {
@@ -79,7 +79,6 @@ export const TIERS: Tier[] = [
       f(`Unlimited cards · up to ${FREE_DECK_LIMIT} saved decks`),
       f("Add cards by database search"),
       f("Collection value + weekly price refresh"),
-      f("Two-player battles"),
       f("CSV export"),
       // Sharing is a real gate — the decks page shows a lock, and the API
       // refuses. It belongs on the list precisely because being stopped by

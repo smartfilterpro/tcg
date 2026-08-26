@@ -117,8 +117,8 @@ export function PricingSection() {
               <p className="m-0 mb-[18px] text-[14.5px] leading-[1.6] text-brand-ink3 [text-wrap:pretty]">
                 Credits are what {AI_NAME} runs on. Each request costs what it actually takes to
                 run — the table below is what to expect — and every charge shows in your history.
-                No mystery tokens, no surprise bill. Run out and nothing breaks: your collection,
-                decks and battles keep working.
+                No mystery tokens, no surprise bill. Run out and nothing breaks: your collection
+                and decks keep working.
               </p>
               <div className="flex flex-col gap-px overflow-hidden rounded-xl border border-brand-line">
                 {CREDIT_COSTS.map((c, i) => (

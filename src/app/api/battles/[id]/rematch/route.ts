@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/auth";
 import { buildSide, pushLogRaw, type BattleState } from "@/lib/battle";
 import { BOT_ID } from "@/lib/battleBot";
 import type { Deck } from "@/lib/types";
-import { battleErrorResponse, expandDeck, makeBattleCode } from "../../lib";
+import { battleErrorResponse, expandDeck, makeBattleCode, requireBattleUser } from "../../lib";
 
 // Re-expanding two decks can mean fetching card data for anything new.
 export const maxDuration = 120;
@@ -20,7 +19,7 @@ type Params = { params: Promise<{ id: string }> };
  *  A deck that has since been deleted simply blocks the rematch. */
 export async function POST(_req: Request, { params }: Params) {
   try {
-    const { user } = await requireUser();
+    const { user } = await requireBattleUser();
     const { id } = await params;
     const admin = createAdminClient();
 

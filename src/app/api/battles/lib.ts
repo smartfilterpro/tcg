@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { AuthError } from "@/lib/auth";
+import { AuthError, requireUser } from "@/lib/auth";
 import { BattleError, type BattleCard } from "@/lib/battle";
 import type { CompiledCard } from "@/lib/cardEffects";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
@@ -106,6 +106,18 @@ async function compileTrainerFx(
   } catch {
     return null; // no fx this time — retried on a future battle
   }
+}
+
+/** Battles are retired from the member app: the pages, the API and the
+ *  engine stay exactly as they are, reachable by the admin only. Every
+ *  battle route authenticates through this instead of requireUser, so the
+ *  whole feature is one door with one lock. */
+export async function requireBattleUser() {
+  const result = await requireUser();
+  if (result.profile?.role !== "admin") {
+    throw new AuthError("Battles are no longer available.", 403);
+  }
+  return result;
 }
 
 export const MIGRATION_HINT =

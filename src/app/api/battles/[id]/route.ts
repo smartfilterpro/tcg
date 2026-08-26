@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/auth";
 import { redactState, type BattleState } from "@/lib/battle";
-import { battleErrorResponse } from "../lib";
+import { battleErrorResponse, requireBattleUser } from "../lib";
 import { BOT_ID } from "@/lib/battleBot";
 
 type Params = { params: Promise<{ id: string }> };
@@ -10,7 +9,7 @@ type Params = { params: Promise<{ id: string }> };
 /** GET: this player's view of the battle (hidden info redacted). */
 export async function GET(_req: Request, { params }: Params) {
   try {
-    const { user } = await requireUser();
+    const { user } = await requireBattleUser();
     const { id } = await params;
     const admin = createAdminClient();
     const { data: battle, error } = await admin
@@ -57,7 +56,7 @@ export async function GET(_req: Request, { params }: Params) {
  *  finished one off the list). */
 export async function DELETE(_req: Request, { params }: Params) {
   try {
-    const { user } = await requireUser();
+    const { user } = await requireBattleUser();
     const { id } = await params;
     const admin = createAdminClient();
     const { data, error } = await admin
