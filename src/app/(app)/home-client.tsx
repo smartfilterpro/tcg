@@ -7,7 +7,6 @@ import CardText, { useCardText } from "@/components/CardText";
 import CardZoom from "@/components/CardZoom";
 import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
 import PriceHistory from "@/components/PriceHistory";
-import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc } from "@/lib/art";
 import SealedTab from "@/components/SealedTab";
 import { sealedTotal } from "@/lib/sealed";
@@ -137,10 +136,8 @@ export default function CollectionPage({
   }
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Cards whose image URL failed to load (broken fallback-database links) —
-  // treated exactly like having no image, so the photo button appears.
+  // treated exactly like having no image, so the find-image path appears.
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
-  const detailPhotoRef = useRef<HTMLInputElement>(null);
-  const [photoBusy, setPhotoBusy] = useState(false);
   const [findBusy, setFindBusy] = useState(false);
 
   function markBroken(cardId: string) {
@@ -165,30 +162,6 @@ export default function CollectionPage({
     });
   }
 
-  async function setCardPhoto(item: CollectionItem, file: File) {
-    setPhotoBusy(true);
-    try {
-      const url = await uploadCardPhoto(file);
-      if (!url) {
-        alert("Photo upload failed — has the card-photos storage migration (005) been run?");
-        return;
-      }
-      const res = await fetch(`/api/cards/${encodeURIComponent(item.card_id)}/image`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageUrl: url }),
-      });
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        alert(json.error ?? "Couldn't save the photo");
-        return;
-      }
-      applyCardImage(item.card_id, url);
-    } finally {
-      setPhotoBusy(false);
-    }
-  }
-
   async function findImageOnline(item: CollectionItem) {
     setFindBusy(true);
     try {
@@ -197,7 +170,7 @@ export default function CollectionPage({
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(json.error ?? "Couldn't find an image online — try your own photo.");
+        alert(json.error ?? "Couldn't find an image online — it usually fills in on its own as the card databases catch up.");
         return;
       }
       applyCardImage(item.card_id, json.imageUrl as string);
@@ -948,7 +921,7 @@ export default function CollectionPage({
             ) : (
               <div className="flex aspect-[63/88] flex-col items-center justify-center gap-1 rounded-[7px] bg-brand-sunken text-center text-xs text-brand-ink5">
                 <span className="text-xl">📷</span>
-                No image — tap to add a photo
+                No image yet — tap to find one
               </div>
             )}
             <div className="mt-2 truncate text-[13.5px] font-medium">{item.card.name}</div>
@@ -968,19 +941,6 @@ export default function CollectionPage({
           );
         })}
       </div>
-
-      {/* Detail-modal photo capture for cards without art */}
-      <input
-        ref={detailPhotoRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          e.target.value = "";
-          if (f && selected) setCardPhoto(selected, f);
-        }}
-      />
 
       {showAdd && (
         <CardPickerModal
@@ -1049,22 +1009,13 @@ export default function CollectionPage({
                       art mirror) or the admin — the manual buttons are
                       admin-only now, and the server enforces the same. */}
                   {isAdmin ? (
-                    <>
-                      <button
-                        className="btn-primary px-3 py-1.5 text-xs"
-                        disabled={photoBusy || findBusy}
-                        onClick={() => findImageOnline(selected)}
-                      >
-                        {findBusy ? "Searching…" : "🔍 Find image online"}
-                      </button>
-                      <button
-                        className="btn-secondary px-3 py-1.5 text-xs"
-                        disabled={photoBusy || findBusy}
-                        onClick={() => detailPhotoRef.current?.click()}
-                      >
-                        {photoBusy ? "Uploading…" : "📷 Use your photo"}
-                      </button>
-                    </>
+                    <button
+                      className="btn-primary px-3 py-1.5 text-xs"
+                      disabled={findBusy}
+                      onClick={() => findImageOnline(selected)}
+                    >
+                      {findBusy ? "Searching…" : "🔍 Find image"}
+                    </button>
                   ) : (
                     <span className="text-[11px] leading-snug">
                       The picture arrives automatically as the card database fills in.
