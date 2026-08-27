@@ -1494,8 +1494,9 @@ export default function DecksPage() {
       <div className="card-panel p-4">
         <h2 className="font-semibold">🎮 Your play style</h2>
         <p className="mb-2 mt-0.5 text-xs text-slate-500">
-          Tell {AI_NAME} how you like to play — aggressive, defensive, favorite Pokémon, combos you
-          love, your experience level. It uses this to tailor every deck it builds for you.
+          Tell {AI_NAME} how you like to play — aggressive, defensive, favorite Pokémon or
+          commanders, combos you love, your experience level. It uses this to tailor every deck
+          it builds for you.
         </p>
         <textarea
           className="input min-h-24"
@@ -1527,7 +1528,10 @@ export default function DecksPage() {
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !building && build()}
           />
-          <div className="flex shrink-0 gap-2">
+          {/* Wraps: three selects and a button never fit one phone-width
+              row, and a row that can't wrap clips the format picker off
+              the screen edge entirely. */}
+          <div className="flex flex-wrap gap-2 sm:shrink-0">
             <select
               className="input w-auto text-sm"
               title="Which game to build a deck for"
@@ -1593,8 +1597,10 @@ export default function DecksPage() {
         <p className="mb-0 mt-1.5 text-xs text-slate-500">
           {poolMode === "all" && (
             <>
-              🌟 Dream deck: builds with any real card, grounded in current tournament results —
-              the result includes a priced buy list for everything you don&apos;t own
+              🌟 Dream deck: builds with any real card
+              {buildGame === "mtg"
+                ? " — the result includes a priced buy list for everything you don't own"
+                : ", grounded in current tournament results — the result includes a priced buy list for everything you don't own"}
               {archetypeSeed ? `, aimed at ${archetypeSeed}` : ""}.{" "}
             </>
           )}
