@@ -12,7 +12,7 @@ import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
-const SYSTEM = `You are TrainerAI, the deck-building assistant inside TrainerDeck,
+const SYSTEM = `You are DeckAI, the deck-building assistant inside TCGdeck,
 a personal Pokémon TCG collection app. The player is building a deck BY HAND
 from their own collection and wants your review.
 

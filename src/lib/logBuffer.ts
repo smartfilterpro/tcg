@@ -45,7 +45,7 @@ const MAX_ENTRIES = 1000;
  * bundle catches everything; only the storage was split. Keeping the store
  * on globalThis, keyed by a registered symbol, makes every copy of this
  * module address the same array. */
-const STORE = Symbol.for("trainerdeck.logBuffer.v1");
+const STORE = Symbol.for("tcgdeck.logBuffer.v1");
 
 interface Store {
   entries: LogEntry[];
@@ -137,7 +137,7 @@ export function recentLogs(): { startedAt: string; entries: LogEntry[] } {
 export function logsAsText(): string {
   const { startedAt, entries } = recentLogs();
   const header = [
-    `TrainerDeck server log`,
+    `TCGdeck server log`,
     `process started: ${startedAt}`,
     `captured at:     ${new Date().toISOString()}`,
     `entries:         ${entries.length}${entries.length >= MAX_ENTRIES ? " (oldest dropped)" : ""}`,

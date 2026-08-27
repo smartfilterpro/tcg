@@ -1668,7 +1668,7 @@ function BusinessDashboard({ priceCron }: { priceCron: string | null }) {
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = "trainerdeck-customers.csv";
+    a.download = "tcgdeck-customers.csv";
     a.click();
     URL.revokeObjectURL(url);
   }

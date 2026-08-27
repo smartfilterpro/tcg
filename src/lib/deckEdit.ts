@@ -1,4 +1,4 @@
-// Letting TrainerAI change a deck — with the player's hand on the switch.
+// Letting DeckAI change a deck — with the player's hand on the switch.
 //
 // The assistant could already read a collection and reason about a deck, and
 // its answer to "can you update the deck for me?" was an honest no. Doing
@@ -122,7 +122,7 @@ export function applyChanges(
 /** Last resort for a card the catalogue has never heard of.
  *
  *  This used to be the ONLY answer, and it returns "pokemon" for anything
- *  that isn't basic energy — so every Trainer TrainerAI added landed in the
+ *  that isn't basic energy — so every Trainer DeckAI added landed in the
  *  Pokémon column, and the deck's section counts were wrong from then on.
  *  Callers now pass a lookup from the real catalogue; this only covers the
  *  case where even that comes back empty, and basic energy is the one thing

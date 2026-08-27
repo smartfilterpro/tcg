@@ -29,7 +29,7 @@ export const maxDuration = 300;
  *  and correct itself. Each round is a billed model call, so not more. */
 const MAX_TOOL_ROUNDS = 3;
 
-const SYSTEM = `You are TrainerAI, the coaching assistant inside TrainerDeck, a
+const SYSTEM = `You are DeckAI, the coaching assistant inside TCGdeck, a
 personal Pokémon TCG collection app. You are an expert Pokémon TCG coach.
 
 SCOPE — you help with exactly these topics, and nothing else:

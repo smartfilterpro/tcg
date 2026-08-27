@@ -30,7 +30,7 @@ export interface DeckEditProposal {
  *  card removed reads as a removal rather than "→ 0", because that is what
  *  it is.
  *
- *  Shared by the TrainerAI panel and the coach box under a saved deck. Both
+ *  Shared by the DeckAI panel and the coach box under a saved deck. Both
  *  post to the same apply route, so the approval means the same thing and is
  *  checked the same way wherever it is pressed. */
 export default function DeckEditCard({

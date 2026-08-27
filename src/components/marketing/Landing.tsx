@@ -18,7 +18,7 @@ const DIFFS = [
     vs: "one card per photo, or manual entry off a set list.",
   },
   {
-    tag: "TRAINER AI",
+    tag: "DECK AI",
     title: "Decks from the cards you own",
     body: "Not a netdeck you can't build. A legal 60-card list from your actual binder, with the swaps that would improve it and what to buy next if you want to.",
     vs: "a price database and a wishlist button.",
@@ -298,7 +298,7 @@ export default function Landing({
           Point your camera at the pile.
         </h2>
         <p className="mx-auto mb-[30px] max-w-[52ch] text-[17px] leading-[1.6] text-brand-ink3">
-          Free forever for collecting. 100 TrainerAI credits to see what the assistant does. No
+          Free forever for collecting. 100 DeckAI credits to see what the assistant does. No
           card, no invite code.
         </p>
         <Link

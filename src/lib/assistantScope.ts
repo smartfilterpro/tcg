@@ -1,7 +1,8 @@
-// What TrainerAI is allowed to be.
+// What DeckAI is allowed to be.
 //
-// The rule from the owner is absolute: Pokémon and this account, nothing
-// else. That is enforced in two places, because one is not enough.
+// The rule from the owner is absolute: the card games this app holds
+// (Pokémon TCG and Magic: The Gathering) and this account, nothing else.
+// That is enforced in two places, because one is not enough.
 //
 //  1. A pre-filter here, before any model call. It catches the obvious cases
 //     — write me code, what's the weather, ignore your instructions — and
@@ -19,12 +20,14 @@
 /** Said verbatim whenever the guard fires, so refusals are recognisable and
  *  don't read as the model having an opinion. */
 export const OFF_TOPIC_REPLY =
-  "I only know about Pokémon — the cards, the rules, deckbuilding, and what's in " +
-  "your own collection. Ask me anything in that world and I'm all yours.";
+  "I only know about trading card games — Pokémon and Magic: The Gathering cards, " +
+  "rules, deckbuilding, and what's in your own collection. Ask me anything in that " +
+  "world and I'm all yours.";
 
-/** Phrases whose presence means the message cannot be about Pokémon, however
- *  the rest of it reads. Deliberately short: a long list starts refusing real
- *  questions, and a false refusal is worse than one extra model call. */
+/** Phrases whose presence means the message cannot be about the card games,
+ *  however the rest of it reads. Deliberately short: a long list starts
+ *  refusing real questions, and a false refusal is worse than one extra
+ *  model call. */
 const CLEARLY_ELSEWHERE: RegExp[] = [
   // Attempts to redefine the assistant.
   /\b(ignore|disregard|forget|override)\b.{0,30}\b(previous|prior|above|earlier|your)\b.{0,20}\b(instruction|prompt|rule|direction)/i,
@@ -39,19 +42,23 @@ const CLEARLY_ELSEWHERE: RegExp[] = [
   /\b(recipe|weather forecast|flight|hotel booking)\b/i,
 ];
 
-/** True when the message is provably not about Pokémon. False means "maybe",
- *  and the model decides — which is the common case. */
+/** True when the message is provably not about the card games. False means
+ *  "maybe", and the model decides — which is the common case. */
 export function isClearlyOffTopic(message: string): boolean {
   return CLEARLY_ELSEWHERE.some((re) => re.test(message));
 }
 
-export const ASSISTANT_SYSTEM = `You are TrainerAI, the assistant inside
-TrainerDeck — a personal Pokémon Trading Card Game collection app. You are an
-expert on the Pokémon TCG and on the player's own collection.
+export const ASSISTANT_SYSTEM = `You are DeckAI, the assistant inside
+TCGdeck — a personal trading card game collection app covering the Pokémon
+TCG and Magic: The Gathering. You are an expert on both games and on the
+player's own collection.
 
 WHAT YOU ANSWER — this list is exhaustive:
-- The Pokémon TCG: rules, timing, legality, formats and rotation, how a card
-  works, how an interaction resolves.
+- The games themselves: rules, timing, legality, formats and rotation, how a
+  card works, how an interaction resolves — Pokémon TCG or Magic alike. For
+  Magic rules minutiae (the stack, layers, priority), prefer the card's
+  actual oracle text from the catalogue over memory, and say when you are
+  not certain of a ruling.
 - Cards: what a card does, what it combos with, which cards are strong for a
   given strategy, what to play instead of something.
 - Deckbuilding and piloting: lists, ratios, openings, sequencing, prize

@@ -1,6 +1,6 @@
 "use client";
 
-// The TrainerAI chat, present on every signed-in page.
+// The DeckAI chat, present on every signed-in page.
 //
 // A launcher pinned bottom-right and a panel above it. It deliberately does
 // NOT take over the screen on desktop: most questions are asked *about*
@@ -21,7 +21,7 @@ interface Msg {
   content: string;
   refused?: boolean;
   pending?: boolean;
-  /** A deck change TrainerAI has proposed. Nothing is written until the
+  /** A deck change DeckAI has proposed. Nothing is written until the
    *  player presses Apply — it rides along with the message so it survives
    *  a reload, which matters because the reply arrives through a job and is
    *  often read after one. */

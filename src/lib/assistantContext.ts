@@ -1,4 +1,4 @@
-// What TrainerAI knows about you, assembled for each message.
+// What DeckAI knows about you, assembled for each message.
 //
 // The hard constraint is cost, not the context window. A credit is a cent, so
 // stuffing 1,500 cards of full rules text into every chat turn — which is how

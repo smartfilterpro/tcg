@@ -105,7 +105,7 @@ export async function refreshCard(
     const { scryToSummary } = await import("@/lib/scryfall");
     try {
       const res = await fetch(`https://api.scryfall.com/cards/${id.slice("scry-".length)}`, {
-        headers: { Accept: "application/json", "User-Agent": "TrainerDeck/1.0" },
+        headers: { Accept: "application/json", "User-Agent": "TCGdeck/1.0" },
         signal: AbortSignal.timeout(8_000),
       });
       if (!res.ok) throw new Error(`Scryfall ${res.status}`);

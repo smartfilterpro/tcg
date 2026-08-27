@@ -1,4 +1,4 @@
-// TrainerDeck's service worker.
+// TCGdeck's service worker.
 //
 // Hand-written, and deliberately small. A service worker sits between the app
 // and the network for every request the app makes, forever, including after
@@ -26,8 +26,8 @@
 // deleted on activate, so a version bump is also the eraser.
 
 const CACHE_VERSION = "v1";
-const STATIC_CACHE = `trainerdeck-static-${CACHE_VERSION}`;
-const PAGE_CACHE = `trainerdeck-pages-${CACHE_VERSION}`;
+const STATIC_CACHE = `tcgdeck-static-${CACHE_VERSION}`;
+const PAGE_CACHE = `tcgdeck-pages-${CACHE_VERSION}`;
 const OFFLINE_URL = "/offline";
 
 self.addEventListener("install", (event) => {
@@ -50,7 +50,13 @@ self.addEventListener("activate", (event) => {
     (async () => {
       const keep = new Set([STATIC_CACHE, PAGE_CACHE]);
       for (const key of await caches.keys()) {
-        if (key.startsWith("trainerdeck-") && !keep.has(key)) await caches.delete(key);
+        // "trainerdeck-" is the pre-rename prefix: those caches would
+        // otherwise sit on every existing device forever.
+        if (
+          (key.startsWith("tcgdeck-") || key.startsWith("trainerdeck-")) &&
+          !keep.has(key)
+        )
+          await caches.delete(key);
       }
       await self.clients.claim();
     })()

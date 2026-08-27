@@ -101,7 +101,7 @@ const DECK_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-const SYSTEM_TEMPLATE = `You are TrainerAI, the deck-building assistant inside TrainerDeck,
+const SYSTEM_TEMPLATE = `You are DeckAI, the deck-building assistant inside TCGdeck,
 a personal Pokémon TCG collection app. You are an expert Pokémon TCG deck builder.
 
 SCOPE — you do exactly one thing: build a Pokémon TCG deck for the player.

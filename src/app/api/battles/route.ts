@@ -5,7 +5,7 @@ import { buildSide, pushLogRaw, type BattleState } from "@/lib/battle";
 import { BOT_ID } from "@/lib/battleBot";
 
 /** Shown as the practice opponent's name in the log and on the board. */
-const BOT_NAME = "TrainerAI";
+const BOT_NAME = "DeckAI";
 import {
   battleErrorResponse,
   displayName,

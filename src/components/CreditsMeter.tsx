@@ -32,7 +32,7 @@ const REASON_LABELS: Record<string, string> = {
   deck_build: "Deck builds",
   deck_review: "Deck reviews",
   coach: "Coach replies",
-  chat: "TrainerAI chat",
+  chat: "DeckAI chat",
   trade_chat: "Trade advisor",
   find_image: "Image searches",
   grade: "Grading reports",

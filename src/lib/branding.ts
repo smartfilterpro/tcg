@@ -1,18 +1,20 @@
 /** The product name. Change it here and it updates everywhere in the UI.
  *
- *  Was "PokéDeck" with a Poké Ball mark. Both are Nintendo/The Pokémon
- *  Company trademarks — fine for a personal project, a real risk the moment
- *  the app charges anyone, so the rebrand comes before any paid tier. */
-export const APP_NAME = "TrainerDeck";
+ *  Was "PokéDeck", then "TrainerDeck" — both Pokémon-flavored, which stopped
+ *  being true the day Magic: The Gathering cards joined the collection.
+ *  "TCGdeck" (tcgdeck.io) covers every game the app will ever hold. */
+export const APP_NAME = "TCGdeck";
 
-/** The user-facing name of the in-app assistant. Generic, so it survived the
- *  rebrand unchanged. */
-export const AI_NAME = "TrainerAI";
+/** The user-facing name of the in-app assistant. Renamed from "TrainerAI"
+ *  alongside the site: "Trainer" is Pokémon vocabulary, and the assistant
+ *  now answers about Magic cards too. */
+export const AI_NAME = "DeckAI";
 
 /** Kept explicit and prominent: the app reads real card data and shows real
  *  card art, so saying plainly that it is unofficial matters more once money
- *  is involved, not less. */
+ *  is involved, not less. Both games' rights holders are named. */
 export const FAN_DISCLAIMER =
   `${APP_NAME} is an unofficial fan project. Not affiliated with, endorsed by, or ` +
-  `sponsored by Nintendo, Creatures Inc., GAME FREAK inc. or The Pokémon Company. ` +
+  `sponsored by Nintendo, Creatures Inc., GAME FREAK inc., The Pokémon Company, ` +
+  `Wizards of the Coast, or Hasbro. ` +
   `All card images and names are the property of their respective owners.`;

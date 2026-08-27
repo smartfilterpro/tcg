@@ -229,7 +229,7 @@ export default function MetaPage() {
           {affiliate && (
             <>
               {" "}
-              TrainerDeck earns a small commission on TCGplayer purchases made through buy
+              TCGdeck earns a small commission on TCGplayer purchases made through buy
               links — at no extra cost to you.
             </>
           )}

@@ -734,7 +734,7 @@ export default function FriendsPage() {
                 />
               </div>
 
-              {/* TrainerAI chat */}
+              {/* DeckAI chat */}
               <div className="card-panel p-4">
                 <h3 className="mb-1 font-semibold">🤖 Ask {AI_NAME}</h3>
                 <p className="mb-2 text-xs text-slate-500">
