@@ -47,6 +47,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const navItems = [
     { label: "Collection", href: "/" },
+    { label: "Sets", href: "/sets" },
     { label: "Scan", href: "/scan", locked },
     { label: "Decks", href: "/decks" },
     { label: "Meta", href: "/meta" },
