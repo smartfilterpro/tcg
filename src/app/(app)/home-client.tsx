@@ -270,6 +270,28 @@ export default function CollectionPage({
     };
   }, []);
 
+  /** What the whole household's cards are worth — the one number a family
+   *  keeps asking for. Fetched only once a household is known to exist, so
+   *  solo accounts never make the request. Best-effort: absent, the page
+   *  is exactly what it always was. */
+  const [familyValue, setFamilyValue] = useState<{
+    total: number;
+    members: Array<{ id: string; name: string; value: number }>;
+  } | null>(null);
+  useEffect(() => {
+    if (household.length === 0) return;
+    let live = true;
+    fetch("/api/family/value")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (live && j?.family) setFamilyValue({ total: j.total, members: j.members ?? [] });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [household.length]);
+
   /** Which game the open tab shows. Sealed keeps the game of "cards" so
    *  the value chips it references stay consistent. */
   const activeGame: "pokemon" | "mtg" = tab === "mtg" ? "mtg" : "pokemon";
@@ -620,24 +642,46 @@ export default function CollectionPage({
   /** Whose cards to show. Only rendered for a household — a solo account
    *  sees the page exactly as it always was. */
   const householdSwitcher = household.length > 0 && (
-    <div className="mb-3.5 flex flex-wrap items-center gap-1.5">
-      <span className="text-xs text-slate-500">Whose cards:</span>
-      {[{ id: null as string | null, name: "Mine" }, ...household].map((who) => {
-        const active = (member?.id ?? null) === who.id;
-        return (
-          <button
-            key={who.id ?? "me"}
-            className={`rounded-full border px-3 py-1 text-xs font-medium ${
-              active
-                ? "border-brand-accent bg-brand-accent text-white"
-                : "border-brand-line-strong text-brand-ink2 hover:border-brand-accent"
-            }`}
-            onClick={() => setMember(who.id ? { id: who.id, name: who.name } : null)}
-          >
-            {who.name}
-          </button>
-        );
-      })}
+    <div className="mb-3.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-slate-500">Whose cards:</span>
+        {[{ id: null as string | null, name: "Mine" }, ...household].map((who) => {
+          const active = (member?.id ?? null) === who.id;
+          return (
+            <button
+              key={who.id ?? "me"}
+              className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                active
+                  ? "border-brand-accent bg-brand-accent text-white"
+                  : "border-brand-line-strong text-brand-ink2 hover:border-brand-accent"
+              }`}
+              onClick={() => setMember(who.id ? { id: who.id, name: who.name } : null)}
+            >
+              {who.name}
+            </button>
+          );
+        })}
+      </div>
+      {/* The whole house, one number — all games, all binders, same
+          per-item arithmetic as every other total on this page. */}
+      {familyValue && (
+        <p className="mb-0 mt-1.5 text-xs text-slate-500">
+          Household cards:{" "}
+          <b className="text-brand-ink">
+            ~$
+            {familyValue.total.toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+          </b>{" "}
+          <span className="text-slate-400">
+            ·{" "}
+            {familyValue.members
+              .map((m) => `${m.name} $${Math.round(m.value).toLocaleString()}`)
+              .join(" · ")}
+          </span>
+        </p>
+      )}
     </div>
   );
 
