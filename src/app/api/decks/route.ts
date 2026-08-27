@@ -96,7 +96,14 @@ export async function POST(req: Request) {
       strategy?: string;
       cards?: DeckCardEntry[];
       suggestions?: DeckSuggestion[];
+      game?: string;
+      format?: string;
     };
+    const deckGame = body.game === "mtg" ? "mtg" : null;
+    const deckFormat =
+      deckGame === "mtg" && (body.format === "commander" || body.format === "standard")
+        ? body.format
+        : null;
     if (!body.name?.trim() || !Array.isArray(body.cards) || body.cards.length === 0) {
       return NextResponse.json({ error: "Name and cards are required" }, { status: 400 });
     }
@@ -138,11 +145,28 @@ export async function POST(req: Request) {
         strategy: body.strategy ?? null,
         cards: body.cards,
         suggestions,
+        // Only when stated: a Pokémon save omits both so the insert still
+        // works on a pre-073 database (the column default covers game).
+        ...(deckGame ? { game: deckGame } : {}),
+        ...(deckFormat ? { format: deckFormat } : {}),
       })
       .select()
       .single();
-    // Graceful pre-migration fallback: save without suggestions rather than
-    // failing the whole deck save if migration 006 hasn't been run yet.
+    // Graceful pre-migration fallbacks: save without the newer columns
+    // rather than failing the whole deck save.
+    if (error && /\bgame\b|\bformat\b/i.test(error.message ?? "")) {
+      ({ data, error } = await supabase
+        .from("decks")
+        .insert({
+          user_id: user.id,
+          name: body.name.trim(),
+          strategy: body.strategy ?? null,
+          cards: body.cards,
+          suggestions,
+        })
+        .select()
+        .single());
+    }
     if (error && /suggestions/i.test(error.message ?? "")) {
       ({ data, error } = await supabase
         .from("decks")

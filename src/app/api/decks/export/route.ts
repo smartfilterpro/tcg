@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { deckToLiveText } from "@/lib/deckExport";
+import { deckToLiveText, deckToArenaText } from "@/lib/deckExport";
 import { errorJson } from "@/lib/apiError";
 import type { DeckCardEntry } from "@/lib/types";
 
@@ -12,7 +12,11 @@ import type { DeckCardEntry } from "@/lib/types";
 export async function POST(req: Request) {
   try {
     await requireUser();
-    const body = (await req.json()) as { cards?: DeckCardEntry[] };
+    const body = (await req.json()) as {
+      cards?: DeckCardEntry[];
+      game?: string;
+      format?: string;
+    };
     const cards = (body.cards ?? []).filter(
       (c) =>
         c &&
@@ -23,8 +27,14 @@ export async function POST(req: Request) {
         c.quantity > 0 &&
         c.quantity <= 60
     );
-    if (cards.length === 0 || cards.length > 100) {
+    if (cards.length === 0 || cards.length > 110) {
       return NextResponse.json({ error: "No deck to export." }, { status: 400 });
+    }
+    // Magic decks export in Arena's format — plain "quantity name" lines,
+    // no set-code lookups needed. Pokémon keeps the Live pipeline.
+    if (body.game === "mtg" || cards.some((c) => c.card_id?.startsWith("scry-"))) {
+      const { text, warnings } = deckToArenaText(cards, body.format ?? null);
+      return NextResponse.json({ text, warnings });
     }
     const admin = createAdminClient();
     const { text, warnings } = await deckToLiveText(admin, cards);

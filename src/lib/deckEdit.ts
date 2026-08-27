@@ -23,6 +23,7 @@
 
 import type { DeckEntry } from "@/lib/deckLegality";
 import { checkDeck, isBasicEnergy } from "@/lib/deckLegality";
+import { checkMtgDeck, isBasicLand, type MtgFormat } from "@/lib/mtgDeckLegality";
 
 export interface DeckEditChange {
   /** Card name, exactly as it should read in the deck. */
@@ -132,11 +133,20 @@ function guessCategory(name: string): DeckEntry["category"] {
   return "pokemon";
 }
 
-/** The catalogue's supertype in the vocabulary a deck row uses. */
+/** The catalogue's supertype in the vocabulary a deck row uses. For MTG
+ *  rows the supertype holds the card's primary type ("Creature", "Artifact
+ *  Creature", "Land", "Instant"...). */
 export function categoryFromSupertype(
-  supertype: string | null | undefined
+  supertype: string | null | undefined,
+  game?: "pokemon" | "mtg"
 ): DeckEntry["category"] | undefined {
   const s = (supertype ?? "").trim().toLowerCase();
+  if (game === "mtg") {
+    if (!s) return undefined;
+    if (/land/.test(s)) return "land";
+    if (/creature/.test(s)) return "creature";
+    return "spell";
+  }
   // "Pokémon" with the accent, "Pokemon" without — both arrive, depending
   // on which source imported the row.
   if (s.startsWith("pok")) return "pokemon";
@@ -175,11 +185,29 @@ export interface EditValidation {
  *  old behaviour, and the only half worth keeping. */
 export function validateEdit(
   cards: DeckEntry[],
-  ownedByName: Map<string, number>
+  ownedByName: Map<string, number>,
+  opts?: { game?: "pokemon" | "mtg"; mtgFormat?: MtgFormat }
 ): EditValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
 
+  if (opts?.game === "mtg") {
+    // Same philosophy, Magic's rules: copy limits refuse, the deck's total
+    // only warns — people build over several sittings, and refusing a good
+    // edit because the deck sits at 97 cards would make the assistant
+    // useless mid-build.
+    const format = opts.mtgFormat ?? "commander";
+    for (const violation of checkMtgDeck(
+      cards.map((c) => ({ name: c.name, quantity: c.quantity, category: c.category ?? "spell" })),
+      format
+    )) {
+      if (/exactly \d+ cards|main board is/.test(violation.message)) {
+        warnings.push(violation.message);
+      } else {
+        errors.push(violation.message);
+      }
+    }
+  } else {
   for (const violation of checkDeck(cards)) {
     // Size is a warning, not an error: the editor lets a deck be saved at
     // any size on purpose — people build over several sittings — and
@@ -187,6 +215,7 @@ export function validateEdit(
     // the assistant useless mid-build.
     if (violation.rule === "size") warnings.push(violation.message);
     else errors.push(violation.message);
+  }
   }
 
   for (const short of missingCopies(cards, ownedByName)) {
@@ -222,7 +251,9 @@ export function missingCopies(
   }
   const out: MissingCopies[] = [];
   for (const [key, { need, name }] of wanted) {
-    if (isBasicEnergy(key)) continue;
+    // Both games' "assume an endless supply" cards: basic energy and basic
+    // lands. Nobody scans thirty-eight Mountains.
+    if (isBasicEnergy(key) || isBasicLand(key)) continue;
     const owned = ownedByName.get(key) ?? 0;
     if (owned < need) out.push({ name: name || titleCase(key), need, owned });
   }

@@ -1241,7 +1241,11 @@ function SharedDeckList({ cards }: { cards: DeckCardEntry[] }) {
     trainer: [],
     energy: [],
   };
-  for (const c of cards) (groups[c.category] ?? groups.trainer).push(c);
+  // MTG categories (commander/creature/spell/land) fall into the trainer
+  // bucket here — this Pokémon-shaped grouping renders shared decks of
+  // either game without crashing; a Magic-native layout can come later.
+  for (const c of cards)
+    (groups[c.category as "pokemon" | "trainer" | "energy"] ?? groups.trainer).push(c);
   return (
     <div className="mt-3 space-y-4">
       {(["pokemon", "trainer", "energy"] as const).map(

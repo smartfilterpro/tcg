@@ -337,7 +337,7 @@ function ManualBuilder({
               <p className="text-xs text-slate-400">Tap cards below to add them.</p>
             ) : (
               <ul className="space-y-1">
-                {(["pokemon", "trainer", "energy"] as const).map((cat) =>
+                {(["commander", "pokemon", "creature", "trainer", "spell", "energy", "land"] as const).map((cat) =>
                   entries
                     .filter((c) => c.category === cat)
                     .map((c) => (
@@ -822,6 +822,9 @@ interface BuiltDeck {
   strategy: string;
   cards: DeckCardEntry[];
   missing_suggestions: UpgradeSuggestion[];
+  /** Stamped by the server on Magic builds, so saving and exporting know. */
+  game?: "pokemon" | "mtg";
+  format?: string | null;
 }
 
 /** Wishlist of unowned cards that would strengthen the deck. */
@@ -991,6 +994,13 @@ const FORMAT_NOTES: Record<string, string> = {
     "📚 Expanded: the bigger official format — recent sets plus older ones going back to Black & White (2011). More of your collection is legal here.",
 };
 
+const MTG_FORMAT_NOTES: Record<string, string> = {
+  commander:
+    "🪄 Commander: 100 cards, one of everything (basic lands excepted), led by a legendary creature whose colors set the deck's — the way most kitchen-table Magic is played.",
+  standard:
+    "🏆 Standard: 60 cards, up to 4 copies each, recent sets only — what official Magic tournaments play.",
+};
+
 /** The in-flight build's ticket, persisted so a page refresh (or Safari
  *  reloading a backgrounded tab) can resume watching the same build. */
 const JOB_STORAGE_KEY = "pokedeck-build-job";
@@ -1006,6 +1016,9 @@ export default function DecksPage() {
   const [styleNotes, setStyleNotes] = useState("");
   const [styleSaved, setStyleSaved] = useState(false);
   const [prompt, setPrompt] = useState("");
+  // Which game the AI builder is building for. The manual builder below
+  // stays Pokémon-shaped for now; Magic decks come from this builder.
+  const [buildGame, setBuildGame] = useState<"pokemon" | "mtg">("pokemon");
   const [format, setFormat] = useState("any");
   // "collection" builds from the binder; "family" from the whole
   // household's combined cards; "all" is the dream deck — any real card,
@@ -1215,7 +1228,8 @@ export default function DecksPage() {
           prompt,
           format,
           pool: poolMode,
-          ...(archetypeSeed ? { archetype: archetypeSeed } : {}),
+          game: buildGame,
+          ...(archetypeSeed && buildGame === "pokemon" ? { archetype: archetypeSeed } : {}),
         }),
       });
       const start = await safeJson(res);
@@ -1236,12 +1250,24 @@ export default function DecksPage() {
    *  "<key>:err". Cleared after a moment so the label returns. */
   const [liveCopied, setLiveCopied] = useState<string | null>(null);
 
-  async function copyForLive(cards: DeckCardEntry[], key: string) {
+  /** True when a deck (saved or just built) is a Magic deck. */
+  const isMtgDeck = (d: { game?: string | null; cards?: DeckCardEntry[] | null }) =>
+    d.game === "mtg" || (d.cards ?? []).some((c) => c.card_id?.startsWith("scry-"));
+
+  async function copyForLive(
+    cards: DeckCardEntry[],
+    key: string,
+    opts?: { game?: "pokemon" | "mtg"; format?: string | null }
+  ) {
     try {
       const res = await fetch("/api/decks/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cards }),
+        body: JSON.stringify({
+          cards,
+          ...(opts?.game ? { game: opts.game } : {}),
+          ...(opts?.format ? { format: opts.format } : {}),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Export failed");
@@ -1254,14 +1280,14 @@ export default function DecksPage() {
     setTimeout(() => setLiveCopied(null), 4000);
   }
 
-  const liveLabel = (key: string) =>
+  const liveLabel = (key: string, mtg = false) =>
     liveCopied === `${key}:ok`
-      ? "Copied ✓ — paste in TCG Live"
+      ? `Copied ✓ — paste in ${mtg ? "MTG Arena" : "TCG Live"}`
       : liveCopied?.startsWith(`${key}:warn:`)
         ? `Copied ✓ — ${liveCopied.split(":")[2]} card(s) may need picking by hand`
         : liveCopied === `${key}:err`
           ? "Couldn't copy — try again"
-          : "📋 Copy for TCG Live";
+          : `📋 Copy for ${mtg ? "MTG Arena" : "TCG Live"}`;
 
   async function saveDeck() {
     if (!built) return;
@@ -1273,6 +1299,7 @@ export default function DecksPage() {
         strategy: built.strategy,
         cards: built.cards,
         suggestions: built.missing_suggestions ?? [],
+        ...(isMtgDeck(built) ? { game: "mtg", format: built.format ?? "commander" } : {}),
       }),
     });
     const json = await res.json();
@@ -1329,10 +1356,17 @@ export default function DecksPage() {
     setViewing((v) => (v && v.id === id ? fresh : v));
   }
 
+  // Both games' section buckets — a deck only ever fills one game's three
+  // (or four). Sections render only when non-empty, so the same DeckList
+  // serves Pokémon and Magic decks without knowing which it holds.
   const groupCards = (cards: DeckCardEntry[]) => ({
+    commander: cards.filter((c) => c.category === "commander"),
     pokemon: cards.filter((c) => c.category === "pokemon"),
+    creature: cards.filter((c) => c.category === "creature"),
     trainer: cards.filter((c) => c.category === "trainer"),
+    spell: cards.filter((c) => c.category === "spell"),
     energy: cards.filter((c) => c.category === "energy"),
+    land: cards.filter((c) => c.category === "land"),
   });
 
   // Someone else's deck opens in the same viewer, minus everything that
@@ -1375,8 +1409,9 @@ export default function DecksPage() {
       <div className="card-panel p-4">
         <h2 className="font-semibold">🤖 Build a deck with {AI_NAME}</h2>
         <p className="mb-2 mt-0.5 text-xs text-slate-500">
-          {AI_NAME} looks at your whole collection and builds a legal 60-card deck. Basic energy
-          is assumed — no need to scan energy cards. Can take a minute.
+          {buildGame === "mtg"
+            ? `${AI_NAME} looks at your Magic collection and builds a legal ${format === "standard" ? "60-card Standard" : "100-card Commander"} deck. Basic lands are assumed — no need to scan them. Can take a minute.`
+            : `${AI_NAME} looks at your whole collection and builds a legal 60-card deck. Basic energy is assumed — no need to scan energy cards. Can take a minute.`}
         </p>
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
@@ -1387,6 +1422,21 @@ export default function DecksPage() {
             onKeyDown={(e) => e.key === "Enter" && !building && build()}
           />
           <div className="flex shrink-0 gap-2">
+            <select
+              className="input w-auto text-sm"
+              title="Which game to build a deck for"
+              value={buildGame}
+              onChange={(e) => {
+                const g = e.target.value === "mtg" ? "mtg" : "pokemon";
+                setBuildGame(g);
+                // The two games share no formats — swap to each game's default.
+                setFormat(g === "mtg" ? "commander" : "any");
+                if (g === "mtg") setArchetypeSeed(null);
+              }}
+            >
+              <option value="pokemon">⚡ Pokémon</option>
+              <option value="mtg">🪄 Magic</option>
+            </select>
             <select
               className="input w-auto text-sm"
               title="Card pool — your binder, your whole family's cards, or every card ever printed (with a buy list)"
@@ -1407,9 +1457,18 @@ export default function DecksPage() {
               value={format}
               onChange={(e) => setFormat(e.target.value)}
             >
-              <option value="any">🃏 Anything goes</option>
-              <option value="standard">🏆 Standard</option>
-              <option value="expanded">📚 Expanded</option>
+              {buildGame === "mtg" ? (
+                <>
+                  <option value="commander">🪄 Commander</option>
+                  <option value="standard">🏆 Standard</option>
+                </>
+              ) : (
+                <>
+                  <option value="any">🃏 Anything goes</option>
+                  <option value="standard">🏆 Standard</option>
+                  <option value="expanded">📚 Expanded</option>
+                </>
+              )}
             </select>
             {credits.empty ? (
               <CreditLock plan={credits.credits?.plan} label="Out of credits to build" />
@@ -1437,7 +1496,7 @@ export default function DecksPage() {
               another member&apos;s copies, and the strategy says when it does.{" "}
             </>
           )}
-          {FORMAT_NOTES[format] ?? ""}
+          {(buildGame === "mtg" ? MTG_FORMAT_NOTES[format] : FORMAT_NOTES[format]) ?? ""}
         </p>
         {building && (
           <div className="mt-2 flex items-center gap-2">
@@ -1473,9 +1532,14 @@ export default function DecksPage() {
                 <button
                   className="btn-secondary text-sm"
                   title="Copy this list in the official client's import format"
-                  onClick={() => copyForLive(built.cards, "built")}
+                  onClick={() =>
+                    copyForLive(built.cards, "built", {
+                      game: isMtgDeck(built) ? "mtg" : "pokemon",
+                      format: built.format ?? null,
+                    })
+                  }
                 >
-                  {liveLabel("built")}
+                  {liveLabel("built", isMtgDeck(built))}
                 </button>
                 <button className="btn-secondary text-sm" onClick={() => setBuilt(null)}>
                   Discard
@@ -1542,6 +1606,11 @@ export default function DecksPage() {
               >
                 <div className="font-bold">
                   {deck.name}
+                  {isMtgDeck(deck) && (
+                    <span className="ml-2 chip bg-purple-100 text-purple-700">
+                      🪄 {deck.format === "standard" ? "Magic · Standard" : "Magic · Commander"}
+                    </span>
+                  )}
                   {deck.shared && (
                     <span className="ml-2 chip bg-green-100 text-green-700">
                       {deck.share_scope === "friends" ? "🤝 Pals only" : "Shared"}
@@ -1607,9 +1676,14 @@ export default function DecksPage() {
                 <button
                   className="btn mt-1.5 text-sm text-poke-blue hover:bg-poke-blue/10"
                   title="Copy this list in the official client's import format"
-                  onClick={() => copyForLive(viewing.cards ?? [], viewing.id)}
+                  onClick={() =>
+                    copyForLive(viewing.cards ?? [], viewing.id, {
+                      game: isMtgDeck(viewing) ? "mtg" : "pokemon",
+                      format: viewing.format ?? null,
+                    })
+                  }
                 >
-                  {liveLabel(viewing.id)}
+                  {liveLabel(viewing.id, isMtgDeck(viewing))}
                 </button>
               </div>
             ) : (
@@ -1653,9 +1727,14 @@ export default function DecksPage() {
               <button
                 className="btn text-sm text-poke-blue hover:bg-poke-blue/10"
                 title="Copy this list in the official client's import format"
-                onClick={() => copyForLive(viewing.cards ?? [], viewing.id)}
+                onClick={() =>
+                  copyForLive(viewing.cards ?? [], viewing.id, {
+                    game: isMtgDeck(viewing) ? "mtg" : "pokemon",
+                    format: viewing.format ?? null,
+                  })
+                }
               >
-                {liveLabel(viewing.id)}
+                {liveLabel(viewing.id, isMtgDeck(viewing))}
               </button>
               <button
                 className="btn text-sm text-red-600 hover:bg-red-50"
@@ -1724,7 +1803,7 @@ export default function DecksPage() {
     const groups = groupCards(cards);
     return (
       <div className="mt-3 space-y-4">
-        {(["pokemon", "trainer", "energy"] as const).map(
+        {(["commander", "pokemon", "creature", "trainer", "spell", "energy", "land"] as const).map(
           (cat) =>
             groups[cat].length > 0 && (
               <div key={cat}>
