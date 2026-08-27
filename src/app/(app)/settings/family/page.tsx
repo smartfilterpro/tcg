@@ -74,13 +74,15 @@ export default function FamilyPage() {
   /** Which pending invitation was just copied, so only that row says so. */
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [peeking, setPeeking] = useState<{ id: string; name: string } | null>(null);
-  /** What the household's cards are worth, together and per member. The
-   *  family page is where that number belongs: it's a statement about the
-   *  PLAN, not about whichever binder happens to be open. Best-effort —
-   *  absent, the page reads exactly as it always did. */
+  /** What the household owns, together and per member — cards and sealed
+   *  product. The family page is where that number belongs: it's a
+   *  statement about the PLAN, not about whichever binder happens to be
+   *  open. Best-effort — absent, the page reads exactly as it always did. */
   const [value, setValue] = useState<{
     total: number;
-    members: Array<{ id: string; name: string; value: number }>;
+    cardsTotal: number;
+    sealedTotal: number;
+    members: Array<{ id: string; name: string; value: number; cards: number; sealed: number }>;
   } | null>(null);
 
   const load = useCallback(async () => {
@@ -110,7 +112,14 @@ export default function FamilyPage() {
     fetch("/api/family/value")
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (j?.family) setValue({ total: j.total, members: j.members ?? [] });
+        if (j?.family) {
+          setValue({
+            total: j.total,
+            cardsTotal: j.cardsTotal ?? j.total,
+            sealedTotal: j.sealedTotal ?? 0,
+            members: j.members ?? [],
+          });
+        }
       })
       .catch(() => {});
   }, [load, loadInvites]);
@@ -243,10 +252,11 @@ export default function FamilyPage() {
             {g.poolGrant.toLocaleString()} shared credits a month
           </p>
           {/* The whole house, one number — every member's binder, both
-              games, same per-item arithmetic as the collection page. */}
+              games, sealed boxes included, same per-item arithmetic as
+              the collection and sealed tabs. */}
           {value && (
             <p className="m-0 mt-1 text-[14.5px] text-brand-ink3">
-              Cards worth{" "}
+              Worth{" "}
               <b className="text-brand-ink">
                 ~$
                 {value.total.toLocaleString(undefined, {
@@ -255,6 +265,13 @@ export default function FamilyPage() {
                 })}
               </b>{" "}
               together
+              {value.sealedTotal > 0 && (
+                <span className="text-brand-ink4">
+                  {" "}
+                  (${Math.round(value.cardsTotal).toLocaleString()} cards + $
+                  {Math.round(value.sealedTotal).toLocaleString()} sealed)
+                </span>
+              )}
             </p>
           )}
         </div>
@@ -291,12 +308,14 @@ export default function FamilyPage() {
                   <div className="truncate text-sm font-medium">{m.name}</div>
                   <div className="truncate text-xs text-brand-ink4">{m.email}</div>
                   {(() => {
-                    const v = value?.members.find((x) => x.id === m.userId)?.value;
-                    return v != null && v > 0 ? (
+                    const mv = value?.members.find((x) => x.id === m.userId);
+                    if (!mv || mv.value <= 0) return null;
+                    return (
                       <div className="text-xs text-brand-ink4">
-                        ≈ ${Math.round(v).toLocaleString()} in cards
+                        ≈ ${Math.round(mv.value).toLocaleString()}
+                        {mv.sealed > 0 ? " incl. sealed" : " in cards"}
                       </div>
-                    ) : null;
+                    );
                   })()}
                   {m.userId !== g.meId && (
                     <button

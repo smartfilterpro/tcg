@@ -3,16 +3,18 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { itemPrice } from "@/lib/types";
+import { sealedItemPrice } from "@/lib/sealed";
 import { errorJson } from "@/lib/apiError";
 
-/** GET: what the whole household's cards are worth, together and per
- *  member. One number a family plan keeps asking for and nobody wants to
- *  compute by switching binders and adding on paper.
+/** GET: what the whole household owns, together and per member — cards
+ *  AND sealed product. One number a family plan keeps asking for and
+ *  nobody wants to compute by switching binders and adding on paper.
  *
- *  Same arithmetic as every other total in the app — itemPrice: the
- *  owner's override wins, then the finish's own price, then the card's
- *  headline. Card values only; sealed product is per-account and has no
- *  family view, so it stays out rather than being half-counted.
+ *  Same arithmetic as every other total in the app: itemPrice for cards
+ *  (override, then the finish's price, then the headline) and
+ *  sealedItemPrice for boxes (override, then market). Sealed rides along
+ *  as its own figure and inside the total, so the page can say both
+ *  "worth $X together" and how it splits.
  *
  *  The service role reads the pool: family_members is deliberately
  *  unreadable by clients, and membership itself is the authorization —
@@ -78,6 +80,48 @@ export async function GET() {
       byMember.set(r.user_id, (byMember.get(r.user_id) ?? 0) + each * (r.quantity ?? 0));
     }
 
+    // Sealed product, per member. Its own map so the page can state the
+    // split. Best-effort behind a try: the sealed tables arrive with a
+    // later migration than families did, and a household without them
+    // still deserves its card total.
+    const sealedByMember = new Map<string, number>();
+    try {
+      type SealedRow = {
+        user_id: string;
+        quantity: number;
+        price_override: number | null;
+        product:
+          | { market_price: number | null }
+          | Array<{ market_price: number | null }>
+          | null;
+      };
+      const { data: sealedRows, error: sealedErr } = await fetchAllRows<SealedRow>(() =>
+        admin
+          .from("sealed_items")
+          .select("user_id, quantity, price_override, product:sealed_products(market_price)")
+          .in("user_id", ids)
+          .order("user_id")
+          .order("id") as unknown as {
+          range: (from: number, to: number) => PromiseLike<{
+            data: SealedRow[] | null;
+            error: { message: string } | null;
+          }>;
+        }
+      );
+      if (sealedErr) throw sealedErr;
+      for (const r of sealedRows ?? []) {
+        const product = Array.isArray(r.product) ? r.product[0] : r.product;
+        const each = sealedItemPrice({ price_override: r.price_override, product });
+        if (each == null) continue;
+        sealedByMember.set(
+          r.user_id,
+          (sealedByMember.get(r.user_id) ?? 0) + each * (r.quantity ?? 0)
+        );
+      }
+    } catch {
+      // Pre-sealed-migration: cards-only totals, still correct.
+    }
+
     const { data: profiles } = await admin
       .from("profiles")
       .select("id, display_name, email")
@@ -90,16 +134,31 @@ export async function GET() {
       ])
     );
 
+    const round = (n: number) => Math.round(n * 100) / 100;
     const perMember = ids
-      .map((id) => ({
-        id,
-        name: nameOf.get(id) ?? "A member",
-        value: Math.round((byMember.get(id) ?? 0) * 100) / 100,
-      }))
+      .map((id) => {
+        const cards = round(byMember.get(id) ?? 0);
+        const sealed = round(sealedByMember.get(id) ?? 0);
+        return {
+          id,
+          name: nameOf.get(id) ?? "A member",
+          cards,
+          sealed,
+          value: round(cards + sealed),
+        };
+      })
       .sort((a, b) => b.value - a.value);
-    const total = Math.round(perMember.reduce((s, m) => s + m.value, 0) * 100) / 100;
+    const cardsTotal = round(perMember.reduce((s, m) => s + m.cards, 0));
+    const sealedTotal = round(perMember.reduce((s, m) => s + m.sealed, 0));
+    const total = round(cardsTotal + sealedTotal);
 
-    return NextResponse.json({ family: true, total, members: perMember });
+    return NextResponse.json({
+      family: true,
+      total,
+      cardsTotal,
+      sealedTotal,
+      members: perMember,
+    });
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
