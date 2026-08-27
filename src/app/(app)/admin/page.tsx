@@ -1391,6 +1391,10 @@ export default function AdminPage() {
             <SiteVisibilityPanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">📨 Newsletter</h2>
+            <NewsletterAdminPanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">📦 Sealed product check</h2>
             <SealedProbePanel />
           </div>
@@ -4805,6 +4809,135 @@ interface AdminMetaDeck {
   notes: string | null;
   core_cards: Array<{ name: string; count: number }>;
   updated_at: string;
+}
+
+/** The newsletter desk: DeckAI drafts from the admin's notes, the admin
+ *  edits, tests on themselves, and only then sends — generation and
+ *  sending are separate buttons with human eyes required between them.
+ *  Recipients are exclusively members who opted in from their settings. */
+function NewsletterAdminPanel() {
+  const [info, setInfo] = useState<{ subscribers: number; migrated: boolean; emailReady: boolean } | null>(null);
+  const [notes, setNotes] = useState("");
+  const [subject, setSubject] = useState("");
+  const [bodyText, setBodyText] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/newsletter")
+      .then((r) => r.json())
+      .then((j) => setInfo(j))
+      .catch(() => {});
+  }, []);
+
+  async function act(action: "draft" | "test" | "send") {
+    if (busy) return;
+    if (action === "send" && !confirm(`Send this issue to ${info?.subscribers ?? 0} subscribers?`)) return;
+    setBusy(action);
+    setStatus(null);
+    try {
+      const res = await fetch("/api/admin/newsletter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          action === "draft" ? { action, notes } : { action, subject, body: bodyText }
+        ),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || "Failed");
+      if (action === "draft") {
+        setSubject(j.subject ?? "");
+        setBodyText(j.body ?? "");
+        setStatus({ ok: true, text: "Draft ready — edit it below, then test before sending." });
+      } else if (action === "test") {
+        setStatus({ ok: true, text: `Test sent to ${j.to}. Check the inbox (and spam) first.` });
+      } else {
+        setStatus({
+          ok: j.sent === j.total,
+          text:
+            `Sent to ${j.sent} of ${j.total} subscribers.` +
+            ((j.failures ?? []).length ? ` Failures: ${j.failures.join(" · ")}` : ""),
+        });
+      }
+    } catch (e) {
+      setStatus({ ok: false, text: e instanceof Error ? e.message : "Failed" });
+    }
+    setBusy(null);
+  }
+
+  return (
+    <div className="space-y-2 text-sm">
+      <p className="m-0 text-xs leading-[1.6] text-brand-ink3">
+        Goes only to members who ticked the box in their Account settings
+        {info && <b> — {info.subscribers} subscriber{info.subscribers === 1 ? "" : "s"}</b>}.
+        Write notes on what to announce, let {"DeckAI"} draft it, edit, send yourself a test,
+        then send for real.
+      </p>
+      {info && !info.migrated && (
+        <p className="m-0 text-xs text-brand-negative">Run migration 076 to enable this.</p>
+      )}
+      {info && !info.emailReady && (
+        <p className="m-0 text-xs text-brand-negative">
+          SMTP isn&apos;t configured — set SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS /
+          SMTP_FROM in Railway. Drafting works without it.
+        </p>
+      )}
+      <textarea
+        className="input h-20 w-full text-xs"
+        placeholder={"Notes for this issue — e.g.\n- Magic: The Gathering support is live\n- new Sets page shows completion\n- affiliate buy links"}
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+      />
+      <button
+        className="btn-secondary text-sm"
+        disabled={busy != null || !notes.trim()}
+        onClick={() => act("draft")}
+      >
+        {busy === "draft" ? "Drafting…" : "🤖 Draft with DeckAI"}
+      </button>
+      <input
+        className="input w-full text-sm"
+        placeholder="Subject"
+        value={subject}
+        onChange={(e) => setSubject(e.target.value)}
+      />
+      <textarea
+        className="input h-48 w-full font-mono text-xs"
+        placeholder="Body (plain text — the unsubscribe footer is added automatically)"
+        value={bodyText}
+        onChange={(e) => setBodyText(e.target.value)}
+      />
+      <div className="flex flex-wrap gap-2">
+        <button
+          className="btn-secondary text-sm"
+          disabled={busy != null || !subject.trim() || !bodyText.trim() || !info?.emailReady}
+          onClick={() => act("test")}
+        >
+          {busy === "test" ? "Sending…" : "Send me a test"}
+        </button>
+        <button
+          className="btn-primary text-sm"
+          disabled={
+            busy != null ||
+            !subject.trim() ||
+            !bodyText.trim() ||
+            !info?.emailReady ||
+            (info?.subscribers ?? 0) === 0
+          }
+          onClick={() => act("send")}
+        >
+          {busy === "send"
+            ? "Sending…"
+            : `Send to ${info?.subscribers ?? 0} subscriber${(info?.subscribers ?? 0) === 1 ? "" : "s"}`}
+        </button>
+      </div>
+      {status && (
+        <p className={`m-0 text-xs ${status.ok ? "text-green-700" : "text-brand-negative"}`}>
+          {status.text}
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** The launch button. One flag drives /robots.txt AND the meta noindex on

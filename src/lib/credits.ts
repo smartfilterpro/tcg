@@ -40,7 +40,7 @@ export const MONTHLY_GRANT: Record<string, number> = {
 /** Endpoints that warm shared caches (card text read during a battle or deck
  *  load) are infrastructure, not a user action — the result is stored on the
  *  card row for everyone. Nobody's meter should tick for those. */
-const UNMETERED_ENDPOINTS = new Set(["card_fx"]);
+const UNMETERED_ENDPOINTS = new Set(["card_fx", "newsletter"]);
 
 export function isMetered(endpoint: string): boolean {
   return !UNMETERED_ENDPOINTS.has(endpoint);

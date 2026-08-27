@@ -116,7 +116,8 @@ export async function logAiUsage(
     | "card_fx"
     // The mail-in scanning service. Never metered against a member's
     // credits — the admin runs it and the job carries its own bill.
-    | "bulk_scan",
+    | "bulk_scan"
+    | "newsletter",
   model: string,
   usage:
     | {

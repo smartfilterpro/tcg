@@ -39,6 +39,58 @@ const FIELD =
   "w-full rounded-[11px] border border-brand-line-strong px-3 py-2 text-sm outline-none focus:border-brand-accent";
 const PILL =
   "whitespace-nowrap rounded-full bg-brand-ink px-4 py-2 text-[13px] font-medium text-brand-canvas hover:bg-brand-ink2 disabled:opacity-50";
+/** Opt-IN, never assumed: the box arrives unticked for everyone, and every
+ *  email sent carries a one-click way back out of it. */
+function NewsletterPanel() {
+  const [optIn, setOptIn] = useState<boolean | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/newsletter")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setOptIn(j?.optIn === true))
+      .catch(() => setOptIn(false));
+  }, []);
+
+  async function flip(next: boolean) {
+    setOptIn(next);
+    setNote(null);
+    try {
+      const res = await fetch("/api/newsletter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ optIn: next }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || "Couldn't save");
+      setNote(next ? "Subscribed ✓" : "Unsubscribed ✓");
+    } catch (e) {
+      setOptIn(!next);
+      setNote(e instanceof Error ? e.message : "Couldn't save");
+    }
+  }
+
+  return (
+    <div className={PANEL}>
+      <div className={`${TITLE} mb-1`}>Newsletter</div>
+      <p className="mb-2.5 text-[13px] leading-[1.55] text-brand-ink2">
+        An occasional email about what&apos;s new in the app — new features, new games, that kind
+        of thing. Off unless you turn it on, and every issue has a one-click unsubscribe.
+      </p>
+      <label className="flex items-center gap-2 text-[14px]">
+        <input
+          type="checkbox"
+          disabled={optIn === null}
+          checked={optIn === true}
+          onChange={(e) => flip(e.target.checked)}
+        />
+        <span>Email me the newsletter</span>
+        {note && <span className="text-[12.5px] text-brand-ink4">{note}</span>}
+      </label>
+    </div>
+  );
+}
+
 const PILL_QUIET =
   "whitespace-nowrap rounded-full border border-brand-line-strong bg-white px-4 py-2 text-[13px] font-medium hover:bg-brand-sunken disabled:opacity-50";
 
@@ -455,6 +507,9 @@ export default function AccountPage() {
           </div>
         </div>
       )}
+
+      {/* ---- newsletter ---- */}
+      <NewsletterPanel />
 
       {/* ---- sign out ---- */}
       {/* Until now the only way out of the app was an icon in the header,
