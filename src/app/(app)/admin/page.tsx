@@ -1387,6 +1387,10 @@ export default function AdminPage() {
             <MetaDecksPanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🌐 Search engines</h2>
+            <SiteVisibilityPanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">📦 Sealed product check</h2>
             <SealedProbePanel />
           </div>
@@ -4799,6 +4803,71 @@ interface AdminMetaDeck {
   notes: string | null;
   core_cards: Array<{ name: string; count: number }>;
   updated_at: string;
+}
+
+/** The launch button. One flag drives /robots.txt AND the meta noindex on
+ *  every page, so flipping it here changes both signals together — there is
+ *  no code change and no deploy in the loop. */
+function SiteVisibilityPanel() {
+  const [indexable, setIndexable] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/site-visibility")
+      .then((r) => r.json())
+      .then((j) => setIndexable(j.indexable === true))
+      .catch(() => setError("Couldn't read the current setting."));
+  }, []);
+
+  async function flip(next: boolean) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/site-visibility", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ indexable: next }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't save");
+      setIndexable(json.indexable === true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="space-y-2 text-sm">
+      {indexable === null && !error && <p className="text-slate-400">Loading…</p>}
+      {indexable !== null && (
+        <>
+          <p className={indexable ? "text-green-700" : "text-slate-600"}>
+            {indexable
+              ? "Visible: robots.txt welcomes crawlers and pages carry no noindex tag."
+              : "Hidden: robots.txt turns every crawler away and every page says noindex."}
+          </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={indexable}
+              disabled={busy}
+              onChange={(e) => flip(e.target.checked)}
+            />
+            <span>Let search engines crawl and index the site</span>
+          </label>
+          <p className="text-xs text-slate-400">
+            Takes effect within a minute (the flag is cached per server). Going visible starts a
+            crawl within days; going hidden again removes results only after crawlers revisit, so
+            treat switching ON as the launch decision it is.
+          </p>
+        </>
+      )}
+      {error && <p className="text-red-600">{error}</p>}
+    </div>
+  );
 }
 
 function MetaDecksPanel() {

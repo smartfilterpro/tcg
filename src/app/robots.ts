@@ -1,17 +1,15 @@
 import type { MetadataRoute } from "next";
+import { isSiteIndexable } from "@/lib/siteFlags";
 
-// PRE-LAUNCH: the site is hidden from search engines on purpose — the
-// owner wants the rebrand and the two-game launch settled before anything
-// gets indexed. Served at /robots.txt.
-//
-// TO LAUNCH: change this to `allow: "/"` (and drop the noindex from the
-// root layout's metadata.robots — BOTH must flip together, or the site
-// stays invisible with a welcoming robots.txt).
-export default function robots(): MetadataRoute.Robots {
+// Served at /robots.txt. Driven by the admin page's "visible to search
+// engines" switch — the same flag also controls the meta noindex in the
+// root layout, so one flip changes both signals together. Until the owner
+// flips it, every crawler is turned away.
+export const dynamic = "force-dynamic";
+
+export default async function robots(): Promise<MetadataRoute.Robots> {
+  const indexable = await isSiteIndexable();
   return {
-    rules: {
-      userAgent: "*",
-      disallow: "/",
-    },
+    rules: indexable ? { userAgent: "*", allow: "/" } : { userAgent: "*", disallow: "/" },
   };
 }
