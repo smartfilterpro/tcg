@@ -163,7 +163,11 @@ export async function textBatch(
   }
   const cursor = rows[rows.length - 1].id;
 
-  let candidates = rows.filter((r) => r.battle_data == null && !r.id.startsWith("custom-"));
+  // scry- (Magic) rows are excluded the same way customs are: their text
+  // comes from Scryfall, not from a paid read of the picture.
+  let candidates = rows.filter(
+    (r) => r.battle_data == null && !r.id.startsWith("custom-") && !r.id.startsWith("scry-")
+  );
 
   if (opts.ownedOnly && candidates.length > 0) {
     // One query per window rather than the whole collection: we only care

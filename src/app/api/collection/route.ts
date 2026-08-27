@@ -13,6 +13,7 @@ import {
   type CardSummary,
   type CollectionItem,
   CARD_SUMMARY_COLUMNS,
+  CARD_SUMMARY_COLUMNS_LEGACY,
 } from "@/lib/types";
 import { patternPrintingFor } from "@/lib/cardPrinting";
 import { fetchAllRows } from "@/lib/fetchAll";
@@ -25,7 +26,7 @@ export async function GET() {
     const supabase = await createClient();
     // Paged: Supabase caps single responses at 1000 rows, which silently
     // hid cards from big collections (missing search results).
-    const { data, error } = await fetchAllRows(() =>
+    let { data, error } = await fetchAllRows(() =>
       supabase
         .from("collection_items")
         .select(`*, card:cards(${CARD_SUMMARY_COLUMNS})`)
@@ -33,6 +34,18 @@ export async function GET() {
         .order("created_at", { ascending: false })
         .order("id")
     );
+    // Pre-072 fallback: the game column doesn't exist yet. The main page
+    // must render regardless — absent game means Pokémon everywhere.
+    if (error && /game/.test((error as { message?: string }).message ?? "")) {
+      ({ data, error } = await fetchAllRows(() =>
+        supabase
+          .from("collection_items")
+          .select(`*, card:cards(${CARD_SUMMARY_COLUMNS_LEGACY})`)
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .order("id")
+      ));
+    }
     if (error) throw error;
     return NextResponse.json({ items: data as unknown as CollectionItem[] });
   } catch (err) {
@@ -45,7 +58,8 @@ export async function GET() {
  *  Upserts the shared card cache, then increments quantities per (card, finish). */
 export async function POST(req: Request) {
   try {
-    const { user } = await requireUser();
+    const { user, profile } = await requireUser();
+    const isAdmin = profile?.role === "admin";
     const supabase = await createClient();
     const body = (await req.json()) as {
       items?: Array<{ card: CardSummary; quantity: number; variant?: string }>;
@@ -85,9 +99,17 @@ export async function POST(req: Request) {
     const storagePrefix = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/card-photos/`;
     const candidateRows: Array<{ card_id: string; url: string; uploaded_by: string }> = [];
     for (const row of cardRows) {
-      // A user-attached photo (our storage bucket) is always kept as a
-      // candidate for admin review, whatever ends up displayed.
-      if (row.image_small?.startsWith(storagePrefix)) {
+      // Uploaded photos (our storage bucket) become the card's SHARED artwork,
+      // which makes them an admin-only input. The client no longer offers the
+      // upload to members, but the row shape still carries the URL field, so
+      // strip it here too — a member save must never set a card's image to a
+      // member photo, whichever client sent it.
+      if (!isAdmin) {
+        if (row.image_small?.startsWith(storagePrefix)) row.image_small = null;
+        if (row.image_large?.startsWith(storagePrefix)) row.image_large = row.image_small;
+      } else if (row.image_small?.startsWith(storagePrefix)) {
+        // An admin-attached photo is always kept as a candidate for review,
+        // whatever ends up displayed.
         candidateRows.push({ card_id: row.id, url: row.image_small, uploaded_by: user.id });
       }
       const existing = existingById.get(row.id);
@@ -195,6 +217,26 @@ export async function POST(req: Request) {
       .upsert(upsertRows, { onConflict: "user_id,card_id,variant" });
     if (itemErr) throw itemErr;
 
+    // Magic cards arrive with their TCGplayer product id already known
+    // (Scryfall ships it) — attach it now so the buy link works from the
+    // first save. Through attachTcgPlayerId, not the upsert: the column is
+    // unique, and that path absorbs a duplicate instead of failing the
+    // save. Detached — nobody waits on a link id.
+    void (async () => {
+      try {
+        const admin = createAdminClient();
+        const seen = new Set<string>();
+        for (const i of items) {
+          const c = i.card;
+          if (!c.id.startsWith("scry-") || c.tcgplayerId == null || seen.has(c.id)) continue;
+          seen.add(c.id);
+          await attachTcgPlayerId(admin, c.id, String(c.tcgplayerId));
+        }
+      } catch {
+        // The nightly MTG refresh gets another chance.
+      }
+    })();
+
     // 4) Fill gaps on anything that landed without a price or a picture.
     //
     // A scanned card takes whatever its catalogue row already holds, and
@@ -239,6 +281,10 @@ async function fillMissing(cardIds: string[]): Promise<void> {
       image_locked: boolean | null;
       tcgplayer_id: string | null;
     }>)
+      // scry- (Magic) rows never go to the Pokémon sources below — Scryfall
+      // supplied their price and picture at save time, and the hourly MTG
+      // refresh covers any stragglers.
+      .filter((c) => !c.id.startsWith("scry-"))
       .filter((c) => c.market_price == null || !c.image_small)
       .slice(0, 25);
     for (const card of needy) {

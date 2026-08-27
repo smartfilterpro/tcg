@@ -133,8 +133,26 @@ function isPermanentFailure(reason: string): boolean {
 }
 
 async function fetchImage(url: string): Promise<{ buffer: Buffer; contentType: string }> {
+  // Dressed as a browser, because the honest robot outfit stopped working:
+  // TCGplayer's CDN began answering 403 to anything that doesn't look like
+  // a person — which broke the mirror AND the degrade path behind it, since
+  // /api/cards/[id]/art falls back to redirecting members to the same URL
+  // the CDN refuses. A browser UA and a same-site Referer are what its
+  // hotlink check wants to see. The other hosts don't care either way.
+  const headers: Record<string, string> = {
+    Accept: "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8",
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+  };
+  try {
+    const host = new URL(url).hostname;
+    if (host.endsWith("tcgplayer.com")) headers.Referer = "https://www.tcgplayer.com/";
+  } catch {
+    // An unparseable URL will fail the fetch below with a better message.
+  }
   const res = await fetch(url, {
-    headers: { Accept: "image/*", "User-Agent": "TrainerDeck art mirror" },
+    headers,
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

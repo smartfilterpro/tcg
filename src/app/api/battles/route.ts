@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/auth";
 import { buildSide, pushLogRaw, type BattleState } from "@/lib/battle";
 import { BOT_ID } from "@/lib/battleBot";
 
@@ -14,6 +13,7 @@ import {
   isMissingBattlesTable,
   loadBattleDeck,
   makeBattleCode,
+  requireBattleUser,
 } from "./lib";
 
 // First battle with a deck fetches card data + compiles trainer effects.
@@ -22,7 +22,7 @@ export const maxDuration = 120;
 /** GET: my battles (host or guest), newest activity first. */
 export async function GET() {
   try {
-    const { user, profile } = await requireUser();
+    const { user, profile } = await requireBattleUser();
     const isAdmin = profile?.role === "admin";
     // Practice-vs-bot is admin-only, and back to being so deliberately: the
     // bot plays badly enough that it was never worth charging for, and it
@@ -90,7 +90,7 @@ export async function GET() {
  *  share with a friend. Body: { deckId } */
 export async function POST(req: Request) {
   try {
-    const { user, profile } = await requireUser();
+    const { user, profile } = await requireBattleUser();
     const { deckId, allowShared, vsBot, botDeckId } = (await req.json()) as {
       deckId?: string;
       allowShared?: boolean;

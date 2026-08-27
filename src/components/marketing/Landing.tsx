@@ -32,7 +32,7 @@ const DIFFS = [
   {
     tag: "COMMUNITY",
     title: "Play with people you know",
-    body: "Share a deck with a friend, borrow theirs for a battle, and browse each other's binders — with live value estimates on every card.",
+    body: "Share decks with friends and browse each other's binders — with live value estimates on every card.",
     vs: "a group chat full of screenshots.",
   },
 ];

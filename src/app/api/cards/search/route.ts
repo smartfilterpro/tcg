@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { runCardSearch } from "@/lib/cardSearch";
+import { runMtgSearch } from "@/lib/scryfall";
 import { errorJson } from "@/lib/apiError";
 
 /** Live card search — used by the Add card and "fix this card" pickers.
@@ -14,6 +15,16 @@ export async function GET(req: Request) {
     await requireUser();
     const q = new URL(req.url).searchParams.get("q")?.trim();
     if (!q) return NextResponse.json({ cards: [] });
+
+    // game=mtg — the Magic pipeline is its own, much shorter road: our own
+    // rows plus Scryfall, which holds every printing and costs nothing.
+    // None of the Pokémon search's staging (or its paid deep escalation)
+    // applies.
+    if (new URL(req.url).searchParams.get("game") === "mtg") {
+      const supabaseMtg = await createClient();
+      const cards = await runMtgSearch(supabaseMtg, q);
+      return NextResponse.json({ cards, source: "scryfall" });
+    }
 
     // deep=1 — the picker's "search every source" escalation. Off by
     // default because it spends paid credits, and a debounced search box

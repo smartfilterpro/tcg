@@ -97,7 +97,12 @@ async function searchCatalogue(
       .select(SUMMARY_COLS)
       .ilike("set_name", `%${set}%`)
       .limit(400);
-    const rows = (data ?? []) as unknown as CardSummaryRow[];
+    // Magic rows live in the same table but answer a different search
+    // (game=mtg goes to the Scryfall pipeline) — id prefix rather than the
+    // game column so this runs unchanged on a pre-072 database.
+    const rows = ((data ?? []) as unknown as CardSummaryRow[]).filter(
+      (r) => !r.id.startsWith("scry-")
+    );
     return rows
       .sort((a, b) => {
         const n = (v: string) => {
@@ -132,7 +137,9 @@ async function searchCatalogue(
       q = q.or(`set_printed_total.eq.${wantedTotal},set_printed_total.is.null`);
     }
     const { data } = await q;
-    const rows = (data ?? []) as unknown as CardSummaryRow[];
+    const rows = ((data ?? []) as unknown as CardSummaryRow[]).filter(
+      (r) => !r.id.startsWith("scry-")
+    );
     if (!withTotal || wantedTotal == null) return rows;
 
     // …and an unknown size only counts if it's from the RIGHT SET.
@@ -185,7 +192,9 @@ async function searchCatalogue(
         .select(SUMMARY_COLS)
         .ilike("name", `%${anchor}%`)
         .limit(200);
-      const all = (data ?? []) as unknown as CardSummaryRow[];
+      const all = ((data ?? []) as unknown as CardSummaryRow[]).filter(
+        (r) => !r.id.startsWith("scry-")
+      );
       rows = all.filter((r) => {
         const n = normalizeForSearch(r.name);
         return tokens.every((t) => n.includes(normalizeForSearch(t)));

@@ -18,6 +18,7 @@ import {
   type CardSummaryRow,
 } from "@/lib/types";
 import { gapFill, CARD_COMPANIONS } from "@/lib/cardWrite";
+import { matchMtgLocal, matchMtgCard } from "@/lib/scryfall";
 import { pickPrinting, patternPrintingFor } from "@/lib/cardPrinting";
 import { setsAgree } from "@/lib/setName";
 import type { CardSummary, DetectedCard, ScanMatch } from "@/lib/types";
@@ -49,7 +50,7 @@ const SCAN_SCHEMA = {
     // this file is otherwise so careful about is a rounding error.
     count: {
       type: "integer",
-      description: "How many Pokémon cards are visible in the photo. Answer this first, before reading any of them.",
+      description: "How many trading cards (Pokémon or Magic: The Gathering) are visible in the photo. Answer this first, before reading any of them.",
     },
     cards: {
       type: "array",
@@ -59,22 +60,28 @@ const SCAN_SCHEMA = {
           name: {
             type: "string",
             description:
-              "The card's printed name, exactly as shown (e.g. 'Charizard ex', 'Iono', 'Rare Candy').",
+              "The card's printed name, exactly as shown (e.g. 'Charizard ex', 'Iono', 'Lightning Bolt').",
+          },
+          game: {
+            type: "string",
+            enum: ["pokemon", "mtg"],
+            description:
+              "Which game the card belongs to: 'pokemon' for Pokémon TCG, 'mtg' for Magic: The Gathering. The layouts are unmistakable — Pokémon cards show HP and energy symbols with the collector number as 'NNN/NNN'; Magic cards show a mana cost top-right, an italic type line mid-card, and fine-print collector info bottom-left.",
           },
           num: {
             type: ["string", "null"],
             description:
-              "The collector number at the bottom of the card. Usually before a slash ('042' from '042/191'). Promo cards may have NO slash and a letter prefix instead — report the full code (e.g. 'SWSH095', 'SM210', 'XY67'). Null if unreadable.",
+              "The collector number. Pokémon: at the bottom, usually before a slash ('042' from '042/191'); promo cards may have NO slash and a letter prefix — report the full code (e.g. 'SWSH095', 'SM210', 'XY67'). Magic: the number printed bottom-left (e.g. '0123' or '123/280' — report what's before any slash, keeping letters). Null if unreadable.",
           },
           tot: {
             type: ["string", "null"],
             description:
-              "What follows the slash: usually the set size ('191' from '042/191'), but on promo cards it can be a set code — report it as printed (e.g. 'SVP' from '095/SVP'). Null if there is no slash or it's unreadable.",
+              "Pokémon: what follows the slash — usually the set size ('191' from '042/191'), but on promo cards it can be a set code ('SVP' from '095/SVP'); report as printed. Magic: the total after the slash when present ('280' from '123/280'), else null. Null if there is no slash or it's unreadable.",
           },
           set: {
             type: ["string", "null"],
             description:
-              "The set name if identifiable from the set symbol or printed text, else null.",
+              "Pokémon: the set NAME if identifiable from the set symbol or printed text. Magic: the three-to-five-letter set CODE printed in the bottom-left fine print (e.g. 'MH3', 'BLB', 'DSK') — the code, not the set's name. Null if unreadable.",
           },
           rar: {
             type: ["string", "null"],
@@ -85,7 +92,7 @@ const SCAN_SCHEMA = {
             type: "string",
             enum: ["normal", "holo", "reverse_holo", "unknown"],
             description:
-              "The card's foil finish. 'holo': the ARTWORK window itself is foil/rainbow-shiny while the rest of the card is matte. 'reverse_holo': everything EXCEPT the artwork shines — the card body/borders are foil (often with an etched pattern) and the artwork is matte. 'normal': no foil anywhere. Full-art, ex/V/GX, and illustration-rare cards whose entire face is foil count as 'holo'. Use 'unknown' when glare, angle, or resolution makes it impossible to tell — do NOT guess.",
+              "The card's foil finish. 'holo': the ARTWORK window itself is foil/rainbow-shiny while the rest of the card is matte. 'reverse_holo': everything EXCEPT the artwork shines — the card body/borders are foil (often with an etched pattern) and the artwork is matte. 'normal': no foil anywhere. Full-art, ex/V/GX, and illustration-rare cards whose entire face is foil count as 'holo'. Magic cards are simpler: 'holo' for a foil card (rainbow sheen across the face), 'normal' otherwise — never 'reverse_holo'. Use 'unknown' when glare, angle, or resolution makes it impossible to tell — do NOT guess.",
           },
           patt: {
             type: "string",
@@ -115,7 +122,7 @@ const SCAN_SCHEMA = {
               "high = name AND collector number clearly read; medium = name clear but number uncertain; low = partially obscured or blurry.",
           },
         },
-        required: ["name", "num", "tot", "set", "rar", "fin", "patt", "stamp", "conf"],
+        required: ["name", "game", "num", "tot", "set", "rar", "fin", "patt", "stamp", "conf"],
         additionalProperties: false,
       },
     },
@@ -124,17 +131,29 @@ const SCAN_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-const SYSTEM = `You identify Pokémon Trading Card Game cards from photos.
+const SYSTEM = `You identify trading cards from photos: Pokémon TCG cards and
+Magic: The Gathering cards, which may appear TOGETHER in the same photo.
 The photo may contain a single card or many cards laid out (or a binder page).
-For EVERY distinct, identifiable card in the image, extract its printed details.
-Read carefully — the collector number at the bottom (e.g. 042/191) is the most
-important field for identification. Promo cards are common and number differently:
-a black-star promo may show 'SWSH095', 'SM210', 'XY67' with no slash (report the
-full code in the "num" field), or '095/SVP' where the part after the slash is a
-set code, not a count (report 'SVP' in "tot"). Do not invent numbers you
-cannot read; use null instead and lower the confidence. Ignore card backs,
-sleeves without cards, and anything that is not a Pokémon TCG card. List cards
-roughly left-to-right, top-to-bottom.
+For EVERY distinct, identifiable card in the image, extract its printed details
+and say which game it belongs to. Ignore card backs, sleeves without cards, and
+anything that is not a card from these two games. List cards roughly
+left-to-right, top-to-bottom.
+
+POKÉMON — the collector number at the bottom (e.g. 042/191) is the most
+important field for identification. Promo cards are common and number
+differently: a black-star promo may show 'SWSH095', 'SM210', 'XY67' with no
+slash (report the full code in the "num" field), or '095/SVP' where the part
+after the slash is a set code, not a count (report 'SVP' in "tot"). Do not
+invent numbers you cannot read; use null instead and lower the confidence.
+
+MAGIC: THE GATHERING — the identifying line is the fine print at the BOTTOM
+LEFT: a collector number (e.g. '0123' or '123/280'), and on the line below,
+a 3-5 letter set code (e.g. 'MH3 · EN'). Report the set CODE in "set", not a
+set name. The card name is in the title bar; on a double-faced card report
+the name of the face that is showing. Older Magic cards (pre-2015) may have
+no collector info at all — report the name, null the number, and lower the
+confidence. The "patt" and "stamp" fields are Pokémon concepts: answer
+'none' for every Magic card.
 
 FINISH — look carefully at WHERE the shine is, not just whether there is shine:
 - HOLO: only the artwork window is foil (rainbow shimmer inside the picture
@@ -223,8 +242,10 @@ async function matchFromLocalDb(
   try {
     // Keep only rows that ARE this name: identical under normalization, or
     // a named printing of it (parenthetical suffix). The prefix query alone
-    // would let "Mewtwo" answer for "Mew".
+    // would let "Mewtwo" answer for "Mew". Magic rows are excluded in JS
+    // rather than SQL so the query still runs on a pre-072 database.
     const all = rows.filter((r) => {
+      if ((r.game ?? "pokemon") === "mtg") return false;
       const n = normalizeForSearch(r.name);
       return n === wanted || (n.startsWith(wanted) && isSpecificPrinting(r.name));
     });
@@ -480,7 +501,7 @@ async function runScan(opts: {
             },
             {
               type: "text",
-              text: "Identify every Pokémon card in this photo.",
+              text: "Identify every Pokémon and Magic: The Gathering card in this photo.",
             },
           ],
         },
@@ -562,6 +583,7 @@ async function runScan(opts: {
     let parsed: {
       cards: Array<{
         name: string;
+        game?: "pokemon" | "mtg";
         num: string | null;
         tot: string | null;
         set: string | null;
@@ -619,6 +641,7 @@ async function runScan(opts: {
       if (ball) hintParts.push(ball);
       if (c.rar) hintParts.push(c.rar);
       return {
+        game: c.game === "mtg" ? ("mtg" as const) : ("pokemon" as const),
         // Normalize away curly apostrophes etc. the vision model may emit
         name: cleanCardName(c.name),
         collectorNumber: c.num,
@@ -654,6 +677,30 @@ async function runScan(opts: {
               path,
               ...(swapped ? { swapped: true } : {}),
             });
+
+          // Magic cards take their own, shorter road: our catalogue first,
+          // then Scryfall — one source that has every printing, so none of
+          // the Pokémon path's multi-database arbitration applies.
+          if (detected.game === "mtg") {
+            const localMtg = await matchMtgLocal(supabase, detected);
+            if (localMtg) {
+              note("catalogue");
+              return { detected, match: localMtg, candidates: [localMtg] } satisfies ScanMatch;
+            }
+            const { match: mtgMatch, candidates: mtgCandidates } = await withinDeadline(
+              matchMtgCard(detected),
+              cardDeadline + 1_000,
+              { match: null, candidates: [] as CardSummary[] }
+            );
+            if (mtgMatch) {
+              const learned = mtgMatch;
+              void stashExternalMatch(admin, learned).catch((err) =>
+                console.warn(`scan: couldn't stash "${learned.name}" (${learned.id})`, err)
+              );
+            }
+            note(mtgMatch ? "scryfall" : "no match");
+            return { detected, match: mtgMatch, candidates: mtgCandidates } satisfies ScanMatch;
+          }
 
           // Fast path: a card someone already saved matches from our own
           // database in one quick query instead of several external calls.

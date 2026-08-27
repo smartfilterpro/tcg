@@ -1346,7 +1346,7 @@ export default function DecksPage() {
       <div>
         <h1 className="text-2xl font-bold">Decks</h1>
         <p className="text-sm text-slate-500">
-          Build battle-ready decks from the cards you actually own.
+          Build tournament-ready decks from the cards you actually own.
         </p>
       </div>
 

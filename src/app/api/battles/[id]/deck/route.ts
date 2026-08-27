@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/auth";
 import type { BattleState } from "@/lib/battle";
-import { battleErrorResponse } from "../../lib";
+import { battleErrorResponse, requireBattleUser } from "../../lib";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -11,7 +10,7 @@ type Params = { params: Promise<{ id: string }> };
  *  shuffle anyway). Opponents can't see this — it's your own cards only. */
 export async function GET(_req: Request, { params }: Params) {
   try {
-    const { user } = await requireUser();
+    const { user } = await requireBattleUser();
     const { id } = await params;
     const admin = createAdminClient();
     const { data: battle, error } = await admin

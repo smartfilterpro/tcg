@@ -31,11 +31,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // blocks: both run on trial credits — the lock is the plan pitch, not a
   // wall, and the real limit is the credit balance, shown per action.
   //
-  // Battle carries no lock. Anyone can play anyone; it is two people and a
-  // shared table, with no model call anywhere in it, so there is nothing to
-  // meter and nothing to sell. (Practice against the bot is a separate,
-  // admin-only thing — see /api/battles.) If AI-driven battles arrive later,
-  // that feature can be gated on its own terms rather than the whole page.
+  // Battle is retired from the member app: the pages, engine and API all
+  // remain, admin-only, while the owner decides its future. The nav link
+  // below, the /battles layout and every /api/battles route carry the same
+  // admin check, so removing the feature for good (or bringing it back) is
+  // a three-place change, not an archaeology dig.
   //
   // Asked properly rather than read off the profile. A family member's own
   // row says plan = 'free' — the plan lives on the group owner — so reading
@@ -50,7 +50,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     { label: "Scan", href: "/scan", locked },
     { label: "Decks", href: "/decks" },
     { label: "Meta", href: "/meta" },
-    { label: "Battle", href: "/battles" },
+    ...(isAdmin ? [{ label: "Battle", href: "/battles" }] : []),
     { label: "Grade", href: "/grade", locked },
     { label: "Friends", href: "/friends" },
     ...(TRADING_ENABLED ? [{ label: "Trades", href: "/trades" }] : []),

@@ -683,14 +683,29 @@ export async function runPriceSync(
     // sync walks the entire catalogue matching nothing at all — 404 cards
     // seen, zero filled, no error anywhere. Swallowing this error made a
     // configuration problem look like a matching problem.
-    const { data: ours, error: ourError } = await fetchAllRows<OurCard>(() =>
+    // Pokémon rows only: this sync walks TCGplayer's POKÉMON groups, and an
+    // MTG row in the match index is a card a same-key product could write
+    // Pokémon prices onto. neq survives pre-072 databases nowhere — hence
+    // the legacy retry below, matching the tcgplayer_id pattern.
+    let { data: ours, error: ourError } = await fetchAllRows<OurCard>(() =>
       admin
         .from("cards")
         .select(
           "id, name, number, set_name, market_price, prices, image_small, image_locked, tcgplayer_id, rarity, supertype, subtypes, types, hp, set_printed_total"
         )
+        .neq("game", "mtg")
         .order("id")
     );
+    if (ourError && /game/.test(ourError.message ?? "")) {
+      ({ data: ours, error: ourError } = await fetchAllRows<OurCard>(() =>
+        admin
+          .from("cards")
+          .select(
+            "id, name, number, set_name, market_price, prices, image_small, image_locked, tcgplayer_id, rarity, supertype, subtypes, types, hp, set_printed_total"
+          )
+          .order("id")
+      ));
+    }
     if (ourError) {
       throw new Error(
         /tcgplayer_id/.test(ourError.message)

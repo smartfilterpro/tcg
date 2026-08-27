@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUser } from "@/lib/auth";
 import { type BattleState } from "@/lib/battle";
-import { battleErrorResponse } from "../../lib";
+import { battleErrorResponse, requireBattleUser } from "../../lib";
 import { APP_NAME } from "@/lib/branding";
 
 type Params = { params: Promise<{ id: string }> };
@@ -19,7 +18,7 @@ function slug(s: string): string {
  *  board shows — the point of exporting is to keep what scrolled away. */
 export async function GET(_req: Request, { params }: Params) {
   try {
-    const { user } = await requireUser();
+    const { user } = await requireBattleUser();
     const { id } = await params;
     const admin = createAdminClient();
     const { data: battle, error } = await admin

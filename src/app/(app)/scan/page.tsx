@@ -277,7 +277,14 @@ export default function ScanPage() {
     // Single-card scan with no database image (common for promos): use the
     // photo just taken as the card's image, automatically. Only available on
     // the live path — a scan recovered after a sleep no longer has the file.
-    if (file && results.length === 1 && results[0].match && !results[0].match.imageSmall) {
+    // Admin-only: member photos never become shared card artwork.
+    if (
+      creditState.admin &&
+      file &&
+      results.length === 1 &&
+      results[0].match &&
+      !results[0].match.imageSmall
+    ) {
       uploadCardPhoto(file).then((url) => {
         if (url) {
           setRows((prev) => prev.map((r) => (r.key === 0 ? { ...r, photoUrl: url } : r)));
@@ -383,7 +390,9 @@ export default function ScanPage() {
         <div className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>
       )}
 
-      {/* Per-row card photo capture (used when the database has no card art) */}
+      {/* Per-row card photo capture (used when the database has no card art).
+          Admin-only — these uploads become the card's shared artwork. */}
+      {creditState.admin && (
       <input
         ref={photoInputRef}
         type="file"
@@ -401,6 +410,7 @@ export default function ScanPage() {
           else setError("Photo upload failed — has the card-photos storage migration been run?");
         }}
       />
+      )}
 
       {phase === "idle" && (
         <div className="card-panel p-8 text-center">
@@ -644,27 +654,34 @@ export default function ScanPage() {
                               : ""}
                           </option>
                         ))}
-                        <optgroup label="Stamped versions">
-                          {STAMP_VARIANTS.map((v) => (
-                            <option key={v} value={v}>
-                              {variantLabel(v)}
-                            </option>
-                          ))}
-                        </optgroup>
-                        {/* Ball-pattern reverse holos. The databases hold one
-                            entry for the whole family because the collector
-                            number is identical, so they can only be recorded
-                            here — by the one person who can see which it is. */}
-                        <optgroup label="Ball-pattern reverse holo">
-                          {PATTERN_VARIANTS.map((v) => (
-                            <option key={v} value={v}>
-                              {variantLabel(v)}
-                            </option>
-                          ))}
-                        </optgroup>
+                        {/* Stamps and ball patterns are Pokémon physical
+                            realities — a Magic row gets only its real
+                            finishes (normal / foil / etched). */}
+                        {row.card.game !== "mtg" && (
+                          <>
+                            <optgroup label="Stamped versions">
+                              {STAMP_VARIANTS.map((v) => (
+                                <option key={v} value={v}>
+                                  {variantLabel(v)}
+                                </option>
+                              ))}
+                            </optgroup>
+                            {/* Ball-pattern reverse holos. The databases hold one
+                                entry for the whole family because the collector
+                                number is identical, so they can only be recorded
+                                here — by the one person who can see which it is. */}
+                            <optgroup label="Ball-pattern reverse holo">
+                              {PATTERN_VARIANTS.map((v) => (
+                                <option key={v} value={v}>
+                                  {variantLabel(v)}
+                                </option>
+                              ))}
+                            </optgroup>
+                          </>
+                        )}
                       </select>
                     )}
-                    {row.card && !row.card.imageSmall && (
+                    {creditState.admin && row.card && !row.card.imageSmall && (
                       <button
                         className="btn-secondary text-xs"
                         disabled={photoUploading === row.key}
@@ -751,6 +768,8 @@ export default function ScanPage() {
         <CardPickerModal
           initialQuery={pickerRow.detected.name}
           candidates={pickerRow.candidates}
+          allowPhoto={creditState.admin}
+          game={(pickerRow.card?.game ?? pickerRow.detected.game) === "mtg" ? "mtg" : "pokemon"}
           onClose={() => setPickerRow(null)}
           onPick={(card) => {
             const variant = defaultVariantFor(card, pickerRow.detected.rarityHint);
