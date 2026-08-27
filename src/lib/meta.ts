@@ -28,6 +28,8 @@ export interface MetaCoreCard {
 export interface MetaDeckRow {
   id: string;
   archetype: string;
+  /** Only after migration 074 — absent means Pokémon. */
+  game?: "pokemon" | "mtg" | null;
   format: string;
   share: number | null;
   placements: number | null;
@@ -53,6 +55,7 @@ export interface MetaCardView extends MetaCoreCard {
 export interface MetaDeckView {
   id: string;
   archetype: string;
+  game: "pokemon" | "mtg";
   format: string;
   share: number | null;
   placements: number | null;
@@ -119,7 +122,13 @@ async function catalogueByNameKey(
         .limit(1000);
       if (error) throw error;
       for (const row of data ?? []) {
-        const k = normalizeForSearch((row.name as string) ?? "");
+        // Keys carry the game (see gameKey): a Magic archetype's prices
+        // and buy links come from Magic printings, never from a Pokémon
+        // card that happens to share the name. Id prefix, not the game
+        // column, so this works mid-migration too.
+        const k =
+          ((row.id as string).startsWith("scry-") ? "m|" : "p|") +
+          normalizeForSearch((row.name as string) ?? "");
         const p = row.market_price as number | null;
         const priced = p != null && p > 0 && (!price.has(k) || p < price.get(k)!);
         if (priced) price.set(k, p!);
@@ -200,15 +209,23 @@ export async function metaDecksFor(userId: string): Promise<{
   const decks = (rows ?? []) as unknown as MetaDeckRow[];
   if (decks.length === 0) return { decks: [], hasLimitless: false };
 
-  // What the member owns, by name key: one paged query for the whole
-  // collection, quantities summed across printings and finishes.
+  /** The game-scoped lookup key everything below joins on. */
+  const gameKey = (game: "pokemon" | "mtg", name: string) =>
+    (game === "mtg" ? "m|" : "p|") + normalizeForSearch(name);
+  const gameOf = (d: MetaDeckRow): "pokemon" | "mtg" => (d.game === "mtg" ? "mtg" : "pokemon");
+
+  // What the member owns, by game-scoped name key: one paged query for the
+  // whole collection, quantities summed across printings and finishes.
   const ownedByKey = new Map<string, number>();
-  type OwnedRow = { quantity: number; card: { name: string } | Array<{ name: string }> | null };
+  type OwnedRow = {
+    quantity: number;
+    card: { id: string; name: string } | Array<{ id: string; name: string }> | null;
+  };
   const { data: mine } = await fetchAllRows<OwnedRow>(
     () =>
       admin
         .from("collection_items")
-        .select("quantity, card:cards(name)")
+        .select("quantity, card:cards(id, name)")
         .eq("user_id", userId)
         .order("created_at")
         .order("id") as unknown as {
@@ -222,9 +239,9 @@ export async function metaDecksFor(userId: string): Promise<{
     // supabase-js types the embedded relation as an array; at runtime a
     // to-one join is an object. Read either shape.
     const rel = item.card;
-    const name = Array.isArray(rel) ? rel[0]?.name : rel?.name;
-    if (!name) continue;
-    const k = normalizeForSearch(name);
+    const card = Array.isArray(rel) ? rel[0] : rel;
+    if (!card?.name) continue;
+    const k = gameKey(card.id?.startsWith("scry-") ? "mtg" : "pokemon", card.name);
     ownedByKey.set(k, (ownedByKey.get(k) ?? 0) + (item.quantity ?? 0));
   }
 
@@ -270,9 +287,10 @@ export async function metaDecksFor(userId: string): Promise<{
   }
 
   const views = decks.map((d): MetaDeckView => {
+    const deckGame = gameOf(d);
     const cards = (Array.isArray(d.core_cards) ? d.core_cards : []).map(
       (c): MetaCardView => {
-        const k = normalizeForSearch(c.name);
+        const k = gameKey(deckGame, c.name);
         const owned = Math.min(c.count, ownedByKey.get(k) ?? 0);
         const holders = [...(heldByKey.get(k) ?? new Map<string, number>()).entries()]
           .filter(([, qty]) => qty > 0)
@@ -304,6 +322,7 @@ export async function metaDecksFor(userId: string): Promise<{
     return {
       id: d.id,
       archetype: d.archetype,
+      game: d.game === "mtg" ? "mtg" : "pokemon",
       format: d.format,
       share: d.share == null ? null : Number(d.share),
       placements: d.placements,

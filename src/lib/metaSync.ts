@@ -158,10 +158,21 @@ export async function syncMeta(): Promise<string> {
   if (ranked.length === 0) throw new Error("standings parsed but no archetype cleared the floor");
 
   // Curated rows are the admin's word — the sync never writes over one.
-  const { data: existing, error: readErr } = await admin
+  // Pokémon rows only: "standard" is a Magic format name too (074), and a
+  // curated Magic archetype must neither block a Pokémon write nor count
+  // as a stale limitless row. Pre-074 has no game column — and no Magic
+  // rows either, so the unfiltered read is equally correct there.
+  let { data: existing, error: readErr } = await admin
     .from("meta_decks")
     .select("id, archetype, source")
-    .eq("format", "standard");
+    .eq("format", "standard")
+    .eq("game", "pokemon");
+  if (readErr && /game/.test(readErr.message ?? "")) {
+    ({ data: existing, error: readErr } = await admin
+      .from("meta_decks")
+      .select("id, archetype, source")
+      .eq("format", "standard"));
+  }
   if (readErr) throw readErr;
   const curated = new Set(
     (existing ?? [])

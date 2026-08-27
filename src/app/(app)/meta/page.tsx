@@ -25,6 +25,7 @@ interface MetaCard {
 interface MetaDeck {
   id: string;
   archetype: string;
+  game?: "pokemon" | "mtg";
   format: string;
   share: number | null;
   placements: number | null;
@@ -40,7 +41,15 @@ interface MetaDeck {
   unpricedMissing: number;
 }
 
-const CATEGORY_ORDER: Record<string, number> = { pokemon: 0, trainer: 1, energy: 2 };
+const CATEGORY_ORDER: Record<string, number> = {
+  commander: -1,
+  pokemon: 0,
+  creature: 0,
+  trainer: 1,
+  spell: 1,
+  energy: 2,
+  land: 2,
+};
 
 export default function MetaPage() {
   const [decks, setDecks] = useState<MetaDeck[]>([]);
@@ -50,6 +59,7 @@ export default function MetaPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [gameTab, setGameTab] = useState<"pokemon" | "mtg">("pokemon");
 
   useEffect(() => {
     (async () => {
@@ -82,20 +92,41 @@ export default function MetaPage() {
 
       {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
+      {/* One page, two metas — same split as the collection tabs. */}
+      <div className="flex gap-1 border-b border-slate-200">
+        {(["pokemon", "mtg"] as const).map((g) => (
+          <button
+            key={g}
+            onClick={() => {
+              setGameTab(g);
+              setExpanded(null);
+            }}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-semibold ${
+              gameTab === g
+                ? "border-brand-accent text-brand-accent"
+                : "border-transparent text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            {g === "pokemon" ? "⚡ Pokémon" : "🪄 Magic"}
+          </button>
+        ))}
+      </div>
+
       {!migrated && (
         <div className="rounded-lg bg-yellow-50 p-3 text-sm text-yellow-800">
           The meta table hasn&apos;t been created yet — an admin needs to run migration 068.
         </div>
       )}
 
-      {migrated && decks.length === 0 && !error && (
+      {migrated && decks.filter((d) => (d.game ?? "pokemon") === gameTab).length === 0 && !error && (
         <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">
-          No archetypes yet. The nightly sync fills this in on its own; an admin can also add
-          decks by hand from the Admin page.
+          {gameTab === "mtg"
+            ? "No Magic archetypes yet — they're curated by hand, and the admin hasn't added any."
+            : "No archetypes yet. The nightly sync fills this in on its own; an admin can also add decks by hand from the Admin page."}
         </div>
       )}
 
-      {decks.map((d) => {
+      {decks.filter((d) => (d.game ?? "pokemon") === gameTab).map((d) => {
         const open = expanded === d.id;
         const pct = d.totalCount > 0 ? Math.round((d.ownedCount / d.totalCount) * 100) : 0;
         const cards = [...d.cards].sort(
@@ -199,7 +230,11 @@ export default function MetaPage() {
                   </p>
                   <a
                     className="btn-secondary shrink-0 text-sm"
-                    href={`/decks?pool=all&archetype=${encodeURIComponent(d.archetype)}`}
+                    href={`/decks?pool=all&archetype=${encodeURIComponent(d.archetype)}${
+                      (d.game ?? "pokemon") === "mtg"
+                        ? `&game=mtg&format=${encodeURIComponent(d.format)}`
+                        : ""
+                    }`}
                   >
                     Build this deck
                   </a>

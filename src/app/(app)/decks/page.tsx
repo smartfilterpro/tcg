@@ -13,6 +13,7 @@ import { CreditLock } from "@/components/CreditLock";
 import { useCredits } from "@/components/useCredits";
 import { FREE_DECK_LIMIT } from "@/lib/limits";
 import DeckEditCard, { type DeckEditProposal } from "@/components/DeckEditCard";
+import { isBasicLand } from "@/lib/mtgDeckLegality";
 import { resilientFetch } from "@/lib/clientLoop";
 import CardText from "@/components/CardText";
 import CardZoom from "@/components/CardZoom";
@@ -24,13 +25,24 @@ type UpgradeSuggestion = DeckSuggestion;
 interface OwnedCard {
   name: string;
   owned: number;
-  category: "pokemon" | "trainer" | "energy";
+  category: "pokemon" | "trainer" | "energy" | "creature" | "spell" | "land";
+  game: "pokemon" | "mtg";
   cardId: string | null;
   image: string | null;
   setName: string;
 }
 
-function categoryOf(supertype: string | null | undefined): OwnedCard["category"] {
+function categoryOf(
+  supertype: string | null | undefined,
+  game: "pokemon" | "mtg"
+): OwnedCard["category"] {
+  if (game === "mtg") {
+    // The supertype column holds the type line's core for Magic rows —
+    // "Creature", "Artifact Creature", "Instant", "Land"…
+    if (/land/i.test(supertype ?? "")) return "land";
+    if (/creature/i.test(supertype ?? "")) return "creature";
+    return "spell";
+  }
   if (supertype === "Pokémon" || supertype === "Pokemon") return "pokemon";
   if (supertype === "Energy") return "energy";
   return "trainer";
@@ -60,6 +72,12 @@ function ManualBuilder({
   // Editing an existing deck: its id + original record (for suggestions and
   // rebuilding the updated Deck object after a save).
   const [editBase, setEditBase] = useState<Deck | null>(null);
+  // Which game's cards the builder shows, and — for Magic — which format's
+  // rules cap the copies. Both are locked while editing: a deck's game is
+  // decided the day it's made.
+  const [mGame, setMGame] = useState<"pokemon" | "mtg">("pokemon");
+  const [mFormat, setMFormat] = useState<"commander" | "standard">("commander");
+  const deckTarget = mGame === "mtg" && mFormat === "commander" ? 100 : 60;
 
   async function fetchOwned(): Promise<OwnedCard[]> {
     try {
@@ -68,17 +86,20 @@ function ManualBuilder({
       const byName = new Map<string, OwnedCard>();
       for (const it of (json.items ?? []) as CollectionItem[]) {
         if (!it.card) continue;
-        const prev = byName.get(it.card.name);
+        const game: OwnedCard["game"] =
+          it.card.game === "mtg" || it.card.id.startsWith("scry-") ? "mtg" : "pokemon";
+        const prev = byName.get(`${game}|${it.card.name}`);
         if (prev) {
           prev.owned += it.quantity;
           if (!prev.image && it.card.image_small) {
             prev.image = artSrc(it.card.id, it.card.image_small);
           }
         } else {
-          byName.set(it.card.name, {
+          byName.set(`${game}|${it.card.name}`, {
             name: it.card.name,
             owned: it.quantity,
-            category: categoryOf(it.card.supertype),
+            category: categoryOf(it.card.supertype, game),
+            game,
             cardId: it.card.id,
             image: artSrc(it.card.id, it.card.image_small),
             setName: it.card.set_name,
@@ -103,17 +124,35 @@ function ManualBuilder({
     onEditStarted?.();
     void (async () => {
       setOpen(true);
+      // The deck's game decides which half of the collection the builder
+      // shows. Older rows predate the column, so scry- card ids are the
+      // fallback tell; format falls back on the one thing a Commander deck
+      // can't hide, its size.
+      const isMtgDeck =
+        (editDeck as { game?: string }).game === "mtg" ||
+        (editDeck.cards ?? []).some((e) => e.card_id?.startsWith("scry-"));
+      const deckGame: OwnedCard["game"] = isMtgDeck ? "mtg" : "pokemon";
+      setMGame(deckGame);
+      if (isMtgDeck) {
+        const fmt = (editDeck as { format?: string }).format;
+        const size = (editDeck.cards ?? []).reduce((s, e) => s + (e.quantity ?? 0), 0);
+        setMFormat(fmt === "standard" || fmt === "commander" ? fmt : size > 60 ? "commander" : "standard");
+      }
       const list = owned ?? (await fetchOwned());
-      // Deck entries missing from the collection list (basic energy the
-      // player never scanned, etc.) get merged in so they stay editable.
-      const have = new Set(list.map((c) => c.name));
+      // Deck entries missing from the collection list (basic energy or
+      // basic lands the player never scanned, etc.) get merged in so they
+      // stay editable.
+      const have = new Set(list.filter((c) => c.game === deckGame).map((c) => c.name));
       const merged = [...list];
       for (const e of editDeck.cards ?? []) {
         if (!have.has(e.name)) {
+          const freebie = deckGame === "mtg" ? isBasicLand(e.name) : e.category === "energy";
           merged.push({
             name: e.name,
-            owned: e.category === "energy" ? 60 : e.quantity,
-            category: (e.category as OwnedCard["category"]) ?? "trainer",
+            owned: freebie ? 99 : e.quantity,
+            category:
+              (e.category as OwnedCard["category"]) ?? (deckGame === "mtg" ? "spell" : "trainer"),
+            game: deckGame,
             cardId: e.card_id,
             image: null,
             setName: "",
@@ -133,6 +172,13 @@ function ManualBuilder({
   }, [editDeck]);
 
   function maxFor(c: OwnedCard): number {
+    if (c.game === "mtg") {
+      // Basic lands are the one universal exemption; otherwise Commander is
+      // singleton and Standard is 4-of, both capped at what you own.
+      if (isBasicLand(c.name)) return 99;
+      const ruleMax = mFormat === "commander" ? 1 : 4;
+      return Math.min(ruleMax, c.owned);
+    }
     // TCG rules: max 4 copies of a card, except basic Energy. We also cap at
     // what you own — except Energy, which the app assumes you have plenty of.
     return c.category === "energy" ? 60 : Math.min(4, c.owned);
@@ -150,7 +196,7 @@ function ManualBuilder({
 
   function toEntries(): DeckCardEntry[] {
     return (owned ?? [])
-      .filter((c) => (deck[c.name] ?? 0) > 0)
+      .filter((c) => c.game === mGame && (deck[c.name] ?? 0) > 0)
       .map((c) => ({
         name: c.name,
         quantity: deck[c.name],
@@ -161,12 +207,13 @@ function ManualBuilder({
   }
 
   const total = Object.values(deck).reduce((s, q) => s + q, 0);
-  const entries = (owned ?? []).filter((c) => (deck[c.name] ?? 0) > 0);
-  const counts = {
-    pokemon: entries.filter((c) => c.category === "pokemon").reduce((s, c) => s + deck[c.name], 0),
-    trainer: entries.filter((c) => c.category === "trainer").reduce((s, c) => s + deck[c.name], 0),
-    energy: entries.filter((c) => c.category === "energy").reduce((s, c) => s + deck[c.name], 0),
-  };
+  const entries = (owned ?? []).filter((c) => c.game === mGame && (deck[c.name] ?? 0) > 0);
+  const countOf = (cat: OwnedCard["category"]) =>
+    entries.filter((c) => c.category === cat).reduce((s, c) => s + deck[c.name], 0);
+  const countsLine =
+    mGame === "mtg"
+      ? `${countOf("creature")} creatures · ${countOf("spell")} spells · ${countOf("land")} lands`
+      : `${countOf("pokemon")} Pokémon · ${countOf("trainer")} Trainer · ${countOf("energy")} Energy`;
 
   async function askReview() {
     if (total === 0 || reviewing) return;
@@ -177,7 +224,13 @@ function ManualBuilder({
       const res = await fetch("/api/decks/review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, cards: toEntries(), question }),
+        body: JSON.stringify({
+          name,
+          cards: toEntries(),
+          question,
+          game: mGame,
+          ...(mGame === "mtg" ? { format: mFormat } : {}),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Review failed");
@@ -217,7 +270,12 @@ function ManualBuilder({
         const res = await fetch("/api/decks", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), strategy: notes.trim() || null, cards }),
+          body: JSON.stringify({
+            name: name.trim(),
+            strategy: notes.trim() || null,
+            cards,
+            ...(mGame === "mtg" ? { game: "mtg", format: mFormat } : {}),
+          }),
         });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Couldn't save the deck");
@@ -236,7 +294,7 @@ function ManualBuilder({
   }
 
   const filtered = (owned ?? [])
-    .filter((c) => matchesSearch(search, c.name, c.setName))
+    .filter((c) => c.game === mGame && matchesSearch(search, c.name, c.setName))
     .slice(0, 60);
 
   return (
@@ -274,9 +332,40 @@ function ManualBuilder({
 
       {open && (
         <div className="mt-3 space-y-3">
+          {/* Which game, and for Magic which format's rules cap the copies.
+              Locked during an edit — a deck's game is decided the day it's
+              made, and switching would empty the list anyway. */}
+          {!editBase && (
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="input w-auto"
+                value={mGame}
+                onChange={(e) => {
+                  const g = e.target.value === "mtg" ? "mtg" : "pokemon";
+                  if (g !== mGame) setDeck({});
+                  setMGame(g);
+                }}
+              >
+                <option value="pokemon">⚡ Pokémon</option>
+                <option value="mtg">🪄 Magic</option>
+              </select>
+              {mGame === "mtg" && (
+                <select
+                  className="input w-auto"
+                  value={mFormat}
+                  onChange={(e) => {
+                    setMFormat(e.target.value === "standard" ? "standard" : "commander");
+                  }}
+                >
+                  <option value="commander">Commander — 100 cards, singleton</option>
+                  <option value="standard">Standard — 60 cards, 4-of</option>
+                </select>
+              )}
+            </div>
+          )}
           <input
             className="input"
-            placeholder="Deck name (e.g. My Fire Deck)"
+            placeholder={mGame === "mtg" ? "Deck name (e.g. Goblin Commander)" : "Deck name (e.g. My Fire Deck)"}
             maxLength={100}
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -316,7 +405,7 @@ function ManualBuilder({
                     })}
                   </div>
                   <p className="mt-1 text-green-700">
-                    Then remove what they replace so the deck stays at 60.
+                    Then remove what they replace so the deck stays at {deckTarget}.
                   </p>
                 </div>
               );
@@ -326,12 +415,10 @@ function ManualBuilder({
           <div className="rounded-lg bg-slate-50 p-3">
             <div className="mb-1 flex items-center justify-between text-sm font-semibold">
               <span>
-                Deck: {total}/60{" "}
-                {total === 60 ? "✅" : total > 60 ? "⚠️ over 60" : ""}
+                Deck: {total}/{deckTarget}{" "}
+                {total === deckTarget ? "✅" : total > deckTarget ? `⚠️ over ${deckTarget}` : ""}
               </span>
-              <span className="text-xs font-normal text-slate-500">
-                {counts.pokemon} Pokémon · {counts.trainer} Trainer · {counts.energy} Energy
-              </span>
+              <span className="text-xs font-normal text-slate-500">{countsLine}</span>
             </div>
             {entries.length === 0 ? (
               <p className="text-xs text-slate-400">Tap cards below to add them.</p>
@@ -393,7 +480,11 @@ function ManualBuilder({
                         <div className="truncate text-xs font-medium">{c.name}</div>
                         <div className="text-[11px] text-slate-400">
                           {c.category} · you own x{c.owned}
-                          {c.category === "energy" ? " (energy is unlimited)" : ""}
+                          {c.category === "energy"
+                            ? " (energy is unlimited)"
+                            : c.game === "mtg" && isBasicLand(c.name)
+                              ? " (basic lands are unlimited)"
+                              : ""}
                         </div>
                       </div>
                       <button
@@ -416,7 +507,11 @@ function ManualBuilder({
               </ul>
             )}
             <p className="mt-1 text-[11px] text-slate-400">
-              Max 4 copies per card (except Energy). Aim for 60 cards.
+              {mGame === "mtg"
+                ? mFormat === "commander"
+                  ? "Singleton: one copy of everything except basic lands. Aim for 100 cards including your commander."
+                  : "Max 4 copies per card (except basic lands). Aim for 60 cards."
+                : "Max 4 copies per card (except Energy). Aim for 60 cards."}
             </p>
           </div>
 
@@ -470,9 +565,9 @@ function ManualBuilder({
             >
               {saving ? "Saving…" : "Save deck"}
             </button>
-            {total !== 60 && total > 0 && (
+            {total !== deckTarget && total > 0 && (
               <span className="self-center text-xs text-slate-400">
-                (you can save at any size — 60 is tournament-legal)
+                (you can save at any size — {deckTarget} is tournament-legal)
               </span>
             )}
           </div>
@@ -1035,10 +1130,21 @@ export default function DecksPage() {
     const archetype = params.get("archetype");
     if (params.get("pool") === "all" || archetype) {
       setPoolMode("all");
+      // A Magic archetype hands over its game and format too — the same
+      // builder serves both, and a Commander archetype built under
+      // Pokémon rules would be nonsense.
+      const handedGame = params.get("game") === "mtg" ? "mtg" : "pokemon";
+      setBuildGame(handedGame);
       if (archetype) {
         setArchetypeSeed(archetype);
         setPrompt(`Build the trending "${archetype}" deck`);
-        setFormat("standard");
+        setFormat(
+          handedGame === "mtg"
+            ? params.get("format") === "standard"
+              ? "standard"
+              : "commander"
+            : "standard"
+        );
       }
       window.history.replaceState(null, "", window.location.pathname);
     }
@@ -1229,7 +1335,7 @@ export default function DecksPage() {
           format,
           pool: poolMode,
           game: buildGame,
-          ...(archetypeSeed && buildGame === "pokemon" ? { archetype: archetypeSeed } : {}),
+          ...(archetypeSeed ? { archetype: archetypeSeed } : {}),
         }),
       });
       const start = await safeJson(res);
@@ -1428,10 +1534,12 @@ export default function DecksPage() {
               value={buildGame}
               onChange={(e) => {
                 const g = e.target.value === "mtg" ? "mtg" : "pokemon";
+                // The two games share no formats — swap to each game's
+                // default, and drop an archetype seed on a real switch: it
+                // named a deck in the game being left behind.
+                if (g !== buildGame) setArchetypeSeed(null);
                 setBuildGame(g);
-                // The two games share no formats — swap to each game's default.
                 setFormat(g === "mtg" ? "commander" : "any");
-                if (g === "mtg") setArchetypeSeed(null);
               }}
             >
               <option value="pokemon">⚡ Pokémon</option>
