@@ -43,7 +43,7 @@ async function scryGet(path: string): Promise<Record<string, unknown> | null> {
     headers: {
       Accept: "application/json",
       // Scryfall's API guidelines require identifying yourself.
-      "User-Agent": "TrainerDeck/1.0",
+      "User-Agent": "TCGdeck/1.0",
     },
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
@@ -59,7 +59,7 @@ async function scryPost(path: string, body: unknown): Promise<Record<string, unk
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "User-Agent": "TrainerDeck/1.0",
+      "User-Agent": "TCGdeck/1.0",
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(TIMEOUT_MS),

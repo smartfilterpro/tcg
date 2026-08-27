@@ -33,7 +33,7 @@ const MAX_ARCHETYPES = 12;
 async function limitlessJson(path: string): Promise<unknown> {
   const headers: Record<string, string> = {
     accept: "application/json",
-    "user-agent": "TrainerDeck meta sync (trainerdeck.io)",
+    "user-agent": "TCGdeck meta sync (tcgdeck.io)",
   };
   if (process.env.LIMITLESS_API_KEY) headers["x-access-key"] = process.env.LIMITLESS_API_KEY;
   const res = await fetch(`${API}${path}`, {

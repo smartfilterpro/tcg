@@ -12,7 +12,7 @@ import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 120;
 
-const SYSTEM_BASE = `You are TrainerAI, the trade advisor inside TrainerDeck, a
+const SYSTEM_BASE = `You are DeckAI, the trade advisor inside TCGdeck, a
 personal Pokémon TCG collection app for a group of friends. Two members are
 considering trading cards and you help them work out whether a trade is fair.
 

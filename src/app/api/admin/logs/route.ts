@@ -21,7 +21,7 @@ export async function GET(req: Request) {
       return new NextResponse(logsAsText(), {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
-          "Content-Disposition": `attachment; filename="trainerdeck-log-${stamp}.txt"`,
+          "Content-Disposition": `attachment; filename="tcgdeck-log-${stamp}.txt"`,
           "Cache-Control": "no-store",
         },
       });

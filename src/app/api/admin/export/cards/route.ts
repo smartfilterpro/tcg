@@ -138,7 +138,7 @@ export async function GET(req: Request) {
     return new Response(stream, {
       headers: {
         "Content-Type": "application/x-ndjson; charset=utf-8",
-        "Content-Disposition": `attachment; filename="trainerdeck-battle-${mode}.ndjson"`,
+        "Content-Disposition": `attachment; filename="tcgdeck-battle-${mode}.ndjson"`,
         "Cache-Control": "no-store",
       },
     });

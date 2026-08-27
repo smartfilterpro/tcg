@@ -215,7 +215,7 @@ export async function PATCH(req: Request) {
             price_data: {
               currency: "usd",
               unit_amount: spec.cents,
-              product_data: { name: `TrainerDeck Boost — ${spec.label}` },
+              product_data: { name: `TCGdeck Boost — ${spec.label}` },
             },
           },
         ],

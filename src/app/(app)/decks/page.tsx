@@ -948,7 +948,7 @@ function UpgradeList({
       </ul>
       {suggestions.some((u) => u.buyUrl && !u.buyUrl.startsWith("https://www.tcgplayer.com")) && (
         <p className="mb-0 mt-2 text-[11px] text-amber-700">
-          TrainerDeck earns a small commission on TCGplayer purchases made through these links —
+          TCGdeck earns a small commission on TCGplayer purchases made through these links —
           at no extra cost to you.
         </p>
       )}
@@ -1315,7 +1315,7 @@ export default function DecksPage() {
 
   /** Re-read one deck from the server after something changed it.
    *
-   *  Used after TrainerAI's edit is approved. Reading it back rather than
+   *  Used after DeckAI's edit is approved. Reading it back rather than
    *  patching from the proposal is the point: the server validates the edit
    *  again on the way in, so the screen should show what the deck IS, not
    *  what the change asked for. */

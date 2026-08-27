@@ -105,7 +105,7 @@ export async function GET(req: Request) {
   }
 }
 
-/** The one tool TrainerAI holds: the card catalogue. The account digest
+/** The one tool DeckAI holds: the card catalogue. The account digest
  *  tells it what the player OWNS; this answers what EXISTS — set
  *  checklists, rarities, numbers, prices — which is a different question
  *  the digest can never cover, however complete the import gets. */

@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 import { APP_NAME } from "@/lib/branding";
 
-// What makes TrainerDeck installable.
+// What makes TCGdeck installable.
 //
 // Served at /manifest.webmanifest by Next's metadata route, and linked from
 // the root layout. Everything here is what a phone reads when somebody adds
@@ -22,7 +22,7 @@ import { APP_NAME } from "@/lib/branding";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: `${APP_NAME} — Pokémon card scanner & deck builder`,
+    name: `${APP_NAME} — card scanner & deck builder`,
     short_name: APP_NAME,
     description:
       "Scan a pile of cards from one photo, track what your collection is worth, and build decks from the cards you actually own.",

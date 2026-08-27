@@ -368,7 +368,7 @@ export async function priceProduct(
 async function mirrorSealedImage(productId: string, url: string): Promise<string | null> {
   try {
     const res = await fetch(url, {
-      headers: { Accept: "image/*", "User-Agent": "TrainerDeck sealed art" },
+      headers: { Accept: "image/*", "User-Agent": "TCGdeck sealed art" },
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) return null;

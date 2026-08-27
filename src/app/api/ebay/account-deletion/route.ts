@@ -17,7 +17,7 @@ import { NextResponse } from "next/server";
 //   POST { notification }   → an account was deleted; erase their data
 //
 // We hold nothing to erase. Prices come from public search using an
-// application token; no eBay user ever signs into TrainerDeck, so no eBay
+// application token; no eBay user ever signs into TCGdeck, so no eBay
 // user id, handle or address is stored anywhere in this database. The POST
 // handler therefore acknowledges and does nothing — which is the correct
 // response, not a stub. If that ever changes (a "link your eBay account"

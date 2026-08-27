@@ -19,7 +19,7 @@ interface InstallEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
-const DISMISSED_KEY = "trainerdeck.install.dismissed";
+const DISMISSED_KEY = "tcgdeck.install.dismissed";
 
 /** Already running as an installed app? Then there is nothing to offer.
  *  iOS reports it on navigator, everyone else through the media query. */
@@ -96,12 +96,12 @@ export default function PwaSetup() {
       <span className="min-w-0 flex-1 leading-snug">
         {prompt ? (
           <>
-            <b>Add TrainerDeck to your home screen</b> — it opens straight to your collection and
+            <b>Add TCGdeck to your home screen</b> — it opens straight to your collection and
             works without a signal.
           </>
         ) : (
           <>
-            <b>Add TrainerDeck to your home screen</b> — tap Share, then &ldquo;Add to Home
+            <b>Add TCGdeck to your home screen</b> — tap Share, then &ldquo;Add to Home
             Screen&rdquo;.
           </>
         )}

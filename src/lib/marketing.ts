@@ -84,7 +84,7 @@ export const TIERS: Tier[] = [
       // refuses. It belongs on the list precisely because being stopped by
       // it after signing up is how people found out.
       f("Share decks with friends", false),
-      f("Ongoing TrainerAI credits", false),
+      f("Ongoing DeckAI credits", false),
     ],
     cta: "Start free",
     href: "/signup",
@@ -104,7 +104,7 @@ export const TIERS: Tier[] = [
       // cap with it, which is the opposite of what Pro is for.
       f("Unlimited saved decks"),
       f("Bulk camera scanning, 20+ cards a shot"),
-      f("TrainerAI deck building + coaching"),
+      f("DeckAI deck building + coaching"),
       f("Card grading reports"),
       f("Daily price refresh"),
       f("CSV export of your whole collection"),
@@ -114,7 +114,7 @@ export const TIERS: Tier[] = [
   },
   {
     name: "Family",
-    who: "Up to 5 trainers, one bill",
+    who: "Up to 5 players, one bill",
     price: "$19",
     per: "/ month",
     credits: `${MONTHLY_GRANT.family.toLocaleString()} shared credits a month`,
@@ -156,8 +156,8 @@ export const FAQS = [
     a: "Cancel any time from billing and you keep access to the end of the cycle you've paid for — there's no partial refund for the rest of it. Your monthly credits end with the plan; boost credits you bought stay on your account and keep working on the free plan. Payments are final, and deleting your account forfeits any credits left, including boosts.",
   },
   {
-    q: "Is this affiliated with Pokémon?",
-    a: "No. It's an independent fan-made tool. Card data and prices come from public databases, and we don't sell cards.",
+    q: "Is this affiliated with Pokémon or Magic: The Gathering?",
+    a: "No. It's an independent fan-made tool, not affiliated with The Pokémon Company or Wizards of the Coast. Card data and prices come from public databases, and we don't sell cards.",
   },
   {
     q: "Are prices and AI output guaranteed?",

@@ -13,7 +13,7 @@ const MAX_MOVES_PER_TURN = 14;
 /** Play the bot's whole turn, mutating `state`. Returns the winner's id if
  *  the turn ended the game. */
 export function runBotTurn(state: BattleState, humanId: string): string | undefined {
-  const botName = state.names[BOT_ID] ?? "TrainerAI";
+  const botName = state.names[BOT_ID] ?? "DeckAI";
   let winner: string | undefined;
 
   for (let i = 0; i < MAX_MOVES_PER_TURN; i++) {

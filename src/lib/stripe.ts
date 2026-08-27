@@ -18,10 +18,20 @@ export function stripeEnabled(): boolean {
 
 /** The two products the owner created in Stripe, resolved by exact name.
  *  STRIPE_PRICE_PRO / STRIPE_PRICE_FAMILY env vars short-circuit the lookup
- *  if set. */
-export const PLAN_PRODUCTS: Record<"pro" | "family", { productName: string; cents: number }> = {
-  pro: { productName: "TrainerDeck Pro Tier", cents: 900 },
-  family: { productName: "TrainerDeck Family Tier", cents: 1900 },
+ *  if set.
+ *
+ *  legacyName: the products in the LIVE Stripe account still carry the
+ *  pre-rename names, and renaming them there is the owner's move to make,
+ *  not this code's to force. The resolver accepts either, preferring the
+ *  new name, so the rebrand can never orphan a live subscription — and
+ *  once the owner renames the products in the Stripe dashboard, the
+ *  legacy names simply stop matching anything. */
+export const PLAN_PRODUCTS: Record<
+  "pro" | "family",
+  { productName: string; legacyName: string; cents: number }
+> = {
+  pro: { productName: "TCGdeck Pro Tier", legacyName: "TrainerDeck Pro Tier", cents: 900 },
+  family: { productName: "TCGdeck Family Tier", legacyName: "TrainerDeck Family Tier", cents: 1900 },
 };
 
 /** One-off boost packs. Sold with ad-hoc price_data, so no Stripe product
@@ -135,13 +145,14 @@ export async function planPriceId(plan: "pro" | "family"): Promise<string> {
     method: "GET",
     params: { active: true, limit: 100 },
   });
-  const product = ((products.data as Array<Record<string, unknown>>) ?? []).find(
-    (p) => p.name === spec.productName
-  );
+  const list = (products.data as Array<Record<string, unknown>>) ?? [];
+  const product =
+    list.find((p) => p.name === spec.productName) ??
+    list.find((p) => p.name === spec.legacyName);
   if (!product) {
     throw new StripeError(
-      `Product "${spec.productName}" not found in Stripe — create it (or set ` +
-        `STRIPE_PRICE_${plan.toUpperCase()}).`,
+      `Product "${spec.productName}" (or its pre-rename name "${spec.legacyName}") ` +
+        `not found in Stripe — create it (or set STRIPE_PRICE_${plan.toUpperCase()}).`,
       500
     );
   }

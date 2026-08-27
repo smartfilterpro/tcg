@@ -1,4 +1,4 @@
-// The TrainerDeck mark — "the Fan" (option 1b from the logo sheet).
+// The TCGdeck mark — "the Fan" (option 1b from the logo sheet).
 //
 // Three cards splayed from a shared bottom pivot: many cards, one photo, which
 // is the thing the app actually does differently. Built from the same 63:88
@@ -162,11 +162,12 @@ export interface WordmarkProps {
   reversed?: boolean;
 }
 
-/** Trainer + Deck, the second half in the accent colour. */
+/** TCG + deck, the second half in the accent colour — same split the
+ *  TrainerDeck mark used, so the lockups and sizes all carry over. */
 export function Wordmark({ className, reversed = false }: WordmarkProps) {
   return (
     <span className={`font-display font-bold tracking-tight ${className ?? ""}`}>
-      Trainer<span className={reversed ? "text-brand-accent-soft" : "text-brand-accent"}>Deck</span>
+      TCG<span className={reversed ? "text-brand-accent-soft" : "text-brand-accent"}>deck</span>
     </span>
   );
 }
@@ -190,7 +191,7 @@ export function Logo({
   markOnly = false,
 }: LogoProps) {
   if (markOnly) {
-    return <FanMark size={size} reversed={reversed} className={className} title="TrainerDeck" />;
+    return <FanMark size={size} reversed={reversed} className={className} title="TCGdeck" />;
   }
   const stacked = layout === "stacked";
   return (
