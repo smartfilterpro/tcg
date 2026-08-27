@@ -4,6 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { strictNumberKey } from "@/lib/pokemontcg";
 import { buyLinkFor } from "@/lib/buyLink";
+import { availableVariants, variantLabel } from "@/lib/types";
 import { errorJson } from "@/lib/apiError";
 
 /** GET ?game=&set=&code= — one set, card by card: what's owned, what's
@@ -22,6 +23,9 @@ interface SetCardEntry {
   price: number | null;
   image: string | null;
   owned: boolean;
+  /** Master mode only: which finish this slot is ("normal", "reverseHolofoil"…). */
+  finish?: string;
+  finishLabel?: string;
   buyUrl?: string;
 }
 
@@ -32,6 +36,7 @@ export async function GET(req: Request) {
     const setName = url.searchParams.get("set")?.trim();
     const game = url.searchParams.get("game") === "mtg" ? "mtg" : "pokemon";
     const code = url.searchParams.get("code")?.trim().toLowerCase() || null;
+    const master = url.searchParams.get("mode") === "master";
     if (!setName) return NextResponse.json({ error: "Which set?" }, { status: 400 });
 
     const supabase = await createClient();
@@ -45,11 +50,13 @@ export async function GET(req: Request) {
       image_small: string | null;
       market_price: number | null;
       tcgplayer_id: string | null;
+      prices: Record<string, number | null> | null;
+      rarity: string | null;
     };
     const { data: catRows, error: catErr } = await fetchAllRows<CatRow>(() =>
       supabase
         .from("cards")
-        .select("id, name, number, image_small, market_price, tcgplayer_id")
+        .select("id, name, number, image_small, market_price, tcgplayer_id, prices, rarity")
         .eq("set_name", setName)
         .order("id") as unknown as {
         range: (from: number, to: number) => PromiseLike<{
@@ -61,6 +68,10 @@ export async function GET(req: Request) {
     if (catErr) throw catErr;
 
     const byNumber = new Map<string, SetCardEntry & { hasTcgp: boolean }>();
+    /** Master mode's finish universe and per-finish prices, keyed by number.
+     *  The union across printings, same as the summary route. */
+    const finishesByNumber = new Map<string, Set<string>>();
+    const finishPrice = new Map<string, number>(); // `${num}|${finish}` → USD
     const consider = (c: {
       id?: string;
       name: string;
@@ -68,9 +79,28 @@ export async function GET(req: Request) {
       image: string | null;
       price: number | null;
       tcgplayerId: string | null;
+      prices?: Record<string, number | null> | null;
+      rarity?: string | null;
     }) => {
       const key = strictNumberKey(c.number);
       if (!key) return;
+      if (master) {
+        const fins = finishesByNumber.get(key) ?? new Set<string>();
+        for (const f of availableVariants({
+          prices: c.prices ?? null,
+          rarity: c.rarity ?? null,
+          name: c.name,
+          game,
+        }))
+          fins.add(f);
+        finishesByNumber.set(key, fins);
+        for (const [f, pr] of Object.entries(c.prices ?? {})) {
+          if (pr != null && pr > 0) {
+            const fk = `${key}|${f}`;
+            if (!finishPrice.has(fk) || pr < finishPrice.get(fk)!) finishPrice.set(fk, pr);
+          }
+        }
+      }
       const prev = byNumber.get(key);
       const better =
         !prev ||
@@ -99,6 +129,8 @@ export async function GET(req: Request) {
         image: r.image_small,
         price: r.market_price,
         tcgplayerId: r.tcgplayer_id,
+        prices: r.prices,
+        rarity: r.rarity,
       });
     }
 
@@ -136,12 +168,17 @@ export async function GET(req: Request) {
             // Scryfall only fills numbers the catalogue doesn't hold — a
             // held row already carries our prices and buy id.
             if (key && !byNumber.has(key)) {
+              const foil = parseFloat(c.prices?.usd_foil ?? "");
+              const priceMap: Record<string, number | null> = {};
+              if (c.prices?.usd != null) priceMap.normal = parseFloat(c.prices.usd);
+              if (Number.isFinite(foil)) priceMap.foil = foil;
               consider({
                 name: c.name,
                 number: c.collector_number,
                 image: c.image_uris?.small ?? c.card_faces?.[0]?.image_uris?.small ?? null,
                 price: Number.isFinite(usd) ? usd : null,
                 tcgplayerId: c.tcgplayer_id != null ? String(c.tcgplayer_id) : null,
+                prices: Object.keys(priceMap).length > 0 ? priceMap : null,
               });
             }
           }
@@ -155,12 +192,13 @@ export async function GET(req: Request) {
 
     // What the member owns in this set, by number.
     type OwnRow = {
+      variant: string | null;
       card: { id: string; set_name: string; number: string } | Array<{ id: string; set_name: string; number: string }> | null;
     };
     const { data: ownRows } = await fetchAllRows<OwnRow>(() =>
       supabase
         .from("collection_items")
-        .select("card:cards(id, set_name, number)")
+        .select("variant, card:cards(id, set_name, number)")
         .eq("user_id", user.id)
         .order("created_at")
         .order("id") as unknown as {
@@ -170,11 +208,17 @@ export async function GET(req: Request) {
         }>;
       }
     );
+    const ownedVariants = new Map<string, Set<string>>(); // number → owned finishes
     for (const r of ownRows ?? []) {
       const card = Array.isArray(r.card) ? r.card[0] : r.card;
       if (!card || card.set_name !== setName) continue;
       if ((card.id.startsWith("scry-") ? "mtg" : "pokemon") !== game) continue;
       const key = strictNumberKey(card.number);
+      if (key) {
+        const vs = ownedVariants.get(key) ?? new Set<string>();
+        vs.add(r.variant ?? "normal");
+        ownedVariants.set(key, vs);
+      }
       const entry = key ? byNumber.get(key) : undefined;
       if (entry) entry.owned = true;
       else if (key) {
@@ -195,8 +239,26 @@ export async function GET(req: Request) {
       const d = n.replace(/\D/g, "");
       return d ? parseInt(d, 10) : Number.MAX_SAFE_INTEGER;
     };
-    const cards = [...byNumber.values()]
-      .map(({ hasTcgp: _h, ...c }) => c)
+    const FINISH_ORDER = ["normal", "holofoil", "reverseHolofoil", "foil", "etched"];
+    const cards = [...byNumber.entries()]
+      .flatMap(([key, entry]) => {
+        const { hasTcgp: _h, ...c } = entry;
+        if (!master) return [c];
+        // One row per finish the card is known to come in. The finish's own
+        // price where the catalogue holds one; the card's headline price
+        // stands in for the normal finish only.
+        const fins = [...(finishesByNumber.get(key) ?? new Set(["normal"]))].sort(
+          (a, b) => FINISH_ORDER.indexOf(a) - FINISH_ORDER.indexOf(b)
+        );
+        const ownedFins = ownedVariants.get(key) ?? new Set<string>();
+        return fins.map((f) => ({
+          ...c,
+          finish: f,
+          finishLabel: variantLabel(f),
+          owned: ownedFins.has(f),
+          price: finishPrice.get(`${key}|${f}`) ?? (f === "normal" ? c.price : null),
+        }));
+      })
       .sort((a, b) => numeric(a.number) - numeric(b.number) || a.number.localeCompare(b.number));
 
     const missing = cards.filter((c) => !c.owned);
