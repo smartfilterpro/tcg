@@ -1360,6 +1360,13 @@ export default function DecksPage() {
   const isMtgDeck = (d: { game?: string | null; cards?: DeckCardEntry[] | null }) =>
     d.game === "mtg" || (d.cards ?? []).some((c) => c.card_id?.startsWith("scry-"));
 
+  /** Which game's saved decks are listed. "all" by default, so nothing
+   *  anyone saved ever seems to vanish behind a filter they didn't set. */
+  const [deckFilter, setDeckFilter] = useState<"all" | "pokemon" | "mtg">("all");
+  const shownDecks = decks.filter(
+    (d) => deckFilter === "all" || (isMtgDeck(d) ? "mtg" : "pokemon") === deckFilter
+  );
+
   async function copyForLive(
     cards: DeckCardEntry[],
     key: string,
@@ -1697,7 +1704,34 @@ export default function DecksPage() {
 
       {/* Saved decks */}
       <div>
-        <h2 className="mb-2 font-semibold">Saved decks</h2>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-semibold">Saved decks</h2>
+          {/* The filter appears once there's anything to filter. "All" is
+              the default so nothing anyone saved ever seems to vanish. */}
+          {decks.length > 0 && (
+            <div className="flex gap-1">
+              {(
+                [
+                  ["all", "All"],
+                  ["pokemon", "⚡ Pokémon"],
+                  ["mtg", "🪄 Magic"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setDeckFilter(key)}
+                  className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                    deckFilter === key
+                      ? "border-brand-accent bg-brand-accent text-white"
+                      : "border-brand-line-strong text-brand-ink2 hover:border-brand-accent"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         {credits.freeTier && (
           <p className="mb-2 text-xs text-slate-500">
             Free accounts keep up to {FREE_DECK_LIMIT} saved decks (
@@ -1710,9 +1744,13 @@ export default function DecksPage() {
         )}
         {decks.length === 0 ? (
           <p className="text-sm text-slate-400">No decks yet — build one above!</p>
+        ) : shownDecks.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            No {deckFilter === "mtg" ? "Magic" : "Pokémon"} decks yet — build one above!
+          </p>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
-            {decks.map((deck) => (
+            {shownDecks.map((deck) => (
               <button
                 key={deck.id}
                 className="card-panel p-4 text-left hover:shadow-md"
