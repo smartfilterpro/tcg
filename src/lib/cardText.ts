@@ -461,8 +461,15 @@ export async function ensureCardText(
   if (card.battle_data && !opts?.force) return card.battle_data as CardBattleData;
 
   const id = card.id;
-  // Magic cards: no free-database ladder, no vision read — see above.
-  if (id.startsWith("scry-")) return null;
+  // Magic cards have their own one-rung ladder: Scryfall publishes the
+  // oracle text, so "read the card" is a single free API call, cached in
+  // battle_data like everything else. Never the vision reader — that
+  // extracts Pokémon-shaped data a Magic card doesn't have, for money.
+  if (id.startsWith("scry-")) {
+    const { fetchScryBattleData } = await import("@/lib/scryfall");
+    const bd = await fetchScryBattleData(admin, id);
+    return bd as unknown as CardBattleData | null;
+  }
   if (id.startsWith("custom-")) {
     // A photo-scanned card has no database entry anywhere; its picture is
     // the only source there has ever been.

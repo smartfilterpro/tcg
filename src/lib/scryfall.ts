@@ -80,10 +80,22 @@ interface ScryCard {
   rarity: string; // common | uncommon | rare | mythic | special | bonus
   released_at?: string;
   type_line?: string;
+  oracle_text?: string;
+  mana_cost?: string;
+  power?: string;
+  toughness?: string;
   colors?: string[];
+  color_identity?: string[];
+  keywords?: string[];
+  legalities?: Record<string, string>; // "legal" | "not_legal" | "banned" | "restricted"
   image_uris?: { small?: string; normal?: string; large?: string };
   card_faces?: Array<{
+    name?: string;
     type_line?: string;
+    oracle_text?: string;
+    mana_cost?: string;
+    power?: string;
+    toughness?: string;
     colors?: string[];
     image_uris?: { small?: string; normal?: string; large?: string };
   }>;
@@ -91,6 +103,58 @@ interface ScryCard {
   finishes?: string[]; // nonfoil | foil | etched
   tcgplayer_id?: number;
   digital?: boolean;
+}
+
+/** How a Magic card plays, stored in cards.battle_data — the same column
+ *  the Pokémon reader fills, wearing a different shape.
+ *
+ *  `rules` is deliberately the one field shared with the Pokémon shape:
+ *  the card-details endpoint and the card sheet render bd.rules verbatim,
+ *  so putting the type line, mana cost, oracle text and P/T there makes
+ *  every existing text panel show real Magic card text with no renderer
+ *  changes. The structured fields alongside are what the deck builder and
+ *  coach read. Scryfall's oracle data is authoritative — no AI read, ever. */
+export interface MtgBattleData {
+  game: "mtg";
+  rules: string[];
+  type_line: string | null;
+  mana_cost: string | null;
+  colors: string[];
+  color_identity: string[];
+  power: string | null;
+  toughness: string | null;
+  keywords: string[];
+  legalities: Record<string, string>;
+}
+
+export function mtgBattleDataOf(c: ScryCard): MtgBattleData {
+  const faces = c.card_faces?.length ? c.card_faces : [c];
+  const rules: string[] = [];
+  for (const f of faces) {
+    const head = [
+      faces.length > 1 && "name" in f && f.name ? f.name : null,
+      f.mana_cost || null,
+      f.type_line ?? null,
+      f.power != null && f.toughness != null ? `${f.power}/${f.toughness}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    if (head) rules.push(head);
+    if (f.oracle_text) rules.push(f.oracle_text);
+  }
+  const front = faces[0];
+  return {
+    game: "mtg",
+    rules,
+    type_line: c.type_line ?? front.type_line ?? null,
+    mana_cost: c.mana_cost ?? front.mana_cost ?? null,
+    colors: c.colors ?? front.colors ?? [],
+    color_identity: c.color_identity ?? [],
+    power: c.power ?? front.power ?? null,
+    toughness: c.toughness ?? front.toughness ?? null,
+    keywords: c.keywords ?? [],
+    legalities: c.legalities ?? {},
+  };
 }
 
 const COLOR_NAMES: Record<string, string> = {
@@ -158,7 +222,79 @@ export function scryToSummary(c: ScryCard): CardSummary {
     marketPrice: usd ?? usdFoil ?? usdEtched ?? null,
     prices: Object.keys(prices).length > 0 ? prices : null,
     tcgplayerId: c.tcgplayer_id ?? null,
+    battleData: mtgBattleDataOf(c),
   };
+}
+
+/** One card's play data, fetched fresh from Scryfall and written to the
+ *  catalogue. The ensureCardText ladder calls this for scry- ids — Magic's
+ *  entire "read the card" step is one free API call. */
+export async function fetchScryBattleData(
+  admin: SupabaseClient,
+  cardId: string
+): Promise<MtgBattleData | null> {
+  if (!cardId.startsWith("scry-")) return null;
+  try {
+    const raw = await scryGet(`/cards/${cardId.slice("scry-".length)}`);
+    if (!raw) return null;
+    const bd = mtgBattleDataOf(raw as unknown as ScryCard);
+    await admin.from("cards").update({ battle_data: bd }).eq("id", cardId).then(() => {});
+    return bd;
+  } catch {
+    return null;
+  }
+}
+
+/** Fill battle_data for every listed MTG card that lacks it, in Scryfall's
+ *  75-id batches. Returns the play data by card id (present rows included),
+ *  so the deck builder can warm a whole collection in a couple of calls. */
+export async function ensureMtgBattleData(
+  admin: SupabaseClient,
+  ids: string[]
+): Promise<Map<string, MtgBattleData>> {
+  const out = new Map<string, MtgBattleData>();
+  const scryIds = [...new Set(ids.filter((id) => id.startsWith("scry-")))];
+  if (scryIds.length === 0) return out;
+
+  let missing: string[] = scryIds;
+  try {
+    const { data } = await admin
+      .from("cards")
+      .select("id, battle_data")
+      .in("id", scryIds.slice(0, 1000));
+    const held = (data ?? []) as Array<{ id: string; battle_data: MtgBattleData | null }>;
+    for (const row of held) {
+      if (row.battle_data && (row.battle_data as { game?: string }).game === "mtg") {
+        out.set(row.id, row.battle_data);
+      }
+    }
+    missing = scryIds.filter((id) => !out.has(id));
+  } catch {
+    // battle_data column predates every MTG row; a read failure just means
+    // everything fetches fresh below.
+  }
+
+  for (let i = 0; i < missing.length; i += 75) {
+    const chunk = missing.slice(i, i + 75);
+    try {
+      const res = await scryPost("/cards/collection", {
+        identifiers: chunk.map((id) => ({ id: id.slice("scry-".length) })),
+      });
+      const found = (res?.data as ScryCard[] | undefined) ?? [];
+      for (const c of found) {
+        const bd = mtgBattleDataOf(c);
+        out.set(`scry-${c.id}`, bd);
+        await admin
+          .from("cards")
+          .update({ battle_data: bd })
+          .eq("id", `scry-${c.id}`)
+          .then(() => {});
+      }
+    } catch (err) {
+      console.warn("mtg battle data: batch failed", err);
+    }
+  }
+  return out;
 }
 
 /** MTG collector numbers compare after leading zeros go: "0123" is "123".

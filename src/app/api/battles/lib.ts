@@ -425,8 +425,13 @@ export async function expandDeck(
         image: meta?.image ?? null,
         big: meta?.big ?? undefined,
         // The deck entry's own category is the fallback when the database
-        // doesn't know the card (custom/manual entries).
-        cat: meta?.cat ?? entry.category ?? null,
+        // doesn't know the card (custom/manual entries). MTG categories are
+        // not battle categories — the battle engine is Pokémon-only.
+        cat:
+          meta?.cat ??
+          (entry.category === "pokemon" || entry.category === "trainer" || entry.category === "energy"
+            ? entry.category
+            : null),
         basic: meta?.basic ?? null,
         sup: meta?.sup ?? false,
         stad: meta?.stad ?? false,

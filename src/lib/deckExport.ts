@@ -225,3 +225,35 @@ export async function deckToLiveText(
 
   return { text: parts.join("\n"), warnings };
 }
+
+/** The deck as MTG Arena import text.
+ *
+ *  Far simpler than the Live format on purpose: Arena (and Moxfield, and
+ *  Archidekt) resolve plain "quantity name" lines by card name alone, and
+ *  omitting set codes sidesteps every set-code-mismatch problem the
+ *  Pokémon exporter has to solve. A Commander deck leads with its
+ *  commander under Arena's "Commander" header; everything else sits under
+ *  "Deck". Double-faced names ("Fable of the Mirror-Breaker // Reflection
+ *  of Kiki-Jiki") import fine as stored.
+ */
+export function deckToArenaText(
+  cards: Array<{ name: string; quantity: number; category?: string }>,
+  format?: string | null
+): { text: string; warnings: string[] } {
+  const entries = cards.filter((c) => c.quantity > 0);
+  const commander = entries.filter((c) => c.category === "commander");
+  const rest = entries.filter((c) => c.category !== "commander");
+  const line = (c: { name: string; quantity: number }) => `${c.quantity} ${c.name.trim()}`;
+
+  const parts: string[] = [];
+  const warnings: string[] = [];
+  if (commander.length > 0) {
+    parts.push("Commander", ...commander.map(line), "");
+  } else if (format === "commander") {
+    warnings.push(
+      "No card is marked as the commander — Arena will ask you to pick one after import."
+    );
+  }
+  parts.push("Deck", ...rest.map(line));
+  return { text: parts.join("\n"), warnings };
+}

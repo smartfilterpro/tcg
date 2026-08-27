@@ -480,7 +480,10 @@ export interface Profile {
 export interface DeckCardEntry {
   name: string;
   quantity: number;
-  category: "pokemon" | "trainer" | "energy";
+  /** Pokémon decks: pokemon | trainer | energy. Magic decks: commander |
+   *  creature | spell | land. One union rather than two types because a
+   *  deck's cards live in one jsonb column either way. */
+  category: "pokemon" | "trainer" | "energy" | "commander" | "creature" | "spell" | "land";
   card_id: string | null;
   reason: string | null;
 }
@@ -505,6 +508,10 @@ export interface Deck {
   strategy: string | null;
   cards: DeckCardEntry[];
   suggestions?: DeckSuggestion[];
+  /** Which game the deck belongs to (073). Absent means Pokémon. */
+  game?: CardGame | null;
+  /** MTG: "commander" | "standard". Pokémon decks leave it null. */
+  format?: string | null;
   /** Visible read-only to other members when true. */
   shared?: boolean;
   /** Who a shared deck is visible to: the whole group or accepted pals only. */

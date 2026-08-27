@@ -12,6 +12,7 @@
 // writes. Nothing here touches the database.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isBasicLand } from "@/lib/mtgDeckLegality";
 import {
   applyChanges,
   validateEdit,
@@ -75,7 +76,8 @@ export const DECK_EDIT_TOOL = {
  *  absent, and the caller keeps whatever it had. */
 export async function categoryLookup(
   supabase: SupabaseClient,
-  names: string[]
+  names: string[],
+  game: "pokemon" | "mtg" = "pokemon"
 ): Promise<(name: string) => DeckEntry["category"] | undefined> {
   const wanted = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
   if (wanted.length === 0) return () => undefined;
@@ -86,10 +88,14 @@ export async function categoryLookup(
   for (let i = 0; i < wanted.length; i += 100) {
     const { data } = await supabase
       .from("cards")
-      .select("name, supertype")
+      .select("id, name, supertype")
       .in("name", wanted.slice(i, i + 100));
     for (const row of data ?? []) {
-      const category = categoryFromSupertype(row.supertype as string | null);
+      // Same-name cards across games are rare but possible — only rows
+      // from the deck's own game get a say in its categories.
+      const rowGame = (row.id as string).startsWith("scry-") ? "mtg" : "pokemon";
+      if (rowGame !== game) continue;
+      const category = categoryFromSupertype(row.supertype as string | null, game);
       if (category) byName.set((row.name as string).trim().toLowerCase(), category);
     }
   }
@@ -117,7 +123,9 @@ export async function runDeckEditProposal(
 
   const { data: deck } = await supabase
     .from("decks")
-    .select("id, name, cards, user_id")
+    // select("*") — game/format only exist after migration 073, and naming
+    // them would fail the whole lookup on an older database.
+    .select("*")
     .eq("id", deckId)
     .maybeSingle();
   if (!deck || deck.user_id !== userId) {
@@ -125,12 +133,35 @@ export async function runDeckEditProposal(
   }
 
   const before = (deck.cards ?? []) as DeckEntry[];
+  // Which game's rules govern this deck. The stored column when we have
+  // it; otherwise the cards say — scry- ids are Magic's.
+  const deckGame: "pokemon" | "mtg" =
+    (deck as { game?: string }).game === "mtg" ||
+    before.some((c) => (c as { card_id?: string | null }).card_id?.startsWith("scry-"))
+      ? "mtg"
+      : "pokemon";
+  const mtgFormat: "commander" | "standard" =
+    (deck as { format?: string }).format === "standard"
+      ? "standard"
+      : (deck as { format?: string }).format === "commander" ||
+          before.some((c) => c.category === "commander") ||
+          before.reduce((s, c) => s + c.quantity, 0) > 80
+        ? "commander"
+        : "standard";
   // Every name in play: what the deck already holds plus what is being
   // added, so existing miscategorised rows are corrected at the same time.
-  const category = await categoryLookup(supabase, [
-    ...before.map((c) => c.name),
-    ...changes.map((c) => c.name),
-  ]);
+  const catFromCatalogue = await categoryLookup(
+    supabase,
+    [...before.map((c) => c.name), ...changes.map((c) => c.name)],
+    deckGame
+  );
+  // For Magic, never let the Pokémon guesser file a card: an unknown name
+  // is a land if it reads like a basic, else a spell.
+  const category =
+    deckGame === "mtg"
+      ? (name: string) =>
+          catFromCatalogue(name) ?? (isBasicLand(name) ? ("land" as const) : ("spell" as const))
+      : catFromCatalogue;
   const { cards: after, applied } = applyChanges(before, changes, category);
   if (applied.length === 0) {
     return { forModel: "The deck already matches that — no change to propose.", proposal: null };
@@ -151,15 +182,19 @@ export async function runDeckEditProposal(
   const { data: items } = await fetchAllRows(() =>
     supabase
       .from("collection_items")
-      .select("quantity, card:cards(name)")
+      .select("quantity, card:cards(id, name)")
       .eq("user_id", userId)
       .order("id")
   );
   const ownedByName = new Map<string, number>();
   for (const i of items ?? []) {
-    const name = (i.card as unknown as { name?: string } | null)?.name;
-    if (!name) continue;
-    const key = name.trim().toLowerCase();
+    const card = i.card as unknown as { id?: string; name?: string } | null;
+    if (!card?.name) continue;
+    // Only the deck's own game counts as owning the card — a Pokémon card
+    // sharing a Magic card's name is not a copy of it.
+    const cardGame = card.id?.startsWith("scry-") ? "mtg" : "pokemon";
+    if (cardGame !== deckGame) continue;
+    const key = card.name.trim().toLowerCase();
     ownedByName.set(key, (ownedByName.get(key) ?? 0) + ((i.quantity as number) ?? 0));
   }
 
@@ -176,7 +211,7 @@ export async function runDeckEditProposal(
   const TYPE_TAIL_RE =
     /(grass|fire|water|lightning|psychic|fighting|darkness|metal|fairy)\s+energy$/i;
   let churnCaution = "";
-  {
+  if (deckGame !== "mtg") {
     const outs = applied.filter((a) => a.to < a.from);
     const ins = applied.filter((a) => a.to > a.from);
     const pairs = outs.flatMap((o) => {
@@ -231,7 +266,7 @@ export async function runDeckEditProposal(
     }
   }
 
-  const check = validateEdit(after, ownedByName);
+  const check = validateEdit(after, ownedByName, { game: deckGame, mtgFormat });
   if (!check.ok) {
     // Only the rules of the game get here now. Not owning the cards does
     // not, and the model is told so explicitly — because when it was told
