@@ -34,7 +34,7 @@ export interface MetaDeckRow {
   share: number | null;
   placements: number | null;
   core_cards: MetaCoreCard[];
-  source: "curated" | "limitless";
+  source: "curated" | "limitless" | "scryfall";
   window_days: number | null;
   notes: string | null;
   updated_at: string;
@@ -59,7 +59,7 @@ export interface MetaDeckView {
   format: string;
   share: number | null;
   placements: number | null;
-  source: "curated" | "limitless";
+  source: "curated" | "limitless" | "scryfall";
   windowDays: number | null;
   notes: string | null;
   updatedAt: string;

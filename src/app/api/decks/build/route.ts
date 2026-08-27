@@ -462,11 +462,12 @@ META_HONESTY_GOES_HERE`;
 const MTG_NO_META = `- You have NO tournament metagame data in this request. Build from card
   quality and synergy, and never present the deck as "what's winning right
   now" — you don't know that.`;
-const MTG_HAS_META = `- A CURATED META section is provided: archetypes the app's owner curated
-  as worth building toward (Magic has no tournament feed here, so this is
-  curation, not results — never call it tournament data). If a TARGET
-  ARCHETYPE list is given, use it as the skeleton and adapt it only where
-  you can say why.`;
+const MTG_HAS_META = `- An ARCHETYPE GUIDANCE section is provided: commanders and archetypes
+  drawn from community popularity data (EDHREC build counts) and from the
+  app owner's own curation. Magic has no tournament feed here — this is
+  popularity and curation, NOT results; never call it "what's winning". If
+  a TARGET ARCHETYPE list is given, use it as the skeleton and adapt it
+  only where you can say why.`;
 
 const MTG_LIMITS_COLLECTION = `- Never include more copies than the player owns (except basic lands).`;
 const MTG_LIMITS_FAMILY = `- Never include more copies than the household owns in total (except basic lands).`;
@@ -753,7 +754,7 @@ export async function POST(req: Request) {
               const rows = metaRows ?? [];
               if (rows.length > 0) {
                 mtgMetaContext =
-                  `CURATED META (archetypes the app's owner curated for ${mtgFormat}):\n` +
+                  `ARCHETYPE GUIDANCE for ${mtgFormat} (community popularity + owner curation — not tournament results):\n` +
                   rows
                     .map((r) => `- ${r.archetype}${r.notes ? ` — ${String(r.notes).slice(0, 120)}` : ""}`)
                     .join("\n");
@@ -768,7 +769,7 @@ export async function POST(req: Request) {
                 if (target && Array.isArray(core) && core.length > 0) {
                   mtgMetaContext +=
                     `\n\nTARGET ARCHETYPE — the player chose "${target.archetype}" from the ` +
-                    `trending page. Its curated list:\n` +
+                    `trending page. Its listed cards:\n` +
                     core.map((c) => `${c.count} ${c.name}`).join("\n");
                 }
               }

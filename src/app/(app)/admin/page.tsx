@@ -4801,7 +4801,7 @@ interface AdminMetaDeck {
   format: string;
   share: number | null;
   placements: number | null;
-  source: "curated" | "limitless";
+  source: "curated" | "limitless" | "scryfall";
   notes: string | null;
   core_cards: Array<{ name: string; count: number }>;
   updated_at: string;

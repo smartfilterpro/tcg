@@ -29,7 +29,7 @@ interface MetaDeck {
   format: string;
   share: number | null;
   placements: number | null;
-  source: "curated" | "limitless";
+  source: "curated" | "limitless" | "scryfall";
   windowDays: number | null;
   notes: string | null;
   updatedAt: string;
@@ -85,8 +85,9 @@ export default function MetaPage() {
       <div>
         <h1 className="text-2xl font-bold">Trending decks</h1>
         <p className="text-sm text-slate-500">
-          What&apos;s winning at real tournaments right now — and how close your collection
-          already is to each one.
+          {gameTab === "mtg"
+            ? "The most-built commanders across the community (EDHREC popularity via Scryfall), plus anything curated by hand — and how close your collection is to each."
+            : "What's winning at real tournaments right now — and how close your collection already is to each one."}
         </p>
       </div>
 
@@ -121,7 +122,7 @@ export default function MetaPage() {
       {migrated && decks.filter((d) => (d.game ?? "pokemon") === gameTab).length === 0 && !error && (
         <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">
           {gameTab === "mtg"
-            ? "No Magic archetypes yet — they're curated by hand, and the admin hasn't added any."
+            ? "No Magic decks yet. The nightly pull fills this with the community's most-built commanders; an admin can also curate full archetypes by hand."
             : "No archetypes yet. The nightly sync fills this in on its own; an admin can also add decks by hand from the Admin page."}
         </div>
       )}
@@ -154,6 +155,11 @@ export default function MetaPage() {
                   {d.source === "curated" && (
                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">
                       curated
+                    </span>
+                  )}
+                  {d.source === "scryfall" && (
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">
+                      community-built
                     </span>
                   )}
                 </div>
@@ -227,6 +233,7 @@ export default function MetaPage() {
                   <p className="m-0 text-xs text-slate-400">
                     Updated {shortAgo(d.updatedAt)}
                     {d.source === "limitless" && " · results via LimitlessTCG"}
+                    {d.source === "scryfall" && " · popularity via EDHREC rank on Scryfall"}
                   </p>
                   <a
                     className="btn-secondary shrink-0 text-sm"

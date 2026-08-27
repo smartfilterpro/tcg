@@ -550,16 +550,113 @@ export async function refreshMtgPrices(
 
 /** Hourly tick, daily work: refresh whatever has gone stale. Piggybacks on
  *  the same long-lived process as the other loops. */
+/** Fill the Magic trending tab with the most-built commanders.
+ *
+ *  Magic has no Limitless: the tournament sites are scraping-only and
+ *  forbid it, and scraped HTML fails silently — the one failure mode this
+ *  app refuses. Scryfall's edhrec_rank is the honest alternative: how
+ *  often the EDHREC community builds with each card, served keyless by an
+ *  API that invites the use. One request, most-popular first.
+ *
+ *  Rows land in meta_decks as source='scryfall' (075): replaced wholesale
+ *  by each successful pull, never touching curated rows — an admin's
+ *  hand-written archetype always wins its name. Each row is a commander,
+ *  not a decklist; the deck builder takes it from there. */
+export async function syncMtgCommanderMeta(admin: SupabaseClient): Promise<string> {
+  const listing = await scryGet(
+    // order=edhrec: most-built first. Cards banned in Commander can still
+    // carry a rank, so the legality filter matters.
+    `/cards/search?order=edhrec&q=${encodeURIComponent("is:commander legal:commander")}`
+  );
+  const cards = ((listing?.data as ScryCard[] | undefined) ?? []).filter((c) => !c.digital);
+  if (cards.length === 0) throw new Error("Scryfall returned no commanders");
+  const top = cards.slice(0, 12);
+
+  const { data: existing, error: readErr } = await admin
+    .from("meta_decks")
+    .select("id, archetype, source")
+    .eq("game", "mtg")
+    .eq("format", "commander");
+  if (readErr) throw readErr;
+  const curated = new Set(
+    (existing ?? [])
+      .filter((r) => r.source === "curated")
+      .map((r) => (r.archetype as string).toLowerCase())
+  );
+  const scryByName = new Map(
+    (existing ?? [])
+      .filter((r) => r.source === "scryfall")
+      .map((r) => [(r.archetype as string).toLowerCase(), r.id as string])
+  );
+
+  const now = new Date().toISOString();
+  let wrote = 0;
+  const keep = new Set<string>();
+  for (const c of top) {
+    const key = c.name.toLowerCase();
+    if (curated.has(key)) continue;
+    keep.add(key);
+    const identity = (c.card_faces?.[0]?.colors ?? c.colors ?? []).join("") || "C";
+    const row = {
+      archetype: c.name,
+      game: "mtg",
+      format: "commander",
+      share: null,
+      placements: null,
+      core_cards: [{ name: c.name, count: 1 }],
+      source: "scryfall",
+      window_days: null,
+      notes: `${c.type_line ?? "Legendary Creature"} · ${identity} · one of the most-built commanders on EDHREC`,
+      updated_at: now,
+    };
+    const id = scryByName.get(key);
+    const { error } = id
+      ? await admin.from("meta_decks").update(row).eq("id", id)
+      : await admin.from("meta_decks").insert(row);
+    if (!error) wrote += 1;
+  }
+  const stale = [...scryByName.entries()].filter(([k]) => !keep.has(k)).map(([, id]) => id);
+  if (stale.length > 0) {
+    await admin.from("meta_decks").delete().in("id", stale).then(() => {});
+  }
+  return `mtg meta: top ${wrote} commanders written${stale.length ? `, ${stale.length} rotated out` : ""}`;
+}
+
+const MTG_META_STATE_KEY = "mtg_meta_synced_at";
+const DAY_MS = 24 * 3_600_000;
+
 export function startMtgPriceLoop(): void {
   const HOUR = 3_600_000;
   const tick = async () => {
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const admin = createAdminClient();
     try {
-      const { createAdminClient } = await import("@/lib/supabase/admin");
-      const admin = createAdminClient();
       const { scanned, updated } = await refreshMtgPrices(admin);
       if (scanned > 0) console.log(`mtg prices: ${updated}/${scanned} rows refreshed`);
     } catch (err) {
       console.warn("mtg prices: pass failed", err);
+    }
+    // Daily, not hourly: commander popularity moves by the week. The claim
+    // is written BEFORE the sync so a failure waits for tomorrow instead
+    // of hammering Scryfall every hour of a bad day.
+    try {
+      const { data } = await admin
+        .from("app_state")
+        .select("value")
+        .eq("key", MTG_META_STATE_KEY)
+        .maybeSingle();
+      const last = Date.parse((data?.value as { at?: string } | null)?.at ?? "");
+      if (Number.isFinite(last) && Date.now() - last < DAY_MS) return;
+      await admin.from("app_state").upsert({
+        key: MTG_META_STATE_KEY,
+        value: { at: new Date().toISOString() },
+        updated_at: new Date().toISOString(),
+      });
+      console.log(await syncMtgCommanderMeta(admin));
+    } catch (err) {
+      // Pre-074/075 databases land here (no game column / source refused) —
+      // quiet by design; curated rows still carry the tab.
+      console.warn("mtg meta: sync skipped", err instanceof Error ? err.message : err);
     }
   };
   setTimeout(tick, 90_000); // after boot settles
