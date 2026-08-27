@@ -74,6 +74,14 @@ export default function FamilyPage() {
   /** Which pending invitation was just copied, so only that row says so. */
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [peeking, setPeeking] = useState<{ id: string; name: string } | null>(null);
+  /** What the household's cards are worth, together and per member. The
+   *  family page is where that number belongs: it's a statement about the
+   *  PLAN, not about whichever binder happens to be open. Best-effort —
+   *  absent, the page reads exactly as it always did. */
+  const [value, setValue] = useState<{
+    total: number;
+    members: Array<{ id: string; name: string; value: number }>;
+  } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -99,6 +107,12 @@ export default function FamilyPage() {
   useEffect(() => {
     load();
     loadInvites();
+    fetch("/api/family/value")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (j?.family) setValue({ total: j.total, members: j.members ?? [] });
+      })
+      .catch(() => {});
   }, [load, loadInvites]);
 
   async function answerInvite(token: string, accept: boolean) {
@@ -228,6 +242,21 @@ export default function FamilyPage() {
             {invites.sent.length > 0 && ` · ${invites.sent.length} invited`} ·{" "}
             {g.poolGrant.toLocaleString()} shared credits a month
           </p>
+          {/* The whole house, one number — every member's binder, both
+              games, same per-item arithmetic as the collection page. */}
+          {value && (
+            <p className="m-0 mt-1 text-[14.5px] text-brand-ink3">
+              Cards worth{" "}
+              <b className="text-brand-ink">
+                ~$
+                {value.total.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </b>{" "}
+              together
+            </p>
+          )}
         </div>
       </div>
       {incoming}
@@ -261,6 +290,14 @@ export default function FamilyPage() {
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium">{m.name}</div>
                   <div className="truncate text-xs text-brand-ink4">{m.email}</div>
+                  {(() => {
+                    const v = value?.members.find((x) => x.id === m.userId)?.value;
+                    return v != null && v > 0 ? (
+                      <div className="text-xs text-brand-ink4">
+                        ≈ ${Math.round(v).toLocaleString()} in cards
+                      </div>
+                    ) : null;
+                  })()}
                   {m.userId !== g.meId && (
                     <button
                       className="mt-0.5 text-xs font-medium text-brand-accent hover:underline"

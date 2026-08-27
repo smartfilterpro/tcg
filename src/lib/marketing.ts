@@ -95,7 +95,7 @@ export const TIERS: Tier[] = [
     price: "$9",
     per: "/ month",
     credits: `${MONTHLY_GRANT.pro} credits every month`,
-    creditsNote: "≈ 140 bulk scans, a dozen deck builds, or hundreds of coach replies",
+    creditsNote: "≈ 100 bulk scans, a dozen deck builds, or hundreds of coach replies",
     featured: true,
     dark: true,
     features: [
