@@ -140,18 +140,59 @@ export async function GET() {
       }
     }
 
-    const sets: SetSummary[] = [...byKey.values()]
-      .map((g) => {
+    // THE DENOMINATOR IS EVERY CARD KNOWN TO EXIST, not the printed size.
+    //
+    // Secret rares are numbered PAST the printed total ("94/88"), and they
+    // count toward `owned` — so owned/printedTotal read "116 of 88 · 100%
+    // complete!" on a set with eight base cards still missing. The honest
+    // universe is printed size ∪ the catalogue's distinct numbers for the
+    // set — the same universe the expanded missing-list is built from, so
+    // the bar and "Missing 8" can never disagree again.
+    const catCount = new Map<string, Set<string>>();
+    try {
+      const names = [...new Set([...byKey.values()].map((g) => g.name))];
+      for (let i = 0; i < names.length; i += 25) {
+        type CatRow = { id: string; set_name: string; number: string };
+        const { data: catRows } = await fetchAllRows<CatRow>(() =>
+          admin
+            .from("cards")
+            .select("id, set_name, number")
+            .in("set_name", names.slice(i, i + 25))
+            .order("id") as unknown as {
+            range: (from: number, to: number) => PromiseLike<{
+              data: CatRow[] | null;
+              error: { message: string } | null;
+            }>;
+          }
+        );
+        for (const c of catRows ?? []) {
+          if (c.id.startsWith("custom-")) continue;
+          const game = c.id.startsWith("scry-") ? "mtg" : "pokemon";
+          const key = `${game}|${c.set_name}`;
+          if (!byKey.has(key)) continue;
+          const num = strictNumberKey(c.number);
+          if (!num) continue;
+          const set = catCount.get(key) ?? new Set<string>();
+          set.add(num);
+          catCount.set(key, set);
+        }
+      }
+    } catch {
+      // Catalogue unreadable: printed sizes still carry the page.
+    }
+
+    const sets: SetSummary[] = [...byKey.entries()]
+      .map(([key, g]) => {
         const owned = g.numbers.size;
-        // A set can legitimately exceed its printed size (secret rares) —
-        // the bar caps at 100 rather than lying past it.
-        const pct = g.total ? Math.min(100, Math.round((owned / g.total) * 100)) : null;
+        const known = Math.max(g.total ?? 0, catCount.get(key)?.size ?? 0, owned);
+        const total = known > 0 ? known : null;
+        const pct = total ? Math.min(100, Math.round((owned / total) * 100)) : null;
         return {
           name: g.name,
           game: g.game,
           code: g.codes.size === 1 ? [...g.codes][0] : null,
           owned,
-          total: g.total,
+          total,
           pct,
         };
       })
