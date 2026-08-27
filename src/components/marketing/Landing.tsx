@@ -12,6 +12,13 @@ import type { LiveStat } from "@/lib/liveStats";
 
 const DIFFS = [
   {
+    tag: "TWO GAMES",
+    title: "Pokémon and Magic, one binder",
+    body: "Dump the shoebox out: Pokémon TCG and Magic: The Gathering cards in the same photo, each card matched against its own database, priced from its own market, and filed on its own tab.",
+    vs: "one app per game, and sorting the shoebox before you start.",
+    wide: true,
+  },
+  {
     tag: "BULK SCAN",
     title: "One photo, twenty cards",
     body: "Spread the stack on the table and shoot it. Names and collector numbers are read together, matched against the card database, and merged into your existing quantities.",
@@ -20,7 +27,7 @@ const DIFFS = [
   {
     tag: "DECK AI",
     title: "Decks from the cards you own",
-    body: "Not a netdeck you can't build. A legal 60-card list from your actual binder, with the swaps that would improve it and what to buy next if you want to.",
+    body: "Not a netdeck you can't build. A legal 60-card Pokémon list from your actual binder, with the swaps that would improve it and what to buy next. Magic deck building — Commander and Standard — is next.",
     vs: "a price database and a wishlist button.",
   },
   {
@@ -41,7 +48,7 @@ const STEPS = [
   {
     n: "01",
     title: "Shoot the pile",
-    body: "Cards flat, decent light, collector numbers visible. One photo covers a whole row.",
+    body: "Cards flat, decent light, collector numbers visible. One photo covers a whole row — Pokémon or Magic, or both at once.",
     shot: "/shots/step-1-scan.jpg",
     shotAlt: "Cards laid on a table being identified, each name ticking off as it is matched.",
   },
@@ -153,10 +160,27 @@ export default function Landing({
                 Play the better deck.
               </h1>
               <p className="mt-6 max-w-[48ch] text-[16.5px] leading-[1.58] text-brand-ink2 [text-wrap:pretty] min-[720px]:text-[19px]">
-                Most collection apps make you photograph one card at a time, then leave you staring
-                at a spreadsheet. {APP_NAME} reads <b>20+ cards from a single photo</b> and then
-                helps you actually build and play a deck with the cards you own.
+                Most collection apps make you photograph one card at a time — and pick one game.
+                {" "}{APP_NAME} reads <b>20+ cards from a single photo</b>, Pokémon and Magic
+                together in the same pile, and then helps you actually build and play a deck with
+                the cards you own.
               </p>
+              {/* The two games, named outright. After the game-neutral
+                  rebrand nothing on this page said WHICH games — and "TCG"
+                  alone answers that for nobody. */}
+              <div className="mt-5 flex flex-wrap gap-2">
+                {["Pokémon TCG", "Magic: The Gathering"].map((g) => (
+                  <span
+                    key={g}
+                    className="rounded-full border border-brand-line bg-brand-panel px-3 py-1.5 font-mono text-[11px] font-medium tracking-[.04em] text-brand-ink2"
+                  >
+                    {g}
+                  </span>
+                ))}
+                <span className="self-center text-[12px] text-brand-ink5">
+                  same binder, even the same photo
+                </span>
+              </div>
               <div className="mt-8 flex flex-wrap gap-3">
                 <Link
                   href="/signup"
@@ -197,7 +221,14 @@ export default function Landing({
         </div>
         <div className="grid grid-cols-1 gap-4 min-[720px]:grid-cols-2">
           {DIFFS.map((d) => (
-            <div key={d.tag} className="flex flex-col gap-3 rounded-[18px] border border-brand-line bg-brand-panel p-[22px] min-[720px]:p-[30px]">
+            <div
+              key={d.tag}
+              // The two-games card leads and spans the row: it is the claim
+              // no competitor can copy, and half a column undersells it.
+              className={`flex flex-col gap-3 rounded-[18px] border border-brand-line bg-brand-panel p-[22px] min-[720px]:p-[30px] ${
+                "wide" in d && d.wide ? "min-[720px]:col-span-2" : ""
+              }`}
+            >
               <span className="self-start rounded-md bg-brand-sunken px-2 py-1 font-mono text-[11px] font-medium text-brand-ink3">
                 {d.tag}
               </span>
