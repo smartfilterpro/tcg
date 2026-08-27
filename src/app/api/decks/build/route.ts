@@ -455,9 +455,18 @@ const MTG_POOL_ALL = `CARD POOL — DREAM DECK MODE:
 - The collection table shows what the player already owns. When two
   options are close in strength, prefer the owned one — a smaller buy
   list is a real advantage between otherwise-equal choices.
-- You have NO tournament metagame data in this request. Build from card
+META_HONESTY_GOES_HERE`;
+
+/** Two truths, one slot: what the model may claim about the metagame
+ *  depends on whether the app actually attached one. */
+const MTG_NO_META = `- You have NO tournament metagame data in this request. Build from card
   quality and synergy, and never present the deck as "what's winning right
   now" — you don't know that.`;
+const MTG_HAS_META = `- A CURATED META section is provided: archetypes the app's owner curated
+  as worth building toward (Magic has no tournament feed here, so this is
+  curation, not results — never call it tournament data). If a TARGET
+  ARCHETYPE list is given, use it as the skeleton and adapt it only where
+  you can say why.`;
 
 const MTG_LIMITS_COLLECTION = `- Never include more copies than the player owns (except basic lands).`;
 const MTG_LIMITS_FAMILY = `- Never include more copies than the household owns in total (except basic lands).`;
@@ -489,10 +498,12 @@ const MTG_UPGRADES_FAMILY = MTG_UPGRADES_COLLECTION.replace(
 
 function mtgSystemPrompt(
   pool: "collection" | "family" | "all",
-  format: "commander" | "standard"
+  format: "commander" | "standard",
+  hasMeta = false
 ): string {
-  const rules =
-    pool === "all" ? MTG_POOL_ALL : pool === "family" ? MTG_POOL_FAMILY : MTG_POOL_COLLECTION;
+  const rules = (
+    pool === "all" ? MTG_POOL_ALL : pool === "family" ? MTG_POOL_FAMILY : MTG_POOL_COLLECTION
+  ).replace("META_HONESTY_GOES_HERE", hasMeta ? MTG_HAS_META : MTG_NO_META);
   const limits =
     pool === "all" ? MTG_LIMITS_ALL : pool === "family" ? MTG_LIMITS_FAMILY : MTG_LIMITS_COLLECTION;
   const upgrades =
@@ -724,17 +735,64 @@ export async function POST(req: Request) {
             .filter(Boolean)
             .join("\n\n");
 
-          const variableContent = `REQUEST: ${
-            prompt?.trim() ||
-            (poolMode === "all"
-              ? `Build the strongest ${mtgFormat === "commander" ? "Commander" : "Standard"} deck you can — any cards, money no object.`
-              : effectivePool === "family"
-                ? `Build the best ${mtgFormat === "commander" ? "Commander" : "Standard"} deck you can from our family's combined Magic cards.`
-                : `Build the best ${mtgFormat === "commander" ? "Commander" : "Standard"} deck you can from my Magic collection.`)
-          }`;
+          // The curated Magic meta, for dream decks. Magic has no keyless
+          // tournament feed, so these rows exist only when the owner wrote
+          // them on the admin page — and the prompt says curation, never
+          // "results". Absent table (pre-074) or empty is fine; the mode
+          // works ungrounded exactly as before.
+          let mtgMetaContext: string | null = null;
+          if (poolMode === "all") {
+            try {
+              const { data: metaRows } = await admin
+                .from("meta_decks")
+                .select("archetype, share, core_cards, notes")
+                .eq("game", "mtg")
+                .eq("format", mtgFormat)
+                .order("share", { ascending: false, nullsFirst: false })
+                .limit(10);
+              const rows = metaRows ?? [];
+              if (rows.length > 0) {
+                mtgMetaContext =
+                  `CURATED META (archetypes the app's owner curated for ${mtgFormat}):\n` +
+                  rows
+                    .map((r) => `- ${r.archetype}${r.notes ? ` — ${String(r.notes).slice(0, 120)}` : ""}`)
+                    .join("\n");
+                const target = targetArchetype
+                  ? rows.find(
+                      (r) =>
+                        normalizeForSearch(r.archetype as string) ===
+                        normalizeForSearch(targetArchetype)
+                    )
+                  : null;
+                const core = target?.core_cards as Array<{ name: string; count: number }> | null;
+                if (target && Array.isArray(core) && core.length > 0) {
+                  mtgMetaContext +=
+                    `\n\nTARGET ARCHETYPE — the player chose "${target.archetype}" from the ` +
+                    `trending page. Its curated list:\n` +
+                    core.map((c) => `${c.count} ${c.name}`).join("\n");
+                }
+              }
+            } catch {
+              // Pre-074 — no game column on meta_decks yet.
+            }
+          }
+
+          const variableContent = [
+            mtgMetaContext,
+            `REQUEST: ${
+              prompt?.trim() ||
+              (poolMode === "all"
+                ? `Build the strongest ${mtgFormat === "commander" ? "Commander" : "Standard"} deck you can — any cards, money no object.`
+                : effectivePool === "family"
+                  ? `Build the best ${mtgFormat === "commander" ? "Commander" : "Standard"} deck you can from our family's combined Magic cards.`
+                  : `Build the best ${mtgFormat === "commander" ? "Commander" : "Standard"} deck you can from my Magic collection.`)
+            }`,
+          ]
+            .filter(Boolean)
+            .join("\n\n");
 
           const client = anthropic();
-          const mtgSystem = mtgSystemPrompt(effectivePool, mtgFormat);
+          const mtgSystem = mtgSystemPrompt(effectivePool, mtgFormat, mtgMetaContext != null);
           const stream = client.messages.stream({
             model: MODEL,
             max_tokens: 32000,
@@ -1512,12 +1570,25 @@ export async function POST(req: Request) {
         let metaContext: string | null = null;
         if (poolMode === "all") {
           try {
-            const { data: metaRows } = await admin
+            // Pokémon rows only: "standard" is a Magic format name too
+            // (074). Pre-074 the game column doesn't exist — and neither
+            // do Magic rows, so the unfiltered retry is equally correct.
+            let { data: metaRows, error: metaErr } = await admin
               .from("meta_decks")
               .select("archetype, share, core_cards, window_days")
               .eq("format", "standard")
+              .eq("game", "pokemon")
               .order("share", { ascending: false, nullsFirst: false })
               .limit(10);
+            if (metaErr && /game/.test(metaErr.message ?? "")) {
+              ({ data: metaRows, error: metaErr } = await admin
+                .from("meta_decks")
+                .select("archetype, share, core_cards, window_days")
+                .eq("format", "standard")
+                .order("share", { ascending: false, nullsFirst: false })
+                .limit(10));
+            }
+            if (metaErr) throw metaErr;
             const rows = metaRows ?? [];
             if (rows.length > 0) {
               metaContext =

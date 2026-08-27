@@ -4796,6 +4796,8 @@ function SealedProbePanel() {
 interface AdminMetaDeck {
   id: string;
   archetype: string;
+  /** Only after migration 074 — absent means Pokémon. */
+  game?: "pokemon" | "mtg" | null;
   format: string;
   share: number | null;
   placements: number | null;
@@ -4879,6 +4881,8 @@ function MetaDecksPanel() {
   const [share, setShare] = useState("");
   const [notes, setNotes] = useState("");
   const [cardsText, setCardsText] = useState("");
+  // game+format as one choice — the pairs are the only valid combinations.
+  const [slot, setSlot] = useState("pokemon|standard");
 
   const load = useCallback(async () => {
     try {
@@ -4904,6 +4908,8 @@ function MetaDecksPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           archetype,
+          game: slot.split("|")[0],
+          format: slot.split("|")[1],
           share: share.trim() === "" ? null : Number(share),
           notes,
           cardsText,
@@ -4933,6 +4939,7 @@ function MetaDecksPanel() {
   }
 
   function edit(d: AdminMetaDeck) {
+    setSlot(`${(d as { game?: string }).game === "mtg" ? "mtg" : "pokemon"}|${d.format || "standard"}`);
     setArchetype(d.archetype);
     setShare(d.share == null ? "" : String(d.share));
     setNotes(d.notes ?? "");
@@ -4942,9 +4949,11 @@ function MetaDecksPanel() {
   return (
     <div className="space-y-2">
       <p className="m-0 text-xs leading-[1.6] text-brand-ink3">
-        What the Meta page shows. The nightly LimitlessTCG pull fills this table on its own;
-        rows saved here are <b>curated</b> — the sync never overwrites them, so a hand-written
-        archetype survives every pull. Cards are one per line: &quot;4 Charizard ex&quot;.
+        What the Meta page shows. The nightly LimitlessTCG pull fills the Pokémon side on its
+        own; Magic has no such feed, so its trending decks are whatever is saved here. Rows
+        saved here are <b>curated</b> — the sync never overwrites them, so a hand-written
+        archetype survives every pull. Cards are one per line: &quot;4 Charizard ex&quot; /
+        &quot;1 Sol Ring&quot;.
       </p>
       {!migrated && (
         <p className="m-0 text-xs text-brand-negative">Run migration 068 to enable this.</p>
@@ -4954,6 +4963,9 @@ function MetaDecksPanel() {
           {decks.map((d) => (
             <li key={d.id} className="flex items-center gap-2 text-xs text-brand-ink3">
               <span className="font-semibold">{d.archetype}</span>
+              <span className="text-brand-ink4">
+                {(d as { game?: string }).game === "mtg" ? `🪄 ${d.format}` : `⚡ ${d.format}`}
+              </span>
               {d.share != null && <span>{d.share}%</span>}
               <span className="text-brand-ink4">
                 {d.core_cards.length} cards · {d.source}
@@ -4969,6 +4981,12 @@ function MetaDecksPanel() {
         </ul>
       )}
       <div className="flex flex-wrap gap-2">
+        <select className="input w-auto text-sm" value={slot} onChange={(e) => setSlot(e.target.value)}>
+          <option value="pokemon|standard">⚡ Pokémon · Standard</option>
+          <option value="pokemon|expanded">⚡ Pokémon · Expanded</option>
+          <option value="mtg|commander">🪄 Magic · Commander</option>
+          <option value="mtg|standard">🪄 Magic · Standard</option>
+        </select>
         <input
           className="input text-sm"
           placeholder="Archetype (e.g. Charizard ex)"

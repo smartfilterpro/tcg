@@ -40,13 +40,26 @@ export async function POST(req: Request) {
     await requireAdmin();
     const body = (await req.json()) as {
       archetype?: string;
+      game?: string;
       format?: string;
       share?: number | null;
       notes?: string | null;
       cardsText?: string;
     };
     const archetype = (body.archetype ?? "").trim();
-    const format = (body.format ?? "standard").trim().toLowerCase();
+    const game = body.game === "mtg" ? "mtg" : "pokemon";
+    const format = (body.format ?? (game === "mtg" ? "commander" : "standard"))
+      .trim()
+      .toLowerCase();
+    // Each game validates its own format names — a typo here would file the
+    // archetype where no page ever lists it.
+    const knownFormats = game === "mtg" ? ["commander", "standard"] : ["standard", "expanded"];
+    if (!knownFormats.includes(format)) {
+      return NextResponse.json(
+        { error: `Format must be one of: ${knownFormats.join(", ")}.` },
+        { status: 400 }
+      );
+    }
     if (!archetype || archetype.length > 80) {
       return NextResponse.json({ error: "Archetype name required." }, { status: 400 });
     }
@@ -68,14 +81,36 @@ export async function POST(req: Request) {
     const admin = createAdminClient();
     // Manual upsert: the unique index is on lower(archetype), which
     // PostgREST's ON CONFLICT can't name. Volume is a handful of rows.
-    const { data: existing } = await admin
+    // The game filter falls away on a pre-074 database — where Magic rows
+    // can't exist, so Pokémon writes still match correctly and Magic
+    // writes are refused below with the migration named.
+    let { data: existing, error: matchErr } = await admin
       .from("meta_decks")
       .select("id")
+      .eq("game", game)
       .eq("format", format)
       .ilike("archetype", archetype.replace(/[%_]/g, ""))
       .maybeSingle();
+    if (matchErr && /game/.test(matchErr.message ?? "")) {
+      if (game === "mtg") {
+        return NextResponse.json(
+          { error: "Run migration 074 first — meta_decks has no game column yet." },
+          { status: 400 }
+        );
+      }
+      ({ data: existing, error: matchErr } = await admin
+        .from("meta_decks")
+        .select("id")
+        .eq("format", format)
+        .ilike("archetype", archetype.replace(/[%_]/g, ""))
+        .maybeSingle());
+    }
+    if (matchErr) throw matchErr;
     const row = {
       archetype,
+      // Stated only for Magic so the write also works pre-074 for Pokémon
+      // (the column default covers it after).
+      ...(game === "mtg" ? { game } : {}),
       format,
       share,
       notes: (body.notes ?? "").trim() || null,
