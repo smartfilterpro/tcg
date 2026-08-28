@@ -18,5 +18,7 @@ export async function register() {
     startMetaSyncLoop();
     const { startMtgPriceLoop } = await import("@/lib/scryfall");
     startMtgPriceLoop();
+    const { startPtcgPriceSweepLoop } = await import("@/lib/ptcgPriceSweep");
+    startPtcgPriceSweepLoop();
   }
 }
