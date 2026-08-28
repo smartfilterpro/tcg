@@ -129,6 +129,11 @@ export default function MetaPage() {
 
       {decks.filter((d) => (d.game ?? "pokemon") === gameTab).map((d) => {
         const open = expanded === d.id;
+        // A community-built commander row IS one card — coverage bars and
+        // "missing 1 ≈ $0.00" arithmetic read as nonsense on it. It gets a
+        // spotlight: the card, whether you hold it, what it costs if not.
+        const spotlight = d.source === "scryfall" && d.totalCount === 1;
+        const spotCard = spotlight ? d.cards[0] : null;
         const pct = d.totalCount > 0 ? Math.round((d.ownedCount / d.totalCount) * 100) : 0;
         const cards = [...d.cards].sort(
           (a, b) =>
@@ -163,6 +168,18 @@ export default function MetaPage() {
                     </span>
                   )}
                 </div>
+                {spotlight ? (
+                  <div className="mt-1 text-sm text-slate-600">
+                    {d.notes}
+                    <span className="ml-1 whitespace-nowrap">
+                      {d.ownedCount > 0 ? (
+                        <b className="text-green-700">· in your binder ✓</b>
+                      ) : spotCard?.price != null ? (
+                        <>· ≈ ${spotCard.price.toFixed(2)} to pick up</>
+                      ) : null}
+                    </span>
+                  </div>
+                ) : (
                 <div className="mt-2 flex items-center gap-3">
                   <div className="h-2 w-40 overflow-hidden rounded-full bg-slate-100">
                     <div
@@ -184,6 +201,7 @@ export default function MetaPage() {
                     <span className="text-sm font-medium text-green-700">· complete!</span>
                   )}
                 </div>
+                )}
               </div>
               <span className="shrink-0 text-slate-400">{open ? "▾" : "▸"}</span>
             </button>

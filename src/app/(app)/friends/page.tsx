@@ -656,6 +656,7 @@ export default function FriendsPage() {
           ) : (
             <>
               {/* Trade summary */}
+              {TRADING_ENABLED && (
               <div className="card-panel p-4">
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
@@ -714,16 +715,21 @@ export default function FriendsPage() {
                 )}
               </div>
 
-              {/* Pickers */}
-              <div className="grid gap-4 sm:grid-cols-2">
-                <CardPicker
-                  title="Your cards"
-                  items={myItems}
-                  side={give}
-                  search={mySearch}
-                  setSearch={setMySearch}
-                  onAdd={(it) => adjust("give", it, 1)}
-                />
+              )}
+
+              {/* Pickers. With trading off this is a binder to LOOK at:
+                  just their cards, no give/get, no add buttons. */}
+              <div className={`grid gap-4 ${TRADING_ENABLED ? "sm:grid-cols-2" : ""}`}>
+                {TRADING_ENABLED && (
+                  <CardPicker
+                    title="Your cards"
+                    items={myItems}
+                    side={give}
+                    search={mySearch}
+                    setSearch={setMySearch}
+                    onAdd={(it) => adjust("give", it, 1)}
+                  />
+                )}
                 <CardPicker
                   title={`${friend.name}'s cards`}
                   items={theirItems}
@@ -731,10 +737,12 @@ export default function FriendsPage() {
                   search={theirSearch}
                   setSearch={setTheirSearch}
                   onAdd={(it) => adjust("get", it, 1)}
+                  canAdd={TRADING_ENABLED}
                 />
               </div>
 
-              {/* DeckAI chat */}
+              {/* DeckAI chat — trade advice, so it retires with trading. */}
+              {TRADING_ENABLED && (
               <div className="card-panel p-4">
                 <h3 className="mb-1 font-semibold">🤖 Ask {AI_NAME}</h3>
                 <p className="mb-2 text-xs text-slate-500">
@@ -806,6 +814,7 @@ export default function FriendsPage() {
                   moved automatically.
                 </p>
               </div>
+              )}
             </>
           )}
         </div>
@@ -1141,6 +1150,7 @@ function CardPicker({
   search,
   setSearch,
   onAdd,
+  canAdd = true,
 }: {
   title: string;
   items: CollectionItem[];
@@ -1148,6 +1158,7 @@ function CardPicker({
   search: string;
   setSearch: (s: string) => void;
   onAdd: (it: CollectionItem) => void;
+  canAdd?: boolean;
 }) {
   const q = search.trim();
   const filtered = items
@@ -1191,17 +1202,19 @@ function CardPicker({
                   {value != null ? ` · ~$${value.toFixed(2)}` : ""}
                 </div>
               </div>
-              <button
-                className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
-                  picked > 0
-                    ? "bg-green-100 text-green-700"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
-                disabled={picked >= it.quantity}
-                onClick={() => onAdd(it)}
-              >
-                {picked > 0 ? `${picked} added` : "+ Add"}
-              </button>
+              {canAdd && (
+                <button
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                    picked > 0
+                      ? "bg-green-100 text-green-700"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                  disabled={picked >= it.quantity}
+                  onClick={() => onAdd(it)}
+                >
+                  {picked > 0 ? `${picked} added` : "+ Add"}
+                </button>
+              )}
             </li>
           );
         })}

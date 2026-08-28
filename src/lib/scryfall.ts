@@ -14,6 +14,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   rowToSummary,
+  summaryToRow,
   canonicalRarity,
   CARD_SUMMARY_COLUMNS,
   type CardSummary,
@@ -571,6 +572,18 @@ export async function syncMtgCommanderMeta(admin: SupabaseClient): Promise<strin
   const cards = ((listing?.data as ScryCard[] | undefined) ?? []).filter((c) => !c.digital);
   if (cards.length === 0) throw new Error("Scryfall returned no commanders");
   const top = cards.slice(0, 12);
+
+  // Stash each commander's card row so the trending page can resolve its
+  // image, price and buy link — a spotlight with no picture and "$0.00
+  // (+1 unpriced)" was the row telling on its own missing data. Insert
+  // only; rows someone already holds keep their enrichments, and the
+  // hourly price loop owns updates from here.
+  try {
+    const rows = top.map((c) => summaryToRow(scryToSummary(c)));
+    await admin.from("cards").upsert(rows, { onConflict: "id", ignoreDuplicates: true });
+  } catch {
+    // The meta rows still stand; prices fill on the next hourly pass.
+  }
 
   const { data: existing, error: readErr } = await admin
     .from("meta_decks")
