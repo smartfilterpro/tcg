@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, AuthError } from "@/lib/auth";
+import { mergePrices } from "@/lib/cardWrite";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { strictNumberKey } from "@/lib/pokemontcg";
 import { buyLinkFor } from "@/lib/buyLink";
@@ -45,6 +47,7 @@ export async function GET(req: Request) {
     // representative printing is whichever has an image and a price.
     type CatRow = {
       id: string;
+      set_id: string;
       name: string;
       number: string;
       image_small: string | null;
@@ -56,7 +59,7 @@ export async function GET(req: Request) {
     const { data: catRows, error: catErr } = await fetchAllRows<CatRow>(() =>
       supabase
         .from("cards")
-        .select("id, name, number, image_small, market_price, tcgplayer_id, prices, rarity")
+        .select("id, set_id, name, number, image_small, market_price, tcgplayer_id, prices, rarity")
         .eq("set_name", setName)
         .order("id") as unknown as {
         range: (from: number, to: number) => PromiseLike<{
@@ -132,6 +135,106 @@ export async function GET(req: Request) {
         prices: r.prices,
         rarity: r.rarity,
       });
+    }
+
+    // Pokémon: top up missing prices from pokemontcg.io, free, by set.
+    //
+    // The nightly refresher prices cards people OWN — the paid tracker
+    // charges per lookup, so its budget goes where members are looking.
+    // A completion list is the opposite: mostly cards nobody owns, which
+    // is exactly the rows nothing ever priced. pokemontcg.io serves the
+    // whole set's TCGplayer price maps (per finish — the reverse-holo
+    // numbers the tracker never provides) in one free query, and what it
+    // returns is written back onto the rows so the next view is instant.
+    if (game === "pokemon") {
+      const needsPrices =
+        [...byNumber.values()].some((e) => e.price == null) ||
+        (master &&
+          [...finishesByNumber.entries()].some(([k, fins]) =>
+            [...fins].some((f) => f !== "any" && !finishPrice.has(`${k}|${f}`))
+          ));
+      // The pokemontcg set id, read off the plain-scheme rows ("me1-55"
+      // lives in set "me1"). Prefixed schemes name sets their own way.
+      const setIdVotes = new Map<string, number>();
+      for (const r of catRows ?? []) {
+        if (/^(tcgdex-|tcgp-|scry-|custom-)/.test(r.id)) continue;
+        if (r.set_id) setIdVotes.set(r.set_id, (setIdVotes.get(r.set_id) ?? 0) + 1);
+      }
+      const ptcgSetId = [...setIdVotes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+      if (needsPrices && ptcgSetId) {
+        try {
+          type PtcgCard = {
+            id: string;
+            number: string;
+            tcgplayer?: { prices?: Record<string, { market?: number | null; mid?: number | null }> };
+          };
+          const fetched = new Map<string, Record<string, number | null>>(); // numKey → finish map
+          const byPtcgId = new Map<string, Record<string, number | null>>();
+          for (let page = 1; page <= 2; page++) {
+            const headers: Record<string, string> = {};
+            const apiKey = (process.env.POKEMONTCG_API_KEY ?? "").trim();
+            if (apiKey) headers["X-Api-Key"] = apiKey;
+            const res = await fetch(
+              `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`set.id:${ptcgSetId}`)}&page=${page}&pageSize=250&select=id,number,tcgplayer`,
+              { headers, signal: AbortSignal.timeout(8_000) }
+            );
+            if (!res.ok) break;
+            const json = (await res.json()) as { data?: PtcgCard[]; count?: number; totalCount?: number };
+            for (const c of json.data ?? []) {
+              const map: Record<string, number | null> = {};
+              for (const [f, v] of Object.entries(c.tcgplayer?.prices ?? {})) {
+                const n = v?.market ?? v?.mid ?? null;
+                if (n != null && n > 0) map[f] = n;
+              }
+              if (Object.keys(map).length === 0) continue;
+              const k = strictNumberKey(c.number);
+              if (k) fetched.set(k, map);
+              byPtcgId.set(c.id, map);
+            }
+            if ((json.data?.length ?? 0) < 250) break;
+          }
+
+          // Fill this response.
+          for (const [k, map] of fetched) {
+            for (const [f, n] of Object.entries(map)) {
+              const fk = `${k}|${f}`;
+              if (n != null && !finishPrice.has(fk)) finishPrice.set(fk, n);
+            }
+            const entry = byNumber.get(k);
+            if (entry && entry.price == null) {
+              entry.price =
+                map.normal ?? map.holofoil ?? map.reverseHolofoil ?? Object.values(map)[0] ?? null;
+            }
+          }
+
+          // Write back, so the catalogue learns what the view learned.
+          // mergePrices keeps anything a row already holds.
+          const admin = createAdminClient();
+          let wrote = 0;
+          for (const r of catRows ?? []) {
+            if (wrote >= 60) break;
+            const map = byPtcgId.get(r.id);
+            if (!map) continue;
+            if (r.market_price != null && r.prices != null) continue;
+            const merged = mergePrices(r.prices, map);
+            const headline =
+              r.market_price ??
+              map.normal ?? map.holofoil ?? map.reverseHolofoil ?? Object.values(map)[0] ?? null;
+            await admin
+              .from("cards")
+              .update({
+                market_price: headline,
+                prices: merged,
+                price_updated_at: new Date().toISOString(),
+              })
+              .eq("id", r.id)
+              .then(() => {});
+            wrote++;
+          }
+        } catch {
+          // Free top-up only — the list stands on what the catalogue holds.
+        }
+      }
     }
 
     // Magic: complete a thin set from Scryfall — the catalogue only holds
@@ -243,6 +346,9 @@ export async function GET(req: Request) {
     const cards = [...byNumber.entries()]
       .flatMap(([key, entry]) => {
         const { hasTcgp: _h, ...c } = entry;
+        // No product id ≠ nowhere to buy: a search link still lands on the
+        // card, and it carries the affiliate wrapper like any other.
+        if (!c.buyUrl && c.name) c.buyUrl = buyLinkFor({ tcgplayerId: null, name: c.name });
         if (!master) return [c];
         // One row per slot. "Specifics beat any" (same rule as the summary):
         // a number whose rarity names real finishes drops the unknown slot.
