@@ -31,11 +31,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // blocks: both run on trial credits — the lock is the plan pitch, not a
   // wall, and the real limit is the credit balance, shown per action.
   //
-  // Battle is retired from the member app: the pages, engine and API all
-  // remain, admin-only, while the owner decides its future. The nav link
-  // below, the /battles layout and every /api/battles route carry the same
-  // admin check, so removing the feature for good (or bringing it back) is
-  // a three-place change, not an archaeology dig.
+  // Battle is retired: pages, engine and API remain admin-only behind
+  // their own checks (/battles layout, /api/battles routes), but by owner
+  // decision it no longer gets a nav link even for admins — the URL is the
+  // door while its future is decided.
   //
   // Asked properly rather than read off the profile. A family member's own
   // row says plan = 'free' — the plan lives on the group owner — so reading
@@ -45,13 +44,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // deck cap and deck sharing already use.
   const locked = !isAdmin && (await isFreeTier(auth.user, auth.profile));
 
+  // FOUR places, not eight. Tabs are places; actions and sub-views live
+  // where they're used: Scan is a button on the Collection page (an action,
+  // not a destination), Sets is Collection's companion view and linked
+  // there, Meta is deck inspiration and linked from the Decks header. All
+  // their routes stay live for bookmarks, PWA shortcuts and deep links.
   const navItems = [
     { label: "Collection", href: "/" },
-    { label: "Sets", href: "/sets" },
-    { label: "Scan", href: "/scan", locked },
     { label: "Decks", href: "/decks" },
-    { label: "Meta", href: "/meta" },
-    ...(isAdmin ? [{ label: "Battle", href: "/battles" }] : []),
     { label: "Grade", href: "/grade", locked },
     { label: "Friends", href: "/friends" },
     ...(TRADING_ENABLED ? [{ label: "Trades", href: "/trades" }] : []),
