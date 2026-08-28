@@ -671,21 +671,13 @@ export default function CollectionPage({
           {t === "cards" ? "Pokémon" : t === "mtg" ? "Magic" : "Sealed product"}
         </button>
       ))}
-      {/* Scan lost its nav tab on purpose — it's an action, and this is the
-          page you're on when you want to do it. Sets rides along as the
-          collection's companion view. */}
+      {/* Sets rides along as the collection's companion view. Scan lives
+          once, in the toolbar below — two Scan buttons on one page was one
+          too many. */}
       <div className="-mb-px ml-auto flex items-center gap-2 self-center pb-1.5">
         <Link href="/sets" className="whitespace-nowrap text-xs font-medium text-brand-accent hover:underline">
           📊 Set progress
         </Link>
-        {!readOnly && (
-          <Link
-            href="/scan"
-            className="whitespace-nowrap rounded-full bg-brand-ink px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-brand-accent"
-          >
-            📷 Scan
-          </Link>
-        )}
       </div>
     </div>
   );
@@ -870,7 +862,7 @@ export default function CollectionPage({
               + Add by search
             </button>
             <Link href="/scan" className="btn-primary">
-              Bulk scan
+              📷 Scan
             </Link>
           </div>
         )}
