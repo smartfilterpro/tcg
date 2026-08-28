@@ -8,6 +8,7 @@
 // that flips a column nothing reads would be theatre.
 
 import { useCallback, useEffect, useState } from "react";
+import { TRADING_ENABLED } from "@/lib/features";
 import Modal, { ModalClose } from "@/components/Modal";
 import { MONTHLY_GRANT } from "@/lib/credits";
 import { artSrc } from "@/lib/art";
@@ -179,7 +180,7 @@ export default function FamilyPage() {
           </p>
           <p className="m-0 mb-3 text-[12.5px] leading-[1.55] text-brand-ink3">
             Your credits would come from their shared pool, and a parent could set a monthly
-            limit for you and see what you&apos;ve used. Your collection, decks and trades stay
+            limit for you and see what you&apos;ve used. Your collection and decks stay
             yours, and you can leave whenever you like.
           </p>
           <div className="flex flex-wrap gap-2">
@@ -282,12 +283,14 @@ export default function FamilyPage() {
       <BoostRequests myRole={g.myRole} />
 
       <div className="mb-4 overflow-hidden rounded-[18px] border border-brand-line bg-brand-panel">
-        <div className="hidden grid-cols-[1.6fr_0.8fr_1.1fr_1fr_1fr_40px] gap-3 border-b border-brand-line bg-brand-panel-alt px-5 py-3 font-mono text-[10.5px] uppercase tracking-[.08em] text-brand-ink4 sm:grid">
+        <div
+          className={`hidden ${TRADING_ENABLED ? "grid-cols-[1.6fr_0.8fr_1.1fr_1fr_1fr_40px]" : "grid-cols-[1.6fr_0.8fr_1.1fr_1fr_40px]"} gap-3 border-b border-brand-line bg-brand-panel-alt px-5 py-3 font-mono text-[10.5px] uppercase tracking-[.08em] text-brand-ink4 sm:grid`}
+        >
           <span>Trainer</span>
           <span>Role</span>
           <span>Credits used</span>
           <span>Monthly cap</span>
-          <span>Trade board</span>
+          {TRADING_ENABLED && <span>Trade board</span>}
           <span />
         </div>
         {g.members.map((m, i) => {
@@ -295,7 +298,7 @@ export default function FamilyPage() {
           return (
             <div
               key={m.userId}
-              className="grid grid-cols-1 gap-3 border-b border-brand-panel-alt px-5 py-3.5 sm:grid-cols-[1.6fr_0.8fr_1.1fr_1fr_1fr_40px] sm:items-center"
+              className={`grid grid-cols-1 gap-3 border-b border-brand-panel-alt px-5 py-3.5 ${TRADING_ENABLED ? "sm:grid-cols-[1.6fr_0.8fr_1.1fr_1fr_1fr_40px]" : "sm:grid-cols-[1.6fr_0.8fr_1.1fr_1fr_40px]"} sm:items-center`}
             >
               <div className="flex min-w-0 items-center gap-3">
                 <span
@@ -366,22 +369,24 @@ export default function FamilyPage() {
                   <span className="font-mono text-xs text-brand-ink4">{m.cap ?? "None"}</span>
                 )}
               </div>
-              <div>
-                {amParent && !m.isOwner ? (
-                  <button
-                    className={`rounded-full px-3 py-1 text-xs font-medium ${
-                      m.tradeBoardEnabled ? "bg-brand-accent text-white" : "bg-brand-sunken text-brand-ink3"
-                    }`}
-                    disabled={busy}
-                    onClick={() => call("PATCH", { userId: m.userId, tradeBoard: !m.tradeBoardEnabled })}
-                    title="Whether this profile can see and post on the trade board"
-                  >
-                    {m.tradeBoardEnabled ? "On" : "Off"}
-                  </button>
-                ) : (
-                  <span className="text-xs text-brand-ink4">{m.tradeBoardEnabled ? "On" : "Off"}</span>
-                )}
-              </div>
+              {TRADING_ENABLED && (
+                <div>
+                  {amParent && !m.isOwner ? (
+                    <button
+                      className={`rounded-full px-3 py-1 text-xs font-medium ${
+                        m.tradeBoardEnabled ? "bg-brand-accent text-white" : "bg-brand-sunken text-brand-ink3"
+                      }`}
+                      disabled={busy}
+                      onClick={() => call("PATCH", { userId: m.userId, tradeBoard: !m.tradeBoardEnabled })}
+                      title="Whether this profile can see and post on the trade board"
+                    >
+                      {m.tradeBoardEnabled ? "On" : "Off"}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-brand-ink4">{m.tradeBoardEnabled ? "On" : "Off"}</span>
+                  )}
+                </div>
+              )}
               <div className="text-right">
                 {amParent && !m.isOwner && (
                   <button

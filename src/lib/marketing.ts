@@ -124,7 +124,7 @@ export const TIERS: Tier[] = [
     features: [
       f("Everything in Pro, for 5 profiles"),
       f("Shared family binder"),
-      f("Free trading inside the family"),
+      f("Move cards between family binders"),
       f("Parent approval for spending"),
       f("Per-profile credit limits"),
       f("Priority support"),
@@ -141,7 +141,7 @@ export { BOOSTS_NOTE };
 export const FAQS = [
   {
     q: "What happens when I run out of credits?",
-    a: "Nothing breaks. Your collection, decks, values and trades all keep working — only new AI requests pause until your monthly credits refill or you buy a boost.",
+    a: "Nothing breaks. Your collection, decks and values all keep working — only new AI requests pause until your monthly credits refill or you buy a boost.",
   },
   {
     q: "Do unused credits roll over?",

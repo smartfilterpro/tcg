@@ -71,7 +71,7 @@ const STEPS = [
 const FAMILY_POINTS = [
   "Up to 5 profiles on one bill — each with their own binder and decks.",
   "Kids' accounts can't spend credits without a parent approving it.",
-  "Trading inside the family is free and doesn't need approvals.",
+  "Moving cards between family binders is one tap — no approvals needed.",
   "Coaching answers in plain English, no TCG jargon required.",
 ];
 

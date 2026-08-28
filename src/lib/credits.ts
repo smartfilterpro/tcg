@@ -13,6 +13,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { AI_NAME } from "@/lib/branding";
+import { TRADING_ENABLED } from "@/lib/features";
 
 /** One-time signup grant (≈ $1 of AI). Never refills — it sits there until
  *  used, however long that takes. */
@@ -72,7 +73,11 @@ export const CREDIT_MENU = [
   { key: "coach", label: "Coach reply", cost: "1–4", what: "One question about one deck." },
   { key: "chat", label: "DeckAI chat", cost: "3–6", what: "One question. Costs a little more than the coach because it carries an index of your whole collection." },
   { key: "grade", label: "Grading report", cost: "8–18", what: "Corner, edge, surface and centering analysis from your photos." },
-  { key: "trade_chat", label: "Trade advice", cost: "1–4", what: "Whether a proposed trade is fair." },
+  // Trade advice only exists while trading does — a price on the /credits
+  // page for a feature nobody can reach reads as a bug.
+  ...(TRADING_ENABLED
+    ? [{ key: "trade_chat", label: "Trade advice", cost: "1–4", what: "Whether a proposed trade is fair." } as const]
+    : []),
   { key: "find_image", label: "Card image search", cost: "1–5", what: "Finding artwork for a card the database has no picture for." },
 ] as const;
 
