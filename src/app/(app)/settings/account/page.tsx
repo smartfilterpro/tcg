@@ -357,7 +357,7 @@ export default function AccountPage() {
             <div className="text-[13.5px] font-medium">Share my collection</div>
             <div className="text-[12.5px] leading-[1.5] text-brand-ink3">
               {data.shareCollection
-                ? "On — members sharing theirs can see what you own and propose trades."
+                ? "On — members sharing theirs can see what you own."
                 : "Off — nobody can see your cards or propose a trade."}
             </div>
           </div>

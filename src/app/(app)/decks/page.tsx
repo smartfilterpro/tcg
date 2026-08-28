@@ -1490,11 +1490,19 @@ export default function DecksPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Decks</h1>
-        <p className="text-sm text-slate-500">
-          Build tournament-ready decks from the cards you actually own.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h1 className="text-2xl font-bold">Decks</h1>
+          <p className="text-sm text-slate-500">
+            Build tournament-ready decks from the cards you actually own.
+          </p>
+        </div>
+        {/* Meta lost its nav tab on purpose — trending decks are deck
+            inspiration, and their "Build this deck" button lands back
+            here anyway. */}
+        <a href="/meta" className="btn-secondary shrink-0 text-sm">
+          📈 Trending decks
+        </a>
       </div>
 
       {/* Play style profile */}
