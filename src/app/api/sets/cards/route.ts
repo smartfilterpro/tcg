@@ -4,7 +4,7 @@ import { requireUser, AuthError } from "@/lib/auth";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { strictNumberKey } from "@/lib/pokemontcg";
 import { buyLinkFor } from "@/lib/buyLink";
-import { availableVariants, variantLabel } from "@/lib/types";
+import { masterSetFinishes, variantLabel } from "@/lib/types";
 import { errorJson } from "@/lib/apiError";
 
 /** GET ?game=&set=&code= — one set, card by card: what's owned, what's
@@ -86,7 +86,7 @@ export async function GET(req: Request) {
       if (!key) return;
       if (master) {
         const fins = finishesByNumber.get(key) ?? new Set<string>();
-        for (const f of availableVariants({
+        for (const f of masterSetFinishes({
           prices: c.prices ?? null,
           rarity: c.rarity ?? null,
           name: c.name,
@@ -239,24 +239,30 @@ export async function GET(req: Request) {
       const d = n.replace(/\D/g, "");
       return d ? parseInt(d, 10) : Number.MAX_SAFE_INTEGER;
     };
-    const FINISH_ORDER = ["normal", "holofoil", "reverseHolofoil", "foil", "etched"];
+    const FINISH_ORDER = ["any", "normal", "holofoil", "reverseHolofoil", "foil", "etched"];
     const cards = [...byNumber.entries()]
       .flatMap(([key, entry]) => {
         const { hasTcgp: _h, ...c } = entry;
         if (!master) return [c];
-        // One row per finish the card is known to come in. The finish's own
-        // price where the catalogue holds one; the card's headline price
-        // stands in for the normal finish only.
-        const fins = [...(finishesByNumber.get(key) ?? new Set(["normal"]))].sort(
+        // One row per slot. "Specifics beat any" (same rule as the summary):
+        // a number whose rarity names real finishes drops the unknown slot.
+        const finSet = finishesByNumber.get(key) ?? new Set(["any"]);
+        if (finSet.size > 1 && finSet.has("any")) finSet.delete("any");
+        const fins = [...finSet].sort(
           (a, b) => FINISH_ORDER.indexOf(a) - FINISH_ORDER.indexOf(b)
         );
         const ownedFins = ownedVariants.get(key) ?? new Set<string>();
         return fins.map((f) => ({
           ...c,
           finish: f,
-          finishLabel: variantLabel(f),
-          owned: ownedFins.has(f),
-          price: finishPrice.get(`${key}|${f}`) ?? (f === "normal" ? c.price : null),
+          // An "any" slot is the card itself — no finish chip, headline
+          // price, and every recorded finish fills it.
+          ...(f === "any" ? {} : { finishLabel: variantLabel(f) }),
+          owned: f === "any" ? ownedFins.size > 0 : ownedFins.has(f),
+          price:
+            f === "any"
+              ? c.price
+              : finishPrice.get(`${key}|${f}`) ?? (f === "normal" ? c.price : null),
         }));
       })
       .sort((a, b) => numeric(a.number) - numeric(b.number) || a.number.localeCompare(b.number));
