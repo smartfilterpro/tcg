@@ -180,6 +180,48 @@ export const VARIANT_LABELS: Record<string, string> = {
 /** MTG finish order for dropdowns. */
 const MTG_FINISH_ORDER = ["normal", "foil", "etched"];
 
+/** Which finishes a POKÉMON rarity is actually printed in. The price keys
+ *  cannot be trusted for this — the paid tracker files its one number under
+ *  "normal" whatever the card is, which conjured a "Normal" printing for
+ *  Special Illustration Rares. The rarity is ground truth:
+ *
+ *    common / uncommon / rare      → normal + reverse holo
+ *    rare holo                     → holo + reverse holo
+ *    everything above (ex, Double
+ *    Rare, IR, SIR, ultra, secret) → exactly one finish
+ *    promos / unknown              → one finish, unknown which
+ */
+export type FinishFamily = "multi-normal" | "multi-holo" | "single";
+
+export function pokemonFinishFamily(rarity: string | null | undefined): FinishFamily {
+  const r = (rarity ?? "").trim().toLowerCase();
+  if (/^(common|uncommon|rare)$/.test(r)) return "multi-normal";
+  if (/^(rare holo|holo rare)$/.test(r)) return "multi-holo";
+  return "single";
+}
+
+/** Master-set slots for a card: the finishes a completionist needs, with
+ *  "any" meaning "one slot, whichever finish the copy is" — used for
+ *  single-finish rarities and unknowns, where demanding a specific stored
+ *  variant would punish a scan that guessed the label differently. */
+export function masterSetFinishes(card: {
+  rarity?: string | null;
+  prices?: Record<string, number | null> | null;
+  name?: string;
+  game?: string | null;
+}): string[] {
+  if (cardGame(card) === "mtg") {
+    // Scryfall's price keys are real printed finishes — trust them.
+    const keys = card.prices ? Object.keys(card.prices) : [];
+    return keys.length > 0 ? keys : ["any"];
+  }
+  if (typeof card.name === "string" && isSpecificPrinting(card.name)) return ["any"];
+  const family = pokemonFinishFamily(card.rarity);
+  if (family === "multi-normal") return ["normal", "reverseHolofoil"];
+  if (family === "multi-holo") return ["holofoil", "reverseHolofoil"];
+  return ["any"];
+}
+
 /** Stamped versions exist physically but not as separate database entries —
  *  the databases key on set+number, and a stamp doesn't change the number.
  *  We track them as finishes; prices fall back to the unstamped market value. */
@@ -331,6 +373,13 @@ export function availableVariants(card: {
 
   const named = typeof card.name === "string" && isSpecificPrinting(card.name);
   const r = (card.rarity ?? "").toLowerCase();
+  // Single-finish rarities (ex, Double Rare, IR, SIR, ultra/secret…) get ONE
+  // option regardless of the price keys — the paid tracker files its number
+  // under "normal" for everything, which offered a "Normal" finish on cards
+  // that have never been printed matte. The stated rarity outranks a key.
+  if (!named && r && !/promo/.test(r) && pokemonFinishFamily(card.rarity) === "single") {
+    return ["holofoil"];
+  }
   if (!named && r) {
     const reverse = !/reverse/.test(r);
     if (/holo/.test(r) && !/reverse/.test(r)) {

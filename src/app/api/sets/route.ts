@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireUser, AuthError } from "@/lib/auth";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { strictNumberKey } from "@/lib/pokemontcg";
-import { availableVariants } from "@/lib/types";
+import { masterSetFinishes } from "@/lib/types";
 import { errorJson } from "@/lib/apiError";
 
 /** GET: set completion — every set the member owns a card of, with how far
@@ -112,12 +112,13 @@ export async function GET(req: Request) {
     );
     if (error) throw error;
 
-    /** Finishes a card is known to come in — the same inference the rest of
-     *  the app uses (price keys plus rarity rules), which is what makes a
-     *  MASTER-set slot: one per printed finish. Stamps and ball patterns are
-     *  deliberately not slots — they're bonus variants, not set members. */
+    /** Master-set slots for a card. Rarity decides, not price keys — the
+     *  paid tracker files its number under "normal" for everything, which
+     *  invented a Normal printing for cards that only exist foil. "any"
+     *  means one slot that ANY owned finish fills (single-finish rarities,
+     *  promos, unknowns). Stamps and ball patterns are never slots. */
     const finishesOf = (c: CardBits, game: "pokemon" | "mtg"): string[] =>
-      availableVariants({ prices: c.prices, rarity: c.rarity, name: c.name, game });
+      masterSetFinishes({ prices: c.prices, rarity: c.rarity, name: c.name, game });
 
     interface SetAgg {
       name: string;
@@ -166,8 +167,6 @@ export async function GET(req: Request) {
       if (!num) continue;
       g.ownedNumbers.add(num);
       learn(g, num, card, game);
-      const v = r.variant ?? "normal";
-      if (g.expected.get(num)?.has(v)) g.ownedSlots.add(`${num}|${v}`);
       if (card.set_printed_total != null) {
         g.printed = Math.max(g.printed ?? 0, card.set_printed_total);
       }
@@ -224,21 +223,35 @@ export async function GET(req: Request) {
           learn(g, num, c as CardBits, game);
         }
       }
-      // A catalogue printing can widen a number's finish set AFTER the owned
-      // pass judged a variant unrecognised — re-check owned pairs against
-      // the final universe.
-      for (const r of rows ?? []) {
-        const card = Array.isArray(r.card) ? r.card[0] : r.card;
-        if (!card?.set_name || card.set_id === "custom" || card.id.startsWith("custom-")) continue;
-        const game: "pokemon" | "mtg" = card.id.startsWith("scry-") ? "mtg" : "pokemon";
-        const g = byKey.get(`${game}|${card.set_name}`);
-        const num = strictNumberKey(card.number);
-        if (!g || !num) continue;
-        const v = r.variant ?? "normal";
-        if (g.expected.get(num)?.has(v)) g.ownedSlots.add(`${num}|${v}`);
-      }
     } catch {
       // Catalogue unreadable: printed sizes still carry the page.
+    }
+
+    // The finish universe is settled — normalise it, then judge ownership
+    // against the final answer (a catalogue printing can widen a number's
+    // finishes after the owned rows were first seen).
+    //
+    // Specifics beat "any": when one printing's rarity names real finishes
+    // and another is unknown, the named ones are the slots.
+    for (const g of byKey.values()) {
+      for (const fins of g.expected.values()) {
+        if (fins.size > 1 && fins.has("any")) fins.delete("any");
+      }
+    }
+    for (const r of rows ?? []) {
+      const card = Array.isArray(r.card) ? r.card[0] : r.card;
+      if (!card?.set_name || card.set_id === "custom" || card.id.startsWith("custom-")) continue;
+      const game: "pokemon" | "mtg" = card.id.startsWith("scry-") ? "mtg" : "pokemon";
+      const g = byKey.get(`${game}|${card.set_name}`);
+      const num = strictNumberKey(card.number);
+      if (!g || !num) continue;
+      const fins = g.expected.get(num);
+      if (!fins) continue;
+      const v = r.variant ?? "normal";
+      // An "any" slot is filled by whatever finish the copy was recorded
+      // as — a single-finish card is owned however the scan labelled it.
+      if (fins.has("any")) g.ownedSlots.add(`${num}|any`);
+      else if (fins.has(v)) g.ownedSlots.add(`${num}|${v}`);
     }
 
     const sets: SetSummary[] = [...byKey.values()]
