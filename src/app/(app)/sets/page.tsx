@@ -23,6 +23,8 @@ interface SetCardEntry {
   price: number | null;
   image: string | null;
   owned: boolean;
+  finish?: string;
+  finishLabel?: string;
   buyUrl?: string;
 }
 
@@ -38,20 +40,26 @@ export default function SetsPage() {
   const [sets, setSets] = useState<SetSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [gameTab, setGameTab] = useState<"pokemon" | "mtg">("pokemon");
+  /** Base set: one slot per collector number. Master set: one slot per
+   *  finish a card was printed in — normal, holo, reverse holo. */
+  const [modeTab, setModeTab] = useState<"base" | "master">("base");
   const [openSet, setOpenSet] = useState<string | null>(null);
   const [detail, setDetail] = useState<Record<string, SetDetail | "loading">>({});
   /** Missing-only is the default — it is the question this page answers. */
   const [showOwned, setShowOwned] = useState(false);
 
   useEffect(() => {
-    fetch("/api/sets")
+    setSets(null);
+    setOpenSet(null);
+    setDetail({});
+    fetch(`/api/sets?mode=${modeTab}`)
       .then((r) => r.json())
       .then((j) => {
         if (j.error) throw new Error(j.error);
         setSets(j.sets ?? []);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Couldn't load your sets"));
-  }, []);
+  }, [modeTab]);
 
   async function toggle(s: SetSummary) {
     const key = `${s.game}|${s.name}`;
@@ -63,7 +71,7 @@ export default function SetsPage() {
     if (detail[key]) return;
     setDetail((d) => ({ ...d, [key]: "loading" }));
     try {
-      const params = new URLSearchParams({ set: s.name, game: s.game });
+      const params = new URLSearchParams({ set: s.name, game: s.game, mode: modeTab });
       if (s.code) params.set("code", s.code);
       const res = await fetch(`/api/sets/cards?${params}`);
       const j = await res.json();
@@ -92,7 +100,7 @@ export default function SetsPage() {
 
       {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
-      <div className="flex gap-1 border-b border-slate-200">
+      <div className="flex items-center gap-1 border-b border-slate-200">
         {(["pokemon", "mtg"] as const).map((g) => (
           <button
             key={g}
@@ -109,6 +117,33 @@ export default function SetsPage() {
             {g === "pokemon" ? "⚡ Pokémon" : "🪄 Magic"}
           </button>
         ))}
+        {/* Master set: every finish is its own slot — the way a binder
+            completionist actually counts. */}
+        <div className="ml-auto flex gap-1 pb-1.5">
+          {(
+            [
+              ["base", "Base set"],
+              ["master", "Master set"],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => setModeTab(m)}
+              title={
+                m === "master"
+                  ? "One slot per finish — normal, holo and reverse holo each count"
+                  : "One slot per collector number, any finish"
+              }
+              className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                modeTab === m
+                  ? "border-brand-accent bg-brand-accent text-white"
+                  : "border-brand-line-strong text-brand-ink2 hover:border-brand-accent"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {sets === null && !error && <p className="text-sm text-slate-400">Adding up your sets…</p>}
@@ -199,7 +234,7 @@ export default function SetsPage() {
                             <ul className="max-h-96 space-y-1 overflow-y-auto">
                               {list.map((c) => (
                                 <li
-                                  key={c.number}
+                                  key={`${c.number}|${c.finish ?? ""}`}
                                   className={`flex items-center gap-2 rounded p-1 text-sm ${
                                     c.owned ? "opacity-50" : ""
                                   }`}
@@ -220,6 +255,11 @@ export default function SetsPage() {
                                   </span>
                                   <span className="min-w-0 flex-1 truncate">
                                     {c.name || <i className="text-slate-400">(uncatalogued)</i>}
+                                    {c.finishLabel && c.finish !== "normal" && (
+                                      <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] text-slate-500">
+                                        {c.finishLabel}
+                                      </span>
+                                    )}
                                     {c.owned && " ✓"}
                                   </span>
                                   {c.price != null && (
