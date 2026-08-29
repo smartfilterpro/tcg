@@ -105,6 +105,8 @@ export default function TrainerChat() {
   const [busy, setBusy] = useState(false);
   /** The reply being written right now, shown in place of "Thinking…". */
   const [streaming, setStreaming] = useState("");
+  /** The job writing that reply — what the Stop button aims at. */
+  const [activeJob, setActiveJob] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [migrated, setMigrated] = useState(true);
   const [loaded, setLoaded] = useState(false);
@@ -124,6 +126,7 @@ export default function TrainerChat() {
         // answer up where it was left.
         if (json.job?.id) {
           setBusy(true);
+          setActiveJob(json.job.id as string);
           watchJob(json.job.id as string, setStreaming)
             .then((r) => {
               setMsgs((m) => [
@@ -141,6 +144,7 @@ export default function TrainerChat() {
             .finally(() => {
               setStreaming("");
               setBusy(false);
+              setActiveJob(null);
             });
         }
       }
@@ -196,6 +200,7 @@ export default function TrainerChat() {
         // answer lands in history whatever happens to this tab, so a
         // phone that locks mid-answer costs nothing but the wait.
         accepted = true;
+        setActiveJob(json.jobId as string);
         reply = await watchJob(json.jobId as string, setStreaming);
       } else {
         throw new Error("The chat failed");
@@ -221,6 +226,23 @@ export default function TrainerChat() {
     }
     setStreaming("");
     setBusy(false);
+    setActiveJob(null);
+  }
+
+  /** Stop the reply being written. The job still finishes — as "done", with
+   *  whatever text had already streamed — so the normal poll collects it and
+   *  no state here needs unwinding. */
+  async function stopReply() {
+    if (!activeJob) return;
+    try {
+      await fetch("/api/assistant", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: activeJob }),
+      });
+    } catch {
+      // The poll's deadline still bounds the wait if the stop didn't land.
+    }
   }
 
   async function clearHistory() {
@@ -412,13 +434,27 @@ export default function TrainerChat() {
                 }
               }}
             />
-            <button
-              aria-label="Send"
-              className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-brand-ink text-brand-canvas disabled:opacity-40"
-              disabled={busy || !draft.trim()}
-            >
-              ↑
-            </button>
+            {busy && activeJob ? (
+              // The send arrow becomes a stop square while a reply writes —
+              // the same spot a person's thumb is already over, and the one
+              // thing they can usefully do right now.
+              <button
+                type="button"
+                aria-label="Stop the reply"
+                className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-brand-ink text-brand-canvas"
+                onClick={stopReply}
+              >
+                <span className="block h-3 w-3 rounded-[2px] bg-brand-canvas" />
+              </button>
+            ) : (
+              <button
+                aria-label="Send"
+                className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full bg-brand-ink text-brand-canvas disabled:opacity-40"
+                disabled={busy || !draft.trim()}
+              >
+                ↑
+              </button>
+            )}
           </form>
           )}
         </div>

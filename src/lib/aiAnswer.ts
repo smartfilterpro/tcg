@@ -170,11 +170,15 @@ export async function completeWithRoom(
    *
    *  Resets to the empty string at the start of each attempt, so a retry
    *  replaces the abandoned text rather than appending to it. */
-  onText?: (soFar: string) => void
+  onText?: (soFar: string) => void,
+  /** An abort signal ends the attempt (and any retry) immediately — the
+   *  player pressed Stop, and a retry of a stopped reply would be the model
+   *  talking to nobody on the player's credit. */
+  opts?: { signal?: AbortSignal }
 ): Promise<Anthropic.Message> {
   /** Wraps a stream so its text is reported as it arrives. */
   const streamed = (p: Anthropic.MessageStreamParams) => {
-    const stream = client.messages.stream(p);
+    const stream = client.messages.stream(p, opts?.signal ? { signal: opts.signal } : undefined);
     if (onText) {
       let soFar = "";
       onText("");
@@ -235,6 +239,9 @@ export async function completeWithRoom(
     console.error(`ai: STILL no answer with thinking off — ${answerDiagnosis(third)}`);
     return first;
   } catch (err) {
+    // A stop is not a failure to survive — it must propagate, or a stopped
+    // reply would fall through to the empty `first` and read as a shrug.
+    if (opts?.signal?.aborted) throw err;
     // A retry that fails leaves us exactly where we already were, which is
     // survivable. Throwing from here would turn a wordy answer into a 500.
     console.error("ai: retry after max_tokens failed", err);

@@ -41,6 +41,23 @@ const RESUME_WINDOW_MS = 5 * 60 * 1000;
  *  costs tens of writes rather than thousands. */
 const PARTIAL_WRITE_MS = 700;
 
+// Stop switches for replies being written right now. In-memory for the same
+// reason the deck builder's job store is: a single-instance deployment
+// (Railway default), and after a restart there is no running work for a
+// stop to reach anyway. The job row itself can't carry the request — its
+// status column is checked to running/done/error, and the running job
+// overwrites `result` with partial text on a timer, so any marker written
+// there would be racing the very stream it is trying to stop.
+const globalAborts = globalThis as unknown as { __chatAborts?: Map<string, AbortController> };
+const chatAborts = (globalAborts.__chatAborts ??= new Map<string, AbortController>());
+
+/** What the reply becomes when the player stops it mid-write. */
+function stoppedAnswer(partial: string): string {
+  return partial.trim()
+    ? `${partial.trim()}\n\n_(You stopped this reply there.)_`
+    : "_(Reply stopped.)_";
+}
+
 const MIGRATION_MSG =
   "The chat needs a one-time database update — run supabase/migrations/029_assistant_chat.sql.";
 const JOBS_MIGRATION_MSG =
@@ -520,8 +537,11 @@ async function runChat(opts: {
   ) => Promise<void>;
   /** The answer as it is being written, for showing before it is finished. */
   onPartial?: (soFar: string) => void;
+  /** Fires when the player presses Stop; the caller turns the resulting
+   *  abort error into a saved, stopped reply. */
+  signal?: AbortSignal;
 }): Promise<{ answer: string; refused: boolean; pendingEdit: DeckEditProposal | null }> {
-  const { supabase, userId, text, save, onPartial } = opts;
+  const { supabase, userId, text, save, onPartial, signal } = opts;
 
   // History is read before the user turn is saved, so the prompt below can
   // append the question exactly once.
@@ -570,6 +590,10 @@ async function runChat(opts: {
   // next round thinks — see chatEffort.
   let usedTools = false;
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    // A stop that landed while a tool was running (a lookup, a vision read)
+    // has nothing to abort mid-flight — it is honoured here instead, before
+    // the next model call spends anything more.
+    if (signal?.aborted) throw new Error("stopped");
     const finalRound = round === MAX_TOOL_ROUNDS - 1;
     // Said out loud on the round where the tools close. See FINAL_ROUND_NOTE:
     // taking the model's next move away without offering another is how a
@@ -602,7 +626,8 @@ async function runChat(opts: {
         messages,
       },
       (r) => logAiUsage(supabase, userId, "chat", MODEL, r.usage, effort),
-      onPartial
+      onPartial,
+      { signal }
     );
     if (response.stop_reason !== "tool_use") break;
     usedTools = true;
@@ -735,7 +760,10 @@ export async function POST(req: Request) {
         .then(() => {});
     };
 
-    void runChat({ supabase, userId: user.id, text, save, onPartial })
+    const controller = new AbortController();
+    chatAborts.set(jobId, controller);
+
+    void runChat({ supabase, userId: user.id, text, save, onPartial, signal: controller.signal })
       .then(async (result) => {
         await admin
           .from("assistant_jobs")
@@ -743,6 +771,23 @@ export async function POST(req: Request) {
           .eq("id", jobId);
       })
       .catch(async (err) => {
+        // The player pressed Stop. Whatever text had streamed is kept as the
+        // answer — they read it happening, and history should agree with
+        // what they saw — and the job ends "done", not "error": a stop the
+        // player asked for is not something to apologise about.
+        if (controller.signal.aborted) {
+          const answer = stoppedAnswer(lastText);
+          await save("assistant", answer);
+          await admin
+            .from("assistant_jobs")
+            .update({
+              status: "done",
+              result: { answer, refused: false, stopped: true },
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", jobId);
+          return;
+        }
         await admin
           .from("assistant_jobs")
           .update({
@@ -751,9 +796,38 @@ export async function POST(req: Request) {
             updated_at: new Date().toISOString(),
           })
           .eq("id", jobId);
+      })
+      .finally(() => {
+        chatAborts.delete(jobId);
       });
 
     return NextResponse.json({ jobId });
+  } catch (err) {
+    return errorResponse(err);
+  }
+}
+
+/** PATCH { jobId }: stop the reply being written for that job.
+ *
+ *  Ownership is checked against the job row (RLS scopes the read to the
+ *  caller), then the in-process abort switch is thrown. Idempotent and
+ *  forgiving: a job that already finished, or that ran on an instance since
+ *  restarted, simply has nothing to stop — that is an ok, not an error,
+ *  because from the player's side the reply is equally over either way. */
+export async function PATCH(req: Request) {
+  try {
+    const { user } = await requireUser();
+    const { jobId } = (await req.json().catch(() => ({}))) as { jobId?: string };
+    if (!jobId) return NextResponse.json({ error: "Name the reply to stop." }, { status: 400 });
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("assistant_jobs")
+      .select("id, status")
+      .eq("id", jobId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (data?.status === "running") chatAborts.get(jobId)?.abort();
+    return NextResponse.json({ ok: true });
   } catch (err) {
     return errorResponse(err);
   }

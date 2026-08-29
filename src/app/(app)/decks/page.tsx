@@ -1152,6 +1152,8 @@ export default function DecksPage() {
   const [editRequest, setEditRequest] = useState<Deck | null>(null);
   const [building, setBuilding] = useState(false);
   const [buildStep, setBuildStep] = useState(0);
+  /** The running build's job ticket — what the Stop button aims at. */
+  const [buildJobId, setBuildJobId] = useState<string | null>(null);
   const [built, setBuilt] = useState<BuiltDeck | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<Deck | null>(null);
@@ -1289,6 +1291,7 @@ export default function DecksPage() {
     setBuilding(true);
     setBuildStep(0);
     setError(null);
+    setBuildJobId(jobId);
     const stepTimer = setInterval(
       () => setBuildStep((s) => Math.min(s + 1, BUILD_STEPS.length - 1)),
       15000
@@ -1303,6 +1306,8 @@ export default function DecksPage() {
           setBuilt(status.deck as unknown as BuiltDeck);
           return;
         }
+        // Stopped at the player's own request — settle quietly, no error.
+        if (status.status === "cancelled") return;
         if (status.status === "error") {
           throw new Error((status.error as string) || "Deck build failed");
         }
@@ -1314,9 +1319,21 @@ export default function DecksPage() {
     } finally {
       clearInterval(stepTimer);
       setBuilding(false);
+      setBuildJobId(null);
       try {
         localStorage.removeItem(JOB_STORAGE_KEY);
       } catch {}
+    }
+  }
+
+  /** Stop the running build. The job flips to "cancelled" server-side and
+   *  the poll above settles on its next pass — nothing else to unwind. */
+  async function stopBuild() {
+    if (!buildJobId) return;
+    try {
+      await fetch(`/api/decks/build?job=${encodeURIComponent(buildJobId)}`, { method: "DELETE" });
+    } catch {
+      // The poll's deadline still bounds the wait if the stop didn't land.
     }
   }
 
@@ -1631,6 +1648,15 @@ export default function DecksPage() {
           <div className="mt-2 flex items-center gap-2">
             <FanMark size={16} className="animate-spin-slow shrink-0" />
             <p className="animate-pulse text-sm text-slate-500">{BUILD_STEPS[buildStep]}</p>
+            {buildJobId && (
+              <button
+                type="button"
+                className="shrink-0 rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:border-slate-400 hover:text-slate-800"
+                onClick={stopBuild}
+              >
+                ⏹ Stop
+              </button>
+            )}
           </div>
         )}
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
