@@ -15,6 +15,8 @@ import { buildContext } from "@/lib/assistantContext";
 import { ASSISTANT_SYSTEM, OFF_TOPIC_REPLY, isClearlyOffTopic } from "@/lib/assistantScope";
 import { completeWithRoom, answerText, noAnswerReply, addFinalRoundNote } from "@/lib/aiAnswer";
 import { setsAgree } from "@/lib/setName";
+import { resolveNickname } from "@/lib/cardNicknames";
+import { buyLinkFor } from "@/lib/buyLink";
 import { errorJson, safeMessage } from "@/lib/apiError";
 
 export const maxDuration = 120;
@@ -118,7 +120,10 @@ const CARD_LOOKUP_TOOL = {
     "rules text, weakness, resistance and retreat — and whether a card " +
     "exists at all. Printed text comes back when the search narrows to a " +
     "handful of cards, so name the card rather than the whole set when you " +
-    "need to know how it plays. NEVER describe a card's attacks from memory: " +
+    "need to know how it plays. Detailed results include a TCGplayer buy " +
+    "link per card, and a few famous community nicknames ('moonbreon', " +
+    "'bubble mew', 'goyf') are understood as-is. " +
+    "NEVER describe a card's attacks from memory: " +
     "look it up, and if the text isn't on file say so. The catalogue may be " +
     "incompletely imported: an empty result means the database doesn't list " +
     "the card yet, NOT that the card doesn't exist.",
@@ -298,9 +303,27 @@ async function runCardLookup(
   /** Whose credits a vision read is billed to. */
   userId: string | null = null
 ): Promise<string> {
-  const name = (input.name ?? "").trim();
-  const set = (input.set_name ?? "").trim();
+  let name = (input.name ?? "").trim();
+  let set = (input.set_name ?? "").trim();
   if (!name && !set) return "Provide a card name, a set name, or both.";
+
+  // A community nickname passed through verbatim would search for a card
+  // that is named that way nowhere — swap in the printed name and say so,
+  // so the model can point at the right row AND correct course if the
+  // player meant something else.
+  const nick = resolveNickname(name);
+  let nickNote = "";
+  if (nick) {
+    nickNote =
+      `("${name}" is the community nickname for ${nick.name}` +
+      (nick.number ? ` #${nick.number}` : "") +
+      (nick.set ? ` from ${nick.set}` : "") +
+      " — the results below are for that card. Tell the player which card " +
+      "you took the nickname to mean.)\n";
+    name = nick.name;
+    if (!set && nick.set) set = nick.set;
+  }
+
   let q = supabase
     .from("cards")
     // select("*") — battle_data only exists after migration 019, and naming
@@ -312,6 +335,7 @@ async function runCardLookup(
   if (error) return `The lookup failed: ${error.message}`;
   if (!data || data.length === 0) {
     return (
+      nickNote +
       "No matches in the app's card database. The catalogue may still be " +
       "importing — tell the player the database doesn't list it yet, not " +
       "that the card doesn't exist."
@@ -451,7 +475,22 @@ async function runCardLookup(
     return parts.length ? `${head}\n${parts.join("\n")}` : head;
   };
 
-  const lines = rows.map(describe);
+  // The buy link, on detailed results only: a fifty-row browse doesn't need
+  // fifty URLs, and the model is told to offer these when buying is the
+  // point rather than to decorate every answer with them.
+  const withBuy = (row: Record<string, unknown>, text: string): string => {
+    if (!detailed) return text;
+    const url = buyLinkFor({
+      tcgplayerId: ("tcgplayer_id" in row ? (row.tcgplayer_id as string | null) : null) ?? null,
+      name: row.name as string,
+      // The id prefix, not the game column: it works on a database that
+      // hasn't run migration 072 yet, same as every other discriminator.
+      game: (row.id as string).startsWith("scry-") ? "mtg" : "pokemon",
+    });
+    return `${text}\n    Buy: ${url}`;
+  };
+
+  const lines = rows.map((r) => withBuy(r, describe(r)));
   const total = count ?? rows.length;
   const noText =
     detailed && rows.some((r) => "battle_data" in r && r.battle_data == null)
@@ -459,6 +498,7 @@ async function runCardLookup(
         "describing what they do from memory."
       : "";
   return (
+    nickNote +
     `${total} match${total === 1 ? "" : "es"}${total > 50 ? " (first 50 shown)" : ""}` +
     (detailed ? " (with printed text where the app has it)" : " (names only — narrow the search for attack text)") +
     `:\n${lines.join("\n")}${noText}`

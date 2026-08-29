@@ -20,9 +20,14 @@
 //
 // Links are rendered as their label only, never as an anchor, for the same
 // reason: a URL that arrives inside model output is not something the app
-// should be handing the reader a click on.
+// should be handing the reader a click on. The one exception is a TCGplayer
+// shop link (isTrustedShopLink): those URLs are built by our own buyLink
+// module and handed to the model through a tool result, and "buy this card"
+// is only useful as something you can click. Anything else — any other
+// host, any non-https scheme — still renders as its label.
 
 import { Fragment, type ReactNode } from "react";
+import { isTrustedShopLink } from "@/lib/buyLink";
 
 /* ------------------------------------------------------------------ inline */
 
@@ -76,7 +81,22 @@ export function inlineNodes(src: string, key: string): ReactNode[] {
         </code>
       );
     } else if (m[5] != null) {
-      out.push(<Fragment key={k}>{m[5]}</Fragment>);
+      const href = m[6];
+      if (href && isTrustedShopLink(href)) {
+        out.push(
+          <a
+            key={k}
+            href={href}
+            target="_blank"
+            rel="noreferrer sponsored"
+            className="font-semibold text-brand-ink underline decoration-brand-line-strong underline-offset-2 hover:decoration-brand-ink"
+          >
+            {m[5]}
+          </a>
+        );
+      } else {
+        out.push(<Fragment key={k}>{m[5]}</Fragment>);
+      }
     }
     last = m.index + m[0].length;
   }

@@ -8,7 +8,8 @@
 // mean answering from memory.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AI_NAME } from "@/lib/branding";
+import { AI_NAME, APP_NAME } from "@/lib/branding";
+import { containsAffiliateLink } from "@/lib/buyLink";
 import { FanMark } from "@/components/Logo";
 import Markdown from "@/components/Markdown";
 import { OutOfCreditsNote } from "@/components/CreditLock";
@@ -363,6 +364,17 @@ export default function TrainerChat() {
                 ))}
               <div ref={endRef} />
             </div>
+
+            {/* The same disclosure the meta and sets pages carry, because the
+                same wrapped links now render here. Keyed off the links
+                actually present, not a setting — a plain tcgplayer.com link
+                (no affiliate program configured) needs no disclosure. */}
+            {msgs.some((m) => m.role === "assistant" && containsAffiliateLink(m.content)) && (
+              <p className="mt-2 text-center text-[11px] text-brand-ink5">
+                {APP_NAME} earns a small commission on TCGplayer purchases made through buy
+                links — at no extra cost to you.
+              </p>
+            )}
 
             {error && <p className="mt-2 text-[12.5px] text-brand-negative">{error}</p>}
           </div>

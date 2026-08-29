@@ -19,7 +19,14 @@
 // recognise as one is an FTC problem and an Impact terms problem at once.
 
 const PRODUCT_BASE = "https://www.tcgplayer.com/product/";
-const SEARCH_BASE = "https://www.tcgplayer.com/search/pokemon/product?q=";
+
+/** TCGplayer's search is per-game; a Magic card searched under /pokemon/
+ *  comes back empty. Falls back to Pokémon, which every caller predating
+ *  the game column implicitly assumed. */
+function searchBase(game?: "pokemon" | "mtg" | null): string {
+  const slug = game === "mtg" ? "magic" : "pokemon";
+  return `https://www.tcgplayer.com/search/${slug}/product?q=`;
+}
 
 function template(): string | null {
   const t = (process.env.TCGPLAYER_AFFILIATE_URL ?? "").trim();
@@ -35,20 +42,74 @@ export function affiliateActive(): boolean {
 export function tcgplayerUrl(card: {
   tcgplayerId?: number | string | null;
   name: string;
+  game?: "pokemon" | "mtg" | null;
 }): string {
   const id = card.tcgplayerId;
   if (id != null && String(id).trim() !== "") {
     return `${PRODUCT_BASE}${encodeURIComponent(String(id).trim())}`;
   }
-  return `${SEARCH_BASE}${encodeURIComponent(card.name)}`;
+  return `${searchBase(card.game)}${encodeURIComponent(card.name)}`;
 }
 
 /** The URL to put on a Buy button: affiliate-wrapped when configured. */
 export function buyLinkFor(card: {
   tcgplayerId?: number | string | null;
   name: string;
+  game?: "pokemon" | "mtg" | null;
 }): string {
   const url = tcgplayerUrl(card);
   const t = template();
   return t ? `${t}${encodeURIComponent(url)}` : url;
+}
+
+// ---------------------------------------------------------------- link trust
+//
+// Pure string tests, safe to import from client components (nothing below
+// touches the environment). They exist for the chat: model output renders
+// links as plain text by design, and these name the one exception — shop
+// links this module itself builds.
+
+/** Hosts a chat-rendered link may actually point at. The two affiliate
+ *  hosts are where Impact-wrapped TCGplayer links live. */
+const TRUSTED_SHOP_HOSTS = new Set([
+  "www.tcgplayer.com",
+  "tcgplayer.com",
+  "shop.tcgplayer.com",
+  "tcgplayer.pxf.io",
+  "partner.tcgplayer.com",
+]);
+
+const AFFILIATE_HOSTS = new Set(["tcgplayer.pxf.io", "partner.tcgplayer.com"]);
+
+function hostOf(href: string): string | null {
+  try {
+    const u = new URL(href);
+    return u.protocol === "https:" ? u.hostname.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when this URL is a TCGplayer shop link — the only kind the chat
+ *  renders as a clickable anchor. */
+export function isTrustedShopLink(href: string): boolean {
+  const h = hostOf(href);
+  return h != null && TRUSTED_SHOP_HOSTS.has(h);
+}
+
+/** True when this URL carries the affiliate wrapper — the cue for the
+ *  disclosure line wherever such a link renders. */
+export function isAffiliateLink(href: string): boolean {
+  const h = hostOf(href);
+  return h != null && AFFILIATE_HOSTS.has(h);
+}
+
+/** True when a piece of markdown contains an affiliate-wrapped link — how
+ *  the chat decides to show its disclosure line. Scans the same [label](url)
+ *  shape the renderer turns into anchors. */
+export function containsAffiliateLink(markdown: string): boolean {
+  for (const m of markdown.matchAll(/\]\((https:\/\/[^)\s]+)\)/g)) {
+    if (isAffiliateLink(m[1])) return true;
+  }
+  return false;
 }
