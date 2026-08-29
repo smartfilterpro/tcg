@@ -13,6 +13,11 @@
 import { ebayEnabled, ebayFetch, marketplace, SCOPE_BASE } from "@/lib/ebay";
 import { trackerSealedById, trackerSealedByName } from "@/lib/sealedTracker";
 
+// Pokémon kinds first, then Magic's — the two games package product under
+// different names, and offering "Elite Trainer Box" for a Magic set would
+// suggest a product that has never existed. "other" stays last and stays
+// shared: a Japanese promo tin and an Unfinity attractions box land there
+// alike.
 export const SEALED_KINDS = [
   "booster_box",
   "etb",
@@ -21,10 +26,32 @@ export const SEALED_KINDS = [
   "tin",
   "collection_box",
   "blister",
+  "play_booster_box",
+  "collector_booster_box",
+  "bundle",
+  "commander_deck",
+  "prerelease",
   "other",
 ] as const;
 
 export type SealedKind = (typeof SEALED_KINDS)[number];
+
+/** Which game a product kind belongs to — what the add form's kind list
+ *  filters on. "other" answers to both. */
+export function sealedKindGame(kind: string): "pokemon" | "mtg" | "both" {
+  switch (kind) {
+    case "play_booster_box":
+    case "collector_booster_box":
+    case "bundle":
+    case "commander_deck":
+    case "prerelease":
+      return "mtg";
+    case "other":
+      return "both";
+    default:
+      return "pokemon";
+  }
+}
 
 export function sealedKindLabel(kind: string): string {
   switch (kind) {
@@ -42,6 +69,16 @@ export function sealedKindLabel(kind: string): string {
       return "Collection box";
     case "blister":
       return "Blister pack";
+    case "play_booster_box":
+      return "Play Booster box";
+    case "collector_booster_box":
+      return "Collector Booster box";
+    case "bundle":
+      return "Bundle";
+    case "commander_deck":
+      return "Commander deck";
+    case "prerelease":
+      return "Prerelease pack";
     default:
       return "Other";
   }
@@ -53,6 +90,9 @@ export interface SealedProduct {
   id: string;
   name: string;
   kind: string;
+  /** 'pokemon' | 'mtg'. Optional because the column arrives with migration
+   *  077 — absent means Pokémon, which is what every pre-077 row is. */
+  game?: string | null;
   set_name: string | null;
   release_year: number | null;
   image_url: string | null;
@@ -173,10 +213,15 @@ const cache = new Map<string, { at: number; value: SealedPrice | null }>();
 export async function sealedPrice(query: {
   name: string;
   kind?: string | null;
+  game?: string | null;
 }): Promise<SealedPrice | null> {
   if (!ebayEnabled()) return null;
 
-  const terms = ["pokemon", query.name, "sealed"].filter(Boolean).join(" ");
+  // The game word does the heavy lifting in this search: "Bloomburrow
+  // Collector Booster Box" under "pokemon" matches nothing credible, and
+  // whatever noise survives the filters prices the wrong thing.
+  const gameTerm = query.game === "mtg" ? "magic the gathering" : "pokemon";
+  const terms = [gameTerm, query.name, "sealed"].filter(Boolean).join(" ");
   const key = `${marketplace()}|${terms}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.value;
@@ -275,19 +320,31 @@ export async function priceProduct(
     let value: number | null = null;
     let image: string | null = null;
 
-    // THE PAID CATALOGUE FIRST, for sealed only.
+    // Which game's product this is. Read off the row (column from 077)
+    // rather than passed in, so every caller — add, reprice, whatever comes
+    // later — prices the same product the same way. Absent means Pokémon:
+    // that is what every pre-077 row is.
+    const game = (current?.game as string | null) === "mtg" ? "mtg" : "pokemon";
+
+    // THE PAID CATALOGUE FIRST, for sealed only — and for Pokémon only.
     //
     // The opposite of the order used for cards, and for a reason rather
     // than by accident: free sources go first when they hold the SAME data,
     // and here they hold worse data. This is a TCGplayer market price and
     // an official product shot; eBay is asking prices and seller photos.
     //
+    // Magic skips it entirely: the tracker is a Pokémon catalogue, and a
+    // name match against it could only ever be a wrong answer.
+    //
     // Exact when we know their id — no name matching, so a reprice cannot
     // drift onto a different box.
     const existingId = (current?.tcgplayer_id as string | null) ?? null;
-    const fromTracker = existingId
-      ? await trackerSealedById(existingId)
-      : await trackerSealedByName(name);
+    const fromTracker =
+      game === "mtg"
+        ? null
+        : existingId
+          ? await trackerSealedById(existingId)
+          : await trackerSealedByName(name);
 
     let imageSource: string | null = null;
     if (fromTracker?.price != null) {
@@ -301,8 +358,9 @@ export async function priceProduct(
       if (fromTracker.setName) patch.set_name = fromTracker.setName;
     } else {
       // Nothing there — fall back to what is actually being asked for on
-      // eBay. Worse data, but a real number beats no number.
-      const listings = await sealedPrice({ name, kind });
+      // eBay. Worse data, but a real number beats no number. For Magic this
+      // is the primary source, not the fallback: there is no paid catalogue.
+      const listings = await sealedPrice({ name, kind, game });
       if (listings) {
         value = listings.median;
         image = listings.image ?? null;
@@ -396,6 +454,9 @@ export interface SealedSuggestion {
   name: string;
   kind: string;
   kindLabel: string;
+  /** Which game's product this suggests — carried through to the add so
+   *  the row is priced down the right path. Absent means Pokémon. */
+  game?: "pokemon" | "mtg";
   setName: string | null;
   year: number | null;
   /** Where the suggestion came from, and they mean different things:
