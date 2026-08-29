@@ -348,7 +348,8 @@ export async function GET(req: Request) {
         const { hasTcgp: _h, ...c } = entry;
         // No product id ≠ nowhere to buy: a search link still lands on the
         // card, and it carries the affiliate wrapper like any other.
-        if (!c.buyUrl && c.name) c.buyUrl = buyLinkFor({ tcgplayerId: null, name: c.name });
+        if (!c.buyUrl && c.name)
+          c.buyUrl = buyLinkFor({ tcgplayerId: null, name: c.name, game });
         if (!master) return [c];
         // One row per slot. "Specifics beat any" (same rule as the summary):
         // a number whose rarity names real finishes drops the unknown slot.
