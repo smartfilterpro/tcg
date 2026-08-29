@@ -29,10 +29,13 @@ export const maxDuration = 300;
 
 interface BuildJob {
   userId: string;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "cancelled";
   deck?: unknown;
   error?: string;
   created: number;
+  /** The stop switch, present while running. DELETE throws it; the model
+   *  streams carry its signal, so a stop ends the spend immediately. */
+  abort?: AbortController;
 }
 
 const globalJobs = globalThis as unknown as { __deckJobs?: Map<string, BuildJob> };
@@ -651,7 +654,13 @@ export async function POST(req: Request) {
 
       cleanupJobs();
       const mtgJobId = crypto.randomUUID();
-      jobs.set(mtgJobId, { userId: user.id, status: "running", created: Date.now() });
+      const mtgAbort = new AbortController();
+      jobs.set(mtgJobId, {
+        userId: user.id,
+        status: "running",
+        created: Date.now(),
+        abort: mtgAbort,
+      });
 
       void (async () => {
         try {
@@ -794,7 +803,8 @@ export async function POST(req: Request) {
 
           const client = anthropic();
           const mtgSystem = mtgSystemPrompt(effectivePool, mtgFormat, mtgMetaContext != null);
-          const stream = client.messages.stream({
+          const stream = client.messages.stream(
+            {
             model: MODEL,
             max_tokens: 32000,
             system: [
@@ -823,7 +833,9 @@ export async function POST(req: Request) {
                 ],
               },
             ],
-          });
+            },
+            { signal: mtgAbort.signal }
+          );
           const response = await stream.finalMessage();
           await logAiUsage(createAdminClient(), user.id, "deck_build", MODEL, response.usage);
 
@@ -917,7 +929,8 @@ export async function POST(req: Request) {
           let analysis = mtgAnalysis((deck.cards ?? []).map(toMtgEntry), mtgFormat);
           if (analysis.issues.length > 0) {
             try {
-              const revisionStream = client.messages.stream({
+              const revisionStream = client.messages.stream(
+                {
                 model: MODEL,
                 max_tokens: 32000,
                 system: [
@@ -955,7 +968,9 @@ export async function POST(req: Request) {
                       `and the same card-pool rules. Return the complete corrected deck JSON.`,
                   },
                 ],
-              });
+                },
+                { signal: mtgAbort.signal }
+              );
               const revision = await revisionStream.finalMessage();
               await logAiUsage(createAdminClient(), user.id, "deck_build", MODEL, revision.usage);
               const revText = revision.content.find((b) => b.type === "text");
@@ -985,7 +1000,9 @@ export async function POST(req: Request) {
                   analysis = mtgAnalysis((deck.cards ?? []).map(toMtgEntry), mtgFormat);
                 }
               }
-            } catch {
+            } catch (err) {
+              // A stop is not a failed revision — it ends the build.
+              if (mtgAbort.signal.aborted) throw err;
               // Revision is best-effort — the original deck still ships.
             }
           }
@@ -1194,6 +1211,10 @@ export async function POST(req: Request) {
 
           jobs.set(mtgJobId, { userId: user.id, status: "done", deck, created: Date.now() });
         } catch (err) {
+          if (mtgAbort.signal.aborted) {
+            jobs.set(mtgJobId, { userId: user.id, status: "cancelled", created: Date.now() });
+            return;
+          }
           console.error("mtg deck build job error", err);
           jobs.set(mtgJobId, {
             userId: user.id,
@@ -1317,7 +1338,13 @@ export async function POST(req: Request) {
       .filter((s): s is string => s != null);
     cleanupJobs();
     const jobId = crypto.randomUUID();
-    jobs.set(jobId, { userId: user.id, status: "running", created: Date.now() });
+    const buildAbort = new AbortController();
+    jobs.set(jobId, {
+      userId: user.id,
+      status: "running",
+      created: Date.now(),
+      abort: buildAbort,
+    });
 
     // Run the build detached — the client polls for the result.
     void (async () => {
@@ -1344,6 +1371,10 @@ export async function POST(req: Request) {
           .sort((a, b) => Number(isPokemon(b.supertype)) - Number(isPokemon(a.supertype)))
           .slice(0, 150);
         for (let i = 0; i < needsText.length; i += 6) {
+          // Text warming can run a minute on a cold collection — the one
+          // stretch of a build where a stop has no stream to abort, so it
+          // is checked between batches instead.
+          if (buildAbort.signal.aborted) throw new Error("stopped");
           await Promise.all(
             needsText.slice(i, i + 6).map(async (c) => {
               // Held text first, then the free database, and the miss is
@@ -1645,7 +1676,8 @@ export async function POST(req: Request) {
         // Generous cap: the model spends thinking tokens planning the deck
         // BEFORE emitting the JSON, and both draw from the same budget — too
         // small a cap truncates the response before the deck appears.
-        const stream = client.messages.stream({
+        const stream = client.messages.stream(
+          {
           model: MODEL,
           max_tokens: 32000,
           // The rules and rubric never change between builds, so they cache
@@ -1676,7 +1708,9 @@ export async function POST(req: Request) {
               ],
             },
           ],
-        });
+          },
+          { signal: buildAbort.signal }
+        );
         const response = await stream.finalMessage();
 
         // Log + debit with the service client (request cookies are gone by
@@ -1758,7 +1792,8 @@ export async function POST(req: Request) {
         let analysis = analyzeDeck((deck.cards ?? []).map(toMathEntry));
         if (analysis.issues.length > 0) {
           try {
-            const revisionStream = client.messages.stream({
+            const revisionStream = client.messages.stream(
+              {
               model: MODEL,
               max_tokens: 32000,
               system: systemPrompt(effectivePool),
@@ -1793,7 +1828,9 @@ export async function POST(req: Request) {
                     `the same card-pool rules, and the 60-card limit. Return the complete corrected deck JSON.`,
                 },
               ],
-            });
+              },
+              { signal: buildAbort.signal }
+            );
             const revision = await revisionStream.finalMessage();
             await logAiUsage(createAdminClient(), user.id, "deck_build", MODEL, revision.usage);
             const revText = revision.content.find((b) => b.type === "text");
@@ -1804,7 +1841,9 @@ export async function POST(req: Request) {
                 analysis = analyzeDeck(revised.cards.map(toMathEntry));
               }
             }
-          } catch {
+          } catch (err) {
+            // A stop is not a failed revision — it ends the build.
+            if (buildAbort.signal.aborted) throw err;
             // Revision is best-effort — the original deck still ships.
           }
         }
@@ -2140,6 +2179,10 @@ export async function POST(req: Request) {
 
         jobs.set(jobId, { userId: user.id, status: "done", deck, created: Date.now() });
       } catch (err) {
+        if (buildAbort.signal.aborted) {
+          jobs.set(jobId, { userId: user.id, status: "cancelled", created: Date.now() });
+          return;
+        }
         console.error("deck build job error", err);
         jobs.set(jobId, {
           userId: user.id,
@@ -2173,8 +2216,35 @@ export async function GET(req: Request) {
       );
     }
     if (job.status === "running") return NextResponse.json({ status: "running" });
+    if (job.status === "cancelled") return NextResponse.json({ status: "cancelled" });
     if (job.status === "error") return NextResponse.json({ status: "error", error: job.error });
     return NextResponse.json({ status: "done", deck: job.deck });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return NextResponse.json({ error: "Request failed" }, { status: 500 });
+  }
+}
+
+/** DELETE ?job=<id>: stop a running build.
+ *
+ *  The abort signal ends the model stream mid-token, so a stop saves real
+ *  money, not just screen time. Forgiving by design: a job that already
+ *  finished, expired, or ran on a restarted instance has nothing to stop,
+ *  and that is an ok — from the player's side the build is equally over. */
+export async function DELETE(req: Request) {
+  try {
+    const { user } = await requireUser();
+    const jobId = new URL(req.url).searchParams.get("job");
+    const job = jobId ? jobs.get(jobId) : undefined;
+    if (job && job.userId === user.id && job.status === "running") {
+      job.abort?.abort();
+      // Marked immediately rather than waiting for the runner's catch, so
+      // the very next poll reads "cancelled" and the UI settles at once.
+      jobs.set(jobId!, { ...job, status: "cancelled" });
+    }
+    return NextResponse.json({ ok: true });
   } catch (err) {
     if (err instanceof AuthError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
