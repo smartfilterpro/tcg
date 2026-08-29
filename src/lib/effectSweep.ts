@@ -51,6 +51,19 @@ const TARGETS = [
   "chosen",
 ];
 
+/** A nullable enum the structured-output API actually accepts.
+ *
+ *  `{ type: ["string","null"], enum: [...] }` is legal JSON Schema, and the
+ *  API rejects it — "Enum value 'X' does not match declared type" — which
+ *  400'd every one of these calls and quietly dropped them to the
+ *  schema-less retry: an extra round trip per call and no enforcement,
+ *  defeating the closed vocabulary this schema exists for. The anyOf split
+ *  says the same thing in the dialect the validator speaks, and is already
+ *  the pattern the nested CONDITION fields use. */
+const nullableEnum = (values: readonly string[]) => ({
+  anyOf: [{ type: "string", enum: [...values] }, { type: "null" }],
+});
+
 const CONDITION = {
   type: "object",
   properties: {
@@ -67,11 +80,11 @@ const CONDITION = {
         "hpAtMost",
       ],
     },
-    who: { type: ["string", "null"], enum: [...TARGETS, null] },
+    who: nullableEnum(TARGETS),
     status: { type: ["string", "null"] },
     type: { type: ["string", "null"] },
     name: { type: ["string", "null"] },
-    side: { type: ["string", "null"], enum: ["mine", "theirs", "either", null] },
+    side: nullableEnum(["mine", "theirs", "either"]),
     n: { type: ["integer", "null"] },
   },
   required: ["if"],
@@ -101,11 +114,11 @@ const ACTION = {
         "manual",
       ],
     },
-    who: { type: ["string", "null"], enum: [...TARGETS, null] },
+    who: nullableEnum(TARGETS),
     n: { type: ["integer", "null"] },
     status: { type: ["string", "null"] },
     what: { type: ["string", "null"] },
-    side: { type: ["string", "null"], enum: ["mine", "theirs", null] },
+    side: nullableEnum(["mine", "theirs"]),
     note: { type: ["string", "null"] },
   },
   required: ["do"],
@@ -130,7 +143,7 @@ const MODIFIER = {
       type: "string",
       enum: ["attackDamage", "damageTaken", "retreatCost", "maxHp", "noWeakness", "manual"],
     },
-    who: { type: ["string", "null"], enum: [...TARGETS, null] },
+    who: nullableEnum(TARGETS),
     n: { type: ["integer", "null"] },
     when: { anyOf: [CONDITION, { type: "null" }] },
     note: { type: ["string", "null"] },
@@ -154,7 +167,7 @@ const COUNT = {
   type: "object",
   properties: {
     count: { type: "string", enum: ["myBench", "theirBench", "energyOn", "countersOn"] },
-    who: { type: ["string", "null"], enum: [...TARGETS, null] },
+    who: nullableEnum(TARGETS),
   },
   required: ["count"],
   additionalProperties: false,
