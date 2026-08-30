@@ -84,6 +84,19 @@ export async function POST(req: Request) {
       ...new Map(items.map((i) => [i.card.id, summaryToRow(i.card)])).values(),
     ];
 
+    // PostgREST sends a bulk upsert as ONE column list shared by every row,
+    // filling any key a row lacks with an explicit null. summaryToRow only
+    // names `game` on Magic rows — so a MIXED batch sent the Pokémon rows
+    // as game:null and the whole save died on the not-null constraint,
+    // while single-game batches (column absent everywhere, or set
+    // everywhere) sailed through. Once any row names the column, every row
+    // must — from the id prefix, the discriminator that is always right.
+    if (cardRows.some((r) => "game" in r)) {
+      for (const r of cardRows) {
+        (r as { game?: string }).game = r.id.startsWith("scry-") ? "mtg" : "pokemon";
+      }
+    }
+
     // Never let a data-less save clobber shared enrichments: if the incoming
     // row has no image/price (typical for promos the card databases lack) but
     // the shared record already has one (a user photo, a found image, cached
@@ -127,9 +140,20 @@ export async function POST(req: Request) {
     }
 
     // image_locked is not part of the upsert payload, so it's preserved.
-    const { error: cardErr } = await supabase
-      .from("cards")
-      .upsert(cardRows, { onConflict: "id" });
+    let { error: cardErr } = await supabase.from("cards").upsert(cardRows, { onConflict: "id" });
+    // Pre-072 fallback, WRITE side: a Magic row carries game:'mtg' and a
+    // database without the column refuses the whole batch — a mixed scan
+    // then fails at the very last step, after every card matched. The GET
+    // above already survives this; the save must too. Dropping the column
+    // is safe: the scry- id prefix is the game discriminator everywhere,
+    // precisely so rows written in this state stay identifiable.
+    if (cardErr && /game/.test(cardErr.message ?? "")) {
+      const stripped = cardRows.map((r) => {
+        const { game: _drop, ...rest } = r as typeof r & { game?: string };
+        return rest;
+      });
+      ({ error: cardErr } = await supabase.from("cards").upsert(stripped, { onConflict: "id" }));
+    }
     if (cardErr) throw cardErr;
 
     if (candidateRows.length > 0) {
@@ -345,5 +369,7 @@ function errorResponse(err: unknown) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   console.error("collection error", err);
-  return errorJson(err, "Request failed");
+  // Named for the route, so a screenshot of the failure says WHERE it
+  // happened — "Request failed" matched half the API surface.
+  return errorJson(err, "Couldn't save to your collection");
 }
