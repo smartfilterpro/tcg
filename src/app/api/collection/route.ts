@@ -127,9 +127,20 @@ export async function POST(req: Request) {
     }
 
     // image_locked is not part of the upsert payload, so it's preserved.
-    const { error: cardErr } = await supabase
-      .from("cards")
-      .upsert(cardRows, { onConflict: "id" });
+    let { error: cardErr } = await supabase.from("cards").upsert(cardRows, { onConflict: "id" });
+    // Pre-072 fallback, WRITE side: a Magic row carries game:'mtg' and a
+    // database without the column refuses the whole batch — a mixed scan
+    // then fails at the very last step, after every card matched. The GET
+    // above already survives this; the save must too. Dropping the column
+    // is safe: the scry- id prefix is the game discriminator everywhere,
+    // precisely so rows written in this state stay identifiable.
+    if (cardErr && /game/.test(cardErr.message ?? "")) {
+      const stripped = cardRows.map((r) => {
+        const { game: _drop, ...rest } = r as typeof r & { game?: string };
+        return rest;
+      });
+      ({ error: cardErr } = await supabase.from("cards").upsert(stripped, { onConflict: "id" }));
+    }
     if (cardErr) throw cardErr;
 
     if (candidateRows.length > 0) {
@@ -345,5 +356,7 @@ function errorResponse(err: unknown) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   console.error("collection error", err);
-  return errorJson(err, "Request failed");
+  // Named for the route, so a screenshot of the failure says WHERE it
+  // happened — "Request failed" matched half the API surface.
+  return errorJson(err, "Couldn't save to your collection");
 }
