@@ -624,6 +624,78 @@ export async function refreshMtgPrices(
  *  by each successful pull, never touching curated rows — an admin's
  *  hand-written archetype always wins its name. Each row is a commander,
  *  not a decklist; the deck builder takes it from there. */
+/** One commander's most-played cards, from EDHREC's public page JSON.
+ *
+ *  The Scryfall feed names WHO is popular; this answers WHAT those decks
+ *  run, which is the part that makes a trending row a decklist instead of
+ *  a single card. json.edhrec.com serves each commander page's data as
+ *  plain JSON — the same numbers the site renders, fetched once a day for
+ *  a dozen commanders.
+ *
+ *  A representative core, not a full 99: the high-synergy picks and
+ *  staples EDHREC leads with, capped at 40 cards plus the commander.
+ *  Null on any failure or shape change — the caller falls back to the
+ *  single-commander spotlight, which is exactly what shipped before this
+ *  existed. */
+async function edhrecDeckFor(
+  c: ScryCard
+): Promise<Array<{ name: string; count: number; category: string }> | null> {
+  // Front face only, accents folded, punctuation dropped: EDHREC's slug
+  // for "Azusa, Lost but Seeking" is "azusa-lost-but-seeking".
+  const slug = c.name
+    .split("//")[0]
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-");
+  if (!slug) return null;
+  try {
+    const res = await fetch(`https://json.edhrec.com/pages/commanders/${slug}.json`, {
+      headers: { "User-Agent": "TCGdeck/1.0", Accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      container?: {
+        json_dict?: {
+          cardlists?: Array<{ header?: string; cardviews?: Array<{ name?: string }> }>;
+        };
+      };
+    };
+    const lists = json?.container?.json_dict?.cardlists;
+    if (!Array.isArray(lists)) return null;
+
+    const categoryFor = (header: string): string =>
+      /creature/i.test(header) ? "creature" : /land/i.test(header) ? "land" : "spell";
+    // High-synergy picks and staples first — the lists EDHREC itself leads
+    // with — then the per-type lists fill out the rest.
+    const weight = (h?: string) =>
+      /high synergy/i.test(h ?? "") ? 0 : /top cards/i.test(h ?? "") ? 1 : 2;
+    const ordered = [...lists].sort((a, b) => weight(a.header) - weight(b.header));
+
+    const seen = new Set([normalizeForSearch(c.name)]);
+    const out: Array<{ name: string; count: number; category: string }> = [
+      { name: c.name, count: 1, category: "commander" },
+    ];
+    for (const list of ordered) {
+      for (const cv of list.cardviews ?? []) {
+        const name = (cv?.name ?? "").trim();
+        if (!name) continue;
+        const key = normalizeForSearch(name);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push({ name, count: 1, category: categoryFor(list.header ?? "") });
+        if (out.length > 40) return out;
+      }
+    }
+    return out.length > 1 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function syncMtgCommanderMeta(admin: SupabaseClient): Promise<string> {
   const listing = await scryGet(
     // order=edhrec: most-built first. Cards banned in Commander can still
@@ -665,22 +737,34 @@ export async function syncMtgCommanderMeta(admin: SupabaseClient): Promise<strin
 
   const now = new Date().toISOString();
   let wrote = 0;
+  let withDecks = 0;
   const keep = new Set<string>();
+  const deckNames = new Set<string>();
   for (const c of top) {
     const key = c.name.toLowerCase();
     if (curated.has(key)) continue;
     keep.add(key);
     const identity = (c.card_faces?.[0]?.colors ?? c.colors ?? []).join("") || "C";
+    // The commander's most-played cards, so the row expands into a real
+    // decklist with owned/missing math like the Pokémon rows. Null keeps
+    // the single-card spotlight this feed shipped with.
+    const deck = await edhrecDeckFor(c);
+    if (deck) {
+      withDecks += 1;
+      for (const d of deck) deckNames.add(d.name);
+    }
     const row = {
       archetype: c.name,
       game: "mtg",
       format: "commander",
       share: null,
       placements: null,
-      core_cards: [{ name: c.name, count: 1 }],
+      core_cards: deck ?? [{ name: c.name, count: 1, category: "commander" }],
       source: "scryfall",
       window_days: null,
-      notes: `${c.type_line ?? "Legendary Creature"} · ${identity} · one of the most-built commanders on EDHREC`,
+      notes:
+        `${c.type_line ?? "Legendary Creature"} · ${identity} · one of the most-built commanders on EDHREC` +
+        (deck ? " — shown with its most-played cards" : ""),
       updated_at: now,
     };
     const id = scryByName.get(key);
@@ -688,12 +772,58 @@ export async function syncMtgCommanderMeta(admin: SupabaseClient): Promise<strin
       ? await admin.from("meta_decks").update(row).eq("id", id)
       : await admin.from("meta_decks").insert(row);
     if (!error) wrote += 1;
+    // Gentle pacing between EDHREC page fetches — a dozen a day, no rush.
+    await new Promise((r) => setTimeout(r, 250));
   }
   const stale = [...scryByName.entries()].filter(([k]) => !keep.has(k)).map(([, id]) => id);
   if (stale.length > 0) {
     await admin.from("meta_decks").delete().in("id", stale).then(() => {});
   }
-  return `mtg meta: top ${wrote} commanders written${stale.length ? `, ${stale.length} rotated out` : ""}`;
+
+  // Stash catalogue rows for decklist cards we've never held, by name, so
+  // the trending page resolves images, prices and buy links instead of
+  // rendering forty grey rows. Insert-only, same stance as the commander
+  // stash; the hourly price loop owns them from here. Names overlap
+  // heavily across commanders (every deck runs Sol Ring), so this settles
+  // to a handful of batches after the first run.
+  try {
+    const names = [...deckNames];
+    const keyOf = new Map(names.map((n) => [n, normalizeForSearch(n)]));
+    const have = new Set<string>();
+    const keys = [...new Set([...keyOf.values()])].filter(Boolean);
+    for (let i = 0; i < keys.length; i += 100) {
+      const { data } = await admin
+        .from("cards")
+        .select("name_key")
+        .like("id", "scry-%")
+        .in("name_key", keys.slice(i, i + 100))
+        .limit(1000);
+      for (const r of data ?? []) have.add(r.name_key as string);
+    }
+    const need = names.filter((n) => !have.has(keyOf.get(n) ?? ""));
+    for (let i = 0; i < need.length; i += 75) {
+      const res = await scryPost("/cards/collection", {
+        identifiers: need.slice(i, i + 75).map((name) => ({ name })),
+      });
+      const found = ((res?.data as ScryCard[] | undefined) ?? []).filter((cc) => !cc.digital);
+      if (found.length > 0) {
+        await admin
+          .from("cards")
+          .upsert(found.map((cc) => summaryToRow(scryToSummary(cc))), {
+            onConflict: "id",
+            ignoreDuplicates: true,
+          });
+      }
+    }
+  } catch {
+    // Rows resolve as people scan the cards; the lists still render.
+  }
+
+  return (
+    `mtg meta: top ${wrote} commanders written` +
+    (withDecks ? `, ${withDecks} with EDHREC decklists` : "") +
+    (stale.length ? `, ${stale.length} rotated out` : "")
+  );
 }
 
 const MTG_META_STATE_KEY = "mtg_meta_synced_at";

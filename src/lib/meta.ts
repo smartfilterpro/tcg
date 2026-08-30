@@ -22,7 +22,8 @@ import { buyLinkFor } from "@/lib/buyLink";
 export interface MetaCoreCard {
   name: string;
   count: number;
-  category?: "pokemon" | "trainer" | "energy";
+  /** Pokémon rows use the first three; Magic decklists the last four. */
+  category?: "pokemon" | "trainer" | "energy" | "commander" | "creature" | "spell" | "land";
 }
 
 export interface MetaDeckRow {
@@ -46,6 +47,8 @@ export interface MetaCardView extends MetaCoreCard {
   /** Cheapest catalogue market price for any printing of the name. */
   price: number | null;
   image: string | null;
+  /** Readable-size art for the tap-to-zoom view; null falls back to image. */
+  imageLarge: string | null;
   /** Household members / sharing friends holding copies, best two. */
   heldBy: Array<{ name: string; qty: number }>;
   /** Where to buy the missing copies (only set when some are missing). */
@@ -104,12 +107,14 @@ async function catalogueByNameKey(
 ): Promise<{
   price: Map<string, number>;
   image: Map<string, string>;
+  imageLarge: Map<string, string>;
   idsByKey: Map<string, string[]>;
   keyById: Map<string, string>;
   tcgpIdByKey: Map<string, string>;
 }> {
   const price = new Map<string, number>();
   const image = new Map<string, string>();
+  const imageLarge = new Map<string, string>();
   const idsByKey = new Map<string, string[]>();
   const keyById = new Map<string, string>();
   const tcgpIdByKey = new Map<string, string>();
@@ -117,7 +122,7 @@ async function catalogueByNameKey(
     for (let i = 0; i < keys.length; i += CHUNK) {
       const { data, error } = await admin
         .from("cards")
-        .select("id, name, market_price, image_small, tcgplayer_id")
+        .select("id, name, market_price, image_small, image_large, tcgplayer_id")
         .in("name_key", keys.slice(i, i + CHUNK))
         .limit(1000);
       if (error) throw error;
@@ -133,6 +138,7 @@ async function catalogueByNameKey(
         const priced = p != null && p > 0 && (!price.has(k) || p < price.get(k)!);
         if (priced) price.set(k, p!);
         if (!image.has(k) && row.image_small) image.set(k, row.image_small as string);
+        if (!imageLarge.has(k) && row.image_large) imageLarge.set(k, row.image_large as string);
         // The buy link follows the price: when this printing supplied the
         // number shown, its product page is the page that number came from.
         if (row.tcgplayer_id != null && (priced || !tcgpIdByKey.has(k))) {
@@ -148,7 +154,7 @@ async function catalogueByNameKey(
     // Pre-066: no name_key column. Coverage still works off the member's
     // own collection names; prices and helpers just stay blank.
   }
-  return { price, image, idsByKey, keyById, tcgpIdByKey };
+  return { price, image, imageLarge, idsByKey, keyById, tcgpIdByKey };
 }
 
 /** People whose collections may cover a gap: the member's household, plus
@@ -252,7 +258,7 @@ export async function metaDecksFor(userId: string): Promise<{
       )
     ),
   ].filter(Boolean);
-  const { price, image, idsByKey, keyById, tcgpIdByKey } = await catalogueByNameKey(
+  const { price, image, imageLarge, idsByKey, keyById, tcgpIdByKey } = await catalogueByNameKey(
     admin,
     allKeys
   );
@@ -302,9 +308,18 @@ export async function metaDecksFor(userId: string): Promise<{
           owned,
           price: price.get(k) ?? null,
           image: image.get(k) ?? null,
+          imageLarge: imageLarge.get(k) ?? null,
           heldBy: holders,
           ...(owned < c.count
-            ? { buyUrl: buyLinkFor({ tcgplayerId: tcgpIdByKey.get(k) ?? null, name: c.name }) }
+            ? {
+                buyUrl: buyLinkFor({
+                  tcgplayerId: tcgpIdByKey.get(k) ?? null,
+                  name: c.name,
+                  // A Magic gap searches TCGplayer's Magic listings, not
+                  // the Pokémon default this call silently used.
+                  game: deckGame,
+                }),
+              }
             : {}),
         };
       }

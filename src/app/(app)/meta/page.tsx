@@ -8,16 +8,18 @@
 // deck is already in your binder, and what the gap costs.
 
 import { useEffect, useState } from "react";
+import CardZoom from "@/components/CardZoom";
 import { money, moneyOrDash } from "@/lib/money";
 import { shortAgo } from "@/lib/text";
 
 interface MetaCard {
   name: string;
   count: number;
-  category?: "pokemon" | "trainer" | "energy";
+  category?: "pokemon" | "trainer" | "energy" | "commander" | "creature" | "spell" | "land";
   owned: number;
   price: number | null;
   image: string | null;
+  imageLarge?: string | null;
   heldBy: Array<{ name: string; qty: number }>;
   buyUrl?: string;
 }
@@ -60,6 +62,8 @@ export default function MetaPage() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [gameTab, setGameTab] = useState<"pokemon" | "mtg">("pokemon");
+  /** The card art being looked at full-screen, if any. */
+  const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -146,6 +150,15 @@ export default function MetaPage() {
               className="flex w-full items-center gap-4 p-4 text-left"
               onClick={() => setExpanded(open ? null : d.id)}
             >
+              {spotlight && spotCard?.image && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={spotCard.image}
+                  alt=""
+                  className="h-14 w-10 shrink-0 rounded object-cover"
+                  loading="lazy"
+                />
+              )}
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2">
                   <span className="text-base font-semibold">{d.archetype}</span>
@@ -208,12 +221,40 @@ export default function MetaPage() {
 
             {open && (
               <div className="border-t border-slate-100 p-4">
-                {d.notes && <p className="mb-3 text-sm text-slate-500">{d.notes}</p>}
+                {/* Spotlight rows already carry their notes in the header —
+                    repeating them here read as a rendering bug. */}
+                {d.notes && !spotlight && (
+                  <p className="mb-3 text-sm text-slate-500">{d.notes}</p>
+                )}
                 <ul className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
                   {cards.map((c, i) => {
                     const gap = c.count - c.owned;
                     return (
-                      <li key={i} className="flex items-baseline gap-2 text-sm">
+                      <li key={i} className="flex items-center gap-2 text-sm">
+                        {/* The art, tappable — a thumbnail is enough to tell
+                            cards apart; the zoom is for actually reading one. */}
+                        {c.image ? (
+                          <button
+                            type="button"
+                            className="shrink-0 cursor-zoom-in"
+                            onClick={() =>
+                              setZoom({ src: c.imageLarge ?? c.image!, alt: c.name })
+                            }
+                            aria-label={`See ${c.name} larger`}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={c.image}
+                              alt=""
+                              className="h-12 w-9 rounded object-cover"
+                              loading="lazy"
+                            />
+                          </button>
+                        ) : (
+                          <span className="flex h-12 w-9 shrink-0 items-center justify-center rounded bg-slate-100 text-xs text-slate-300">
+                            🂠
+                          </span>
+                        )}
                         <span className="w-7 shrink-0 text-right font-mono text-slate-400">
                           {c.count}×
                         </span>
@@ -251,7 +292,7 @@ export default function MetaPage() {
                   <p className="m-0 text-xs text-slate-400">
                     Updated {shortAgo(d.updatedAt)}
                     {d.source === "limitless" && " · results via LimitlessTCG"}
-                    {d.source === "scryfall" && " · popularity via EDHREC rank on Scryfall"}
+                    {d.source === "scryfall" && " · popularity and card picks via EDHREC"}
                   </p>
                   <a
                     className="btn-secondary shrink-0 text-sm"
@@ -295,6 +336,8 @@ export default function MetaPage() {
           )}
         </p>
       )}
+
+      {zoom && <CardZoom src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}
     </div>
   );
 }
