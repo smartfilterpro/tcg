@@ -3,6 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
+import { fetchScryBattleData } from "@/lib/scryfall";
 import { readCardTextOnce, shareTextWithPrintings } from "@/lib/cardText";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
@@ -402,9 +403,16 @@ async function runCardLookup(
       missing.map(async (row) => {
         const id = row.id as string;
         try {
-          const bd = id.startsWith("tcgdex-")
-            ? await getTcgdexBattleDataById(id)
-            : await getBattleDataById(id);
+          // Magic goes to Scryfall — free, authoritative, and it writes
+          // the row back itself. Before this branch a scry- id fell into
+          // the Pokémon lookup, failed, and could reach the VISION read:
+          // a paid transcription, through a reader that expects attacks
+          // and HP, of a card whose full text is one free call away.
+          const bd = id.startsWith("scry-")
+            ? await fetchScryBattleData(admin, id)
+            : id.startsWith("tcgdex-")
+              ? await getTcgdexBattleDataById(id)
+              : await getBattleDataById(id);
           return { row, bd };
         } catch {
           return { row, bd: null };
@@ -415,14 +423,20 @@ async function runCardLookup(
     const unread: Array<Record<string, unknown>> = [];
     for (const { row, bd } of looked) {
       if (!bd) {
-        unread.push(row);
+        // A Magic card Scryfall couldn't answer for stays unread — the
+        // vision fallback below is a Pokémon reader and would transcribe
+        // the wrong shape at the most expensive possible price.
+        if (!(row.id as string).startsWith("scry-")) unread.push(row);
         continue;
       }
       row.battle_data = bd;
+      // Magic rows are already written — fetchScryBattleData saves its own
+      // result — and the printings-sharing below is a Pokémon helper.
+      if ((row.id as string).startsWith("scry-")) continue;
       await admin.from("cards").update({ battle_data: bd }).eq("id", row.id as string);
       // The other printings of this card say the same words; filling them
       // now is what stops the next question paying to read one of them.
-      await shareTextWithPrintings(admin, row.id as string, bd);
+      await shareTextWithPrintings(admin, row.id as string, bd as CardBattleData);
     }
 
     // Then the picture, for the few the databases don't carry. Capped
@@ -489,6 +503,19 @@ async function runCardLookup(
     if (bd.weak) parts.push(`    Weakness: ${bd.weak.type} ${bd.weak.value}`);
     if (bd.resist) parts.push(`    Resistance: ${bd.resist.type} ${bd.resist.value}`);
     if (bd.retreat != null) parts.push(`    Retreat: ${bd.retreat}`);
+    // Magic rows carry Scryfall's per-format legalities — current, per
+    // card, exactly the thing the model must never answer from memory.
+    // Held to the formats people actually ask about; the map has ~20.
+    const legalities = (bd as { legalities?: Record<string, string> }).legalities;
+    if (legalities && Object.keys(legalities).length > 0) {
+      const KEY_FORMATS = ["standard", "pioneer", "modern", "legacy", "commander", "pauper"];
+      const legal = KEY_FORMATS.filter((f) => legalities[f] === "legal");
+      const banned = KEY_FORMATS.filter((f) => legalities[f] === "banned");
+      parts.push(
+        `    Legal in: ${legal.join(", ") || "none of the common formats"}` +
+          (banned.length ? ` · BANNED in: ${banned.join(", ")}` : "")
+      );
+    }
     return parts.length ? `${head}\n${parts.join("\n")}` : head;
   };
 

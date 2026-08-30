@@ -52,6 +52,9 @@ export async function POST(req: Request) {
     const body = (await req.json()) as {
       name?: string;
       kind?: string;
+      /** 'pokemon' (default) or 'mtg' — decides which game's listings the
+       *  price lookup searches. */
+      game?: string;
       setName?: string;
       year?: number;
       quantity?: number;
@@ -71,6 +74,7 @@ export async function POST(req: Request) {
       );
     }
     const kind = SEALED_KINDS.includes(body.kind as never) ? body.kind! : "other";
+    const game = body.game === "mtg" ? "mtg" : "pokemon";
     const condition = SEALED_CONDITIONS.includes(body.condition as never)
       ? body.condition!
       : "sealed";
@@ -95,26 +99,49 @@ export async function POST(req: Request) {
 
     let product = found;
     if (!product) {
-      const { data: created, error: insErr } = await admin
+      const row: Record<string, unknown> = {
+        name,
+        kind,
+        game,
+        set_name: (body.setName ?? "").trim() || null,
+        tcgplayer_id:
+          typeof body.tcgPlayerId === "string" && body.tcgPlayerId.trim()
+            ? body.tcgPlayerId.trim()
+            : null,
+        release_year:
+          Number.isInteger(body.year) && body.year! > 1995 && body.year! < 2100
+            ? body.year
+            : null,
+      };
+      let { data: created, error: insErr } = await admin
         .from("sealed_products")
-        .insert({
-          name,
-          kind,
-          set_name: (body.setName ?? "").trim() || null,
-          tcgplayer_id:
-            typeof body.tcgPlayerId === "string" && body.tcgPlayerId.trim()
-              ? body.tcgPlayerId.trim()
-              : null,
-          release_year:
-            Number.isInteger(body.year) && body.year! > 1995 && body.year! < 2100
-              ? body.year
-              : null,
-        })
+        .insert(row)
         .select("*")
         .single();
+      // game arrives with migration 077. On a database without it, a
+      // Pokémon add should not fail over a column that records what the
+      // default already says; a Magic add mispriced as Pokémon would be
+      // worse than a refusal, so that one keeps the error.
+      if (insErr && /game/.test(insErr.message) && game === "pokemon") {
+        const { game: _drop, ...withoutGame } = row;
+        ({ data: created, error: insErr } = await admin
+          .from("sealed_products")
+          .insert(withoutGame)
+          .select("*")
+          .single());
+      }
       if (insErr) {
         if (missingTable(insErr.message)) {
           return NextResponse.json({ error: NOT_SET_UP }, { status: 400 });
+        }
+        if (/game/.test(insErr.message) && game === "mtg") {
+          return NextResponse.json(
+            {
+              error:
+                "Magic sealed product needs a one-time database update — run supabase/migrations/077_sealed_games.sql.",
+            },
+            { status: 400 }
+          );
         }
         throw insErr;
       }

@@ -46,13 +46,24 @@ function kindFromName(name: string): string {
 }
 
 /** The product types worth offering for every set. Deliberately short — a
- *  list of twelve per set is noise, and these four are what people hold. */
-const COMMON_KINDS: Array<{ kind: string; suffix: string }> = [
-  { kind: "booster_box", suffix: "Booster Box" },
-  { kind: "etb", suffix: "Elite Trainer Box" },
-  { kind: "booster_bundle", suffix: "Booster Bundle" },
-  { kind: "booster_pack", suffix: "Booster Pack" },
-];
+ *  list of twelve per set is noise, and these four are what people hold.
+ *  Per game, because the games package product under different names: an
+ *  "Elite Trainer Box" for a Magic set names a product that has never
+ *  existed, and a suggestion that cannot be priced is worse than none. */
+const COMMON_KINDS: Record<"pokemon" | "mtg", Array<{ kind: string; suffix: string }>> = {
+  pokemon: [
+    { kind: "booster_box", suffix: "Booster Box" },
+    { kind: "etb", suffix: "Elite Trainer Box" },
+    { kind: "booster_bundle", suffix: "Booster Bundle" },
+    { kind: "booster_pack", suffix: "Booster Pack" },
+  ],
+  mtg: [
+    { kind: "play_booster_box", suffix: "Play Booster Box" },
+    { kind: "collector_booster_box", suffix: "Collector Booster Box" },
+    { kind: "bundle", suffix: "Bundle" },
+    { kind: "prerelease", suffix: "Prerelease Pack" },
+  ],
+};
 
 export async function GET(req: Request) {
   try {
@@ -86,24 +97,28 @@ export async function GET(req: Request) {
       existing.setName ??= s.setName ?? null;
       existing.year ??= s.year ?? null;
       existing.tcgPlayerId ??= s.tcgPlayerId;
+      existing.game ??= s.game;
     };
 
     // 1. Products already in the catalogue.
     {
       let query = supabase
         .from("sealed_products")
-        .select("name, kind, set_name, release_year, market_price, image_url")
+        // select("*") — game only exists after migration 077, and naming it
+        // would fail the whole read on a database without it.
+        .select("*")
         .limit(12);
       if (q) query = query.ilike("name", `%${q}%`);
       const { data, error } = await query;
       // A missing table just means nothing to suggest from here yet; the
       // set-derived half below still works, so this is not fatal.
       if (!error) {
-        for (const p of data ?? []) {
+        for (const p of (data ?? []) as Array<Record<string, unknown>>) {
           push({
             name: p.name as string,
             kind: (p.kind as string) ?? "other",
             kindLabel: sealedKindLabel((p.kind as string) ?? "other"),
+            game: (p.game as string | undefined) === "mtg" ? "mtg" : "pokemon",
             setName: (p.set_name as string | null) ?? null,
             year: (p.release_year as number | null) ?? null,
             source: "catalogue",
@@ -142,6 +157,8 @@ export async function GET(req: Request) {
           name: p.name,
           kind: kindFromName(p.name),
           kindLabel: sealedKindLabel(kindFromName(p.name)),
+          // The tracker is a Pokémon catalogue — everything it names is one.
+          game: "pokemon",
           setName: p.setName,
           year: null,
           source: "tracker",
@@ -167,32 +184,41 @@ export async function GET(req: Request) {
     {
       let query = supabase
         .from("cards")
-        .select("set_name, release_date")
+        // The id rides along to tell the games apart: scry- rows are Magic,
+        // and a Magic set must suggest Magic product names. The id prefix
+        // rather than cards.game, so this works on a pre-072 database.
+        .select("id, set_name, release_date")
         .not("set_name", "is", null)
         .limit(900);
       if (q) query = query.ilike("set_name", `%${q}%`);
       else query = query.order("release_date", { ascending: false });
       const { data } = await query;
 
-      const sets = new Map<string, string | null>();
+      const sets = new Map<string, { released: string | null; game: "pokemon" | "mtg" }>();
       for (const row of data ?? []) {
         const name = row.set_name as string | null;
         if (!name) continue;
-        if (!sets.has(name)) sets.set(name, (row.release_date as string | null) ?? null);
+        if (!sets.has(name)) {
+          sets.set(name, {
+            released: (row.release_date as string | null) ?? null,
+            game: ((row.id as string) ?? "").startsWith("scry-") ? "mtg" : "pokemon",
+          });
+        }
       }
       // Newest sets first: the boxes people are buying right now are the
       // ones just released, and an alphabetical list buries them.
       const ordered = [...sets.entries()].sort((a, b) =>
-        (b[1] ?? "").localeCompare(a[1] ?? "")
+        (b[1].released ?? "").localeCompare(a[1].released ?? "")
       );
 
-      for (const [setName, released] of ordered.slice(0, 14)) {
+      for (const [setName, { released, game }] of ordered.slice(0, 14)) {
         const year = Number((released ?? "").slice(0, 4));
-        for (const { kind, suffix } of COMMON_KINDS) {
+        for (const { kind, suffix } of COMMON_KINDS[game]) {
           push({
             name: `${setName} ${suffix}`,
             kind,
             kindLabel: sealedKindLabel(kind),
+            game,
             setName,
             year: Number.isFinite(year) && year > 1995 ? year : null,
             source: "suggested",

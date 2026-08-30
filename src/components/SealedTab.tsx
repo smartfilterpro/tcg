@@ -5,6 +5,7 @@ import CardZoom from "@/components/CardZoom";
 import { money } from "@/lib/money";
 import {
   SEALED_KINDS,
+  sealedKindGame,
   sealedKindLabel,
   sealedItemPrice,
   sealedTotal,
@@ -39,6 +40,9 @@ export default function SealedTab({
 
   const [name, setName] = useState("");
   const [kind, setKind] = useState<string>("booster_box");
+  /** Which game a hand-typed product belongs to — decides which listings
+   *  the price lookup searches. Suggestions carry their own. */
+  const [game, setGame] = useState<"pokemon" | "mtg">("pokemon");
   const [productSet, setProductSet] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [condition, setCondition] = useState("sealed");
@@ -114,6 +118,7 @@ export default function SealedTab({
         body: JSON.stringify({
           name: chosenName,
           kind: pick?.kind ?? kind,
+          game: pick?.game ?? game,
           setName: pick?.setName ?? productSet,
           year: pick?.year ?? undefined,
           tcgPlayerId: pick?.tcgPlayerId ?? undefined,
@@ -226,7 +231,7 @@ export default function SealedTab({
         <div className="card-panel space-y-2 p-3">
           <input
             className="input w-full text-sm"
-            placeholder="Search a set or product — e.g. Surging Sparks"
+            placeholder="Search a set or product — e.g. Surging Sparks, Bloomburrow"
             value={name}
             onChange={(e) => setName(e.target.value)}
             autoFocus
@@ -290,6 +295,7 @@ export default function SealedTab({
                     <span className="block truncate text-sm">{sug.name}</span>
                     <span className="block text-[11px] text-slate-400">
                       {sug.kindLabel}
+                      {sug.game === "mtg" ? " · Magic" : ""}
                       {sug.year ? ` · ${sug.year}` : ""}
                       {/* The three sources mean different things and the
                           difference is worth showing: one joins an existing
@@ -318,12 +324,34 @@ export default function SealedTab({
               <summary className="cursor-pointer">Not listed? Add it by hand</summary>
               <div className="mt-2 space-y-2">
                 <div className="flex flex-wrap gap-2">
+                  {/* The game decides which listings price this product —
+                      searched as "pokemon …" or "magic the gathering …" —
+                      so a hand-typed Magic box must say it's Magic. */}
+                  <select
+                    className="input w-auto text-sm"
+                    value={game}
+                    onChange={(e) => {
+                      const g = e.target.value === "mtg" ? "mtg" : "pokemon";
+                      setGame(g);
+                      // The kinds are per-game; don't leave "Elite Trainer
+                      // Box" selected on a Magic product.
+                      if (sealedKindGame(kind) !== "both" && sealedKindGame(kind) !== g) {
+                        setKind(g === "mtg" ? "play_booster_box" : "booster_box");
+                      }
+                    }}
+                  >
+                    <option value="pokemon">⚡ Pokémon</option>
+                    <option value="mtg">🪄 Magic</option>
+                  </select>
                   <select
                     className="input w-auto flex-1 text-sm"
                     value={kind}
                     onChange={(e) => setKind(e.target.value)}
                   >
-                    {SEALED_KINDS.map((k) => (
+                    {SEALED_KINDS.filter((k) => {
+                      const kg = sealedKindGame(k);
+                      return kg === "both" || kg === game;
+                    }).map((k) => (
                       <option key={k} value={k}>
                         {sealedKindLabel(k)}
                       </option>
@@ -389,6 +417,7 @@ export default function SealedTab({
                   <div className="truncate font-semibold">{item.product?.name}</div>
                   <div className="text-xs text-slate-500">
                     {sealedKindLabel(item.product?.kind ?? "other")}
+                    {item.product?.game === "mtg" ? " · Magic" : ""}
                     {item.product?.set_name ? ` · ${item.product.set_name}` : ""}
                     {item.condition !== "sealed" ? ` · ${item.condition}` : ""}
                   </div>

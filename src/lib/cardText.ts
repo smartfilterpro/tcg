@@ -74,7 +74,17 @@ const CARD_READ_SCHEMA = {
     },
     retreat: { type: ["integer", "null"] },
     weakness_type: { type: ["string", "null"] },
-    trainer_type: { type: ["string", "null"], enum: ["Supporter", "Item", "Stadium", "Tool", null] },
+    // anyOf rather than `type: ["string","null"], enum: [..., null]` — that
+    // is legal JSON Schema, but the structured-output API rejects the
+    // combination ("Enum value 'Supporter' does not match declared type"),
+    // which 400'd EVERY vision read and dropped it to the schema-less
+    // retry: one wasted round trip per card, forever.
+    trainer_type: {
+      anyOf: [
+        { type: "string", enum: ["Supporter", "Item", "Stadium", "Tool"] },
+        { type: "null" },
+      ],
+    },
   },
   required: [
     "readable", "category", "stage", "hp", "attacks", "abilities",
