@@ -426,22 +426,64 @@ export async function matchMtgCard(
   return { match: sorted[0] ?? null, candidates: sorted };
 }
 
-/** Free-text search for the picker: name words, optionally narrowed the
- *  Scryfall query-language way if the person typed set:/number themselves.
+/** A collector number read out of a picker query, when there is one.
+ *
+ *  People type numbers the way the card prints them — "489", "#489",
+ *  "489/281", "ancestor dragon 489", "fdn 489" — and a plain text search
+ *  treats every one of those as name words, which match nothing. The
+ *  number (with a leading-zeros variant, since sources disagree about
+ *  "0489") and whatever precedes it come back separately so each search
+ *  path can use them its own way. Null when the term carries no number. */
+function mtgNumberQuery(term: string): { rest: string; nums: string[] } | null {
+  const m = term.match(/^(.*?)[\s#]*(\d{1,4}[a-z]?)(?:\s*\/\s*\S+)?$/i);
+  if (!m) return null;
+  const nums = [...new Set([m[2], m[2].replace(/^0+(?=.)/, "")])];
+  return { rest: m[1].replace(/#/g, "").trim(), nums };
+}
+
+/** The Scryfall queries a picker term is worth trying, in order: number
+ *  readings first (cn: filter, plus a set-code reading when the words
+ *  before the number look like one), the raw term last — so a name that
+ *  genuinely ends in digits still finds its card. */
+function mtgSearchQueries(term: string): string[] {
+  const out: string[] = [];
+  const parsed = mtgNumberQuery(term);
+  if (parsed) {
+    for (const n of parsed.nums) {
+      if (!parsed.rest) {
+        out.push(`cn:${n}`);
+      } else {
+        out.push(`${parsed.rest} cn:${n}`);
+        if (/^[a-z0-9]{3,5}$/i.test(parsed.rest)) {
+          out.push(`set:${parsed.rest.toLowerCase()} cn:${n}`);
+        }
+      }
+    }
+  }
+  if (!out.includes(term)) out.push(term);
+  return out;
+}
+
+/** Free-text search for the picker: name words, collector numbers, or the
+ *  Scryfall query language if the person typed set:/cn: themselves.
  *  Printings, not one-per-name — the picker's job is choosing a printing. */
 export async function searchMtgCards(query: string, limit = 30): Promise<CardSummary[]> {
   const term = query.trim();
   if (!term) return [];
-  const q = encodeURIComponent(term);
-  try {
-    const listing = await scryGet(
-      `/cards/search?unique=prints&order=released&q=${q}`
-    );
-    const cards = (listing?.data as ScryCard[] | undefined) ?? [];
-    return cards.filter((c) => !c.digital).slice(0, limit).map(scryToSummary);
-  } catch {
-    return [];
+  // First reading that finds anything wins; Scryfall answers an empty
+  // search with a 404, which lands in the catch and tries the next.
+  for (const q of mtgSearchQueries(term)) {
+    try {
+      const listing = await scryGet(
+        `/cards/search?unique=prints&order=released&q=${encodeURIComponent(q)}`
+      );
+      const cards = ((listing?.data as ScryCard[] | undefined) ?? []).filter((c) => !c.digital);
+      if (cards.length > 0) return cards.slice(0, limit).map(scryToSummary);
+    } catch {
+      // No matches under this reading — try the next.
+    }
   }
+  return [];
 }
 
 /** Picker search for MTG: our own rows first (instant, and they carry the
@@ -466,6 +508,25 @@ export async function runMtgSearch(
         .order("id")
         .limit(30);
       local = ((data ?? []) as unknown as CardSummaryRow[]).map(rowToSummary);
+    }
+    // A collector number in the term matches our rows on number too — the
+    // name-prefix query above can't see "489", and rows we already hold
+    // carry the member-visible prices, so they belong ahead of Scryfall's.
+    const parsed = mtgNumberQuery(term);
+    if (parsed) {
+      let q = supabase
+        .from("cards")
+        .select(CARD_SUMMARY_COLUMNS)
+        .eq("game", "mtg")
+        .in("number", parsed.nums)
+        .limit(20);
+      const restKey = normalizeForSearch(parsed.rest);
+      if (restKey) q = q.like("name_key", `${restKey}%`);
+      const { data } = await q;
+      const have = new Set(local.map((c) => c.id));
+      for (const row of (data ?? []) as unknown as CardSummaryRow[]) {
+        if (!have.has(row.id)) local.push(rowToSummary(row));
+      }
     }
   } catch {
     // pre-072 database — Scryfall alone still answers
