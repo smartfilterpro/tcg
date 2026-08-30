@@ -36,6 +36,10 @@ interface Row {
     /** From pokemontcg.io, cached in battle_data. Null when we've never
      *  looked this card up — sparse, and treated as unknown, not as legal. */
     legal: { std?: boolean; exp?: boolean } | null;
+    /** Magic's answer to the same question, from Scryfall's per-card
+     *  legalities ("legal" / "not_legal" / "banned"). Null on Pokémon rows
+     *  and on Magic rows never warmed. */
+    mtgStd: string | null;
   } | null;
 }
 
@@ -71,7 +75,10 @@ export async function buildContext(
           // legal:battle_data->legal pulls just the legality object out of
           // the jsonb rather than the whole card's rules text, which would
           // be megabytes across a big collection.
-          "quantity, variant, price_override, card:cards(name, set_name, number, rarity, market_price, legal:battle_data->legal)"
+          // mtgStd is the Magic equivalent — one text value out of the
+          // legalities map, for the same reason: the whole map times a big
+          // collection would be real weight.
+          "quantity, variant, price_override, card:cards(name, set_name, number, rarity, market_price, legal:battle_data->legal, mtgStd:battle_data->legalities->>standard)"
         )
         .eq("user_id", userId)
         .order("created_at")
@@ -128,6 +135,15 @@ export async function buildContext(
       if (r.card.legal.std) tally.legal += 1;
       else tally.rotated += 1;
       setLegal.set(set, tally);
+    } else if (typeof r.card.mtgStd === "string") {
+      // Magic rows answer the same per-set question from Scryfall's
+      // per-card legalities. "banned" counts as not-legal here — for the
+      // set-level Standard summary that is the right reading, and the
+      // card-level truth is one lookup away.
+      const tally = setLegal.get(set) ?? { legal: 0, rotated: 0 };
+      if (r.card.mtgStd === "legal") tally.legal += 1;
+      else tally.rotated += 1;
+      setLegal.set(set, tally);
     }
     const key = `${r.card.name}|${set}`;
     const prev = byName.get(key);
@@ -182,8 +198,11 @@ export async function buildContext(
         (unknownLegality.length
           ? `No legality data on file for: ${unknownLegality.slice(0, 25).join(", ")}` +
             (unknownLegality.length > 25 ? `, and ${unknownLegality.length - 25} more` : "") +
-            ". For these, say you don't have current legality data and point them at the official list — do not guess."
-          : "")
+            ". For these, say you don't have current legality data and point them at the official list — do not guess.\n"
+          : "") +
+        "For any specific MAGIC card, search_card_database returns its current " +
+        "format legalities (Standard, Modern, Commander and more) — look the " +
+        "card up rather than answering from memory or from this set summary."
     );
   }
 
