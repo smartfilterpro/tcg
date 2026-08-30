@@ -84,6 +84,19 @@ export async function POST(req: Request) {
       ...new Map(items.map((i) => [i.card.id, summaryToRow(i.card)])).values(),
     ];
 
+    // PostgREST sends a bulk upsert as ONE column list shared by every row,
+    // filling any key a row lacks with an explicit null. summaryToRow only
+    // names `game` on Magic rows — so a MIXED batch sent the Pokémon rows
+    // as game:null and the whole save died on the not-null constraint,
+    // while single-game batches (column absent everywhere, or set
+    // everywhere) sailed through. Once any row names the column, every row
+    // must — from the id prefix, the discriminator that is always right.
+    if (cardRows.some((r) => "game" in r)) {
+      for (const r of cardRows) {
+        (r as { game?: string }).game = r.id.startsWith("scry-") ? "mtg" : "pokemon";
+      }
+    }
+
     // Never let a data-less save clobber shared enrichments: if the incoming
     // row has no image/price (typical for promos the card databases lack) but
     // the shared record already has one (a user photo, a found image, cached
