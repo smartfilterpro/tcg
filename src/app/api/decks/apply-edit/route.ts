@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser, AuthError } from "@/lib/auth";
 import { fetchAllRows } from "@/lib/fetchAll";
-import { applyChanges, validateEdit, type DeckEditChange } from "@/lib/deckEdit";
+import {
+  applyChanges,
+  validateEdit,
+  MAX_EDIT_CHANGES,
+  type DeckEditChange,
+} from "@/lib/deckEdit";
 import { categoryLookup } from "@/lib/deckEditTool";
 import { isBasicLand } from "@/lib/mtgDeckLegality";
 import type { DeckEntry } from "@/lib/deckLegality";
@@ -42,7 +47,10 @@ export async function POST(req: Request) {
     if (!deckId || changes.length === 0) {
       return NextResponse.json({ error: "Nothing to apply." }, { status: 400 });
     }
-    if (changes.length > 30) {
+    // Shared with the proposal tool, which now refuses oversized proposals
+    // before they render — this remains as the backstop for a request that
+    // didn't come through the tool at all.
+    if (changes.length > MAX_EDIT_CHANGES) {
       return NextResponse.json(
         { error: "That's too many changes at once — ask for a rebuild instead." },
         { status: 400 }
