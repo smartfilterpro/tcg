@@ -1097,6 +1097,80 @@ export async function POST(req: Request) {
               `${dropped.join(", ")}. The deck is short — rebuild to fill the gap.`;
             console.warn(`deck build (mtg): unresolvable names dropped — ${dropped.join(" | ")}`);
           }
+          // Fill the deck to size with basics rather than shipping short.
+          //
+          // The copy repair can only CUT: a mana base the model planned
+          // around ten Uncharted Havens legally holds four, and the deck
+          // arrived six cards light with a flag telling the player to fix
+          // it by hand. Basic lands are the one thing addable without
+          // inventing a card, and the deck's own colors say which ones.
+          {
+            const target = mtgFormat === "standard" ? 60 : 100;
+            const totalNow = (deck.cards ?? []).reduce((s, c) => s + c.quantity, 0);
+            if (totalNow > 0 && totalNow < target) {
+              const BASIC_FOR: Record<string, string> = {
+                W: "Plains",
+                U: "Island",
+                B: "Swamp",
+                R: "Mountain",
+                G: "Forest",
+              };
+              const weight = new Map<string, number>();
+              for (const c of deck.cards ?? []) {
+                // Existing basics are the strongest signal of the split…
+                for (const [sym, basic] of Object.entries(BASIC_FOR)) {
+                  if (c.name.trim().toLowerCase() === basic.toLowerCase()) {
+                    weight.set(sym, (weight.get(sym) ?? 0) + c.quantity * 3);
+                  }
+                }
+                // …and every card's color identity fills in the rest.
+                const bd = factsByName.get(normalizeForSearch(c.name));
+                for (const sym of bd?.color_identity ?? []) {
+                  if (BASIC_FOR[sym]) weight.set(sym, (weight.get(sym) ?? 0) + c.quantity);
+                }
+              }
+              const ranked = [...weight.entries()].sort((a, b) => b[1] - a[1]);
+              // A deck whose colors can't be read (no basics, no facts)
+              // keeps its flag instead of guessing at Islands.
+              if (ranked.length > 0) {
+                const shortfall = target - totalNow;
+                const totalW = ranked.reduce((s, [, w]) => s + w, 0);
+                const adds = new Map<string, number>();
+                let assigned = 0;
+                for (const [sym, w] of ranked) {
+                  const share = Math.floor((shortfall * w) / totalW);
+                  if (share > 0) {
+                    adds.set(sym, share);
+                    assigned += share;
+                  }
+                }
+                if (assigned < shortfall) {
+                  adds.set(ranked[0][0], (adds.get(ranked[0][0]) ?? 0) + (shortfall - assigned));
+                }
+                const noted: string[] = [];
+                for (const [sym, qty] of adds) {
+                  const basic = BASIC_FOR[sym];
+                  const row = (deck.cards ?? []).find(
+                    (c) => c.name.trim().toLowerCase() === basic.toLowerCase()
+                  );
+                  if (row) row.quantity += qty;
+                  else
+                    (deck.cards ?? []).push({
+                      name: basic,
+                      quantity: qty,
+                      category: "land",
+                      card_id: null,
+                      reason: "Basic lands topping the mana base up to the format's deck size.",
+                    });
+                  noted.push(`+${qty} ${basic}`);
+                }
+                deck.strategy =
+                  `${deck.strategy}\n\n**Mana base topped up automatically:** ` +
+                  `${noted.join(", ")} to reach ${target} cards.`;
+              }
+            }
+          }
+
           // Final numbers describe the deck that survived, with newly
           // resolved cards' identities and legalities now in the facts map.
           analysis = mtgAnalysis((deck.cards ?? []).map(toMtgEntry), mtgFormat);
