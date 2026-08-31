@@ -170,6 +170,11 @@ export default function MetaPage() {
                       {d.placements} top finishes · last {d.windowDays} days
                     </span>
                   )}
+                  {/* Every row says where it came from. The pills began as
+                      warnings on the NON-tournament sources, which left the
+                      Limitless rows — the real thing — as the only ones with
+                      no tag at all, reading as an inconsistency rather than
+                      a default. */}
                   {d.source === "curated" && (
                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">
                       curated
@@ -178,6 +183,11 @@ export default function MetaPage() {
                   {d.source === "scryfall" && (
                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">
                       community-built
+                    </span>
+                  )}
+                  {d.source === "limitless" && (
+                    <span className="rounded-full bg-green-50 px-2 py-0.5 text-[11px] text-green-700">
+                      tournament results
                     </span>
                   )}
                 </div>
