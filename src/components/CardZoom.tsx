@@ -10,7 +10,22 @@
 //
 // Tap the picture, get the picture. Tap again, or press Escape, to go back.
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+
+/** The same art, bigger, when the CDN serves one.
+ *
+ *  Callers mostly hold the thumbnail URL, and both card CDNs keep larger
+ *  renders of the same file at predictable paths. Swapping here fixes every
+ *  zoom surface at once; a guess that doesn't exist falls back to the
+ *  original via onError, so the worst case is exactly what shipped. */
+function biggerSrc(src: string): string {
+  // Scryfall: .../small/front/... → .../normal/front/... (488px wide).
+  if (src.includes("cards.scryfall.io/small/")) return src.replace("/small/", "/normal/");
+  // pokemontcg.io: .../sv1/25.png has a _hires.png sibling.
+  const m = src.match(/^(https:\/\/images\.pokemontcg\.io\/[^/]+\/[^_./]+)\.png$/);
+  if (m) return `${m[1]}_hires.png`;
+  return src;
+}
 
 export default function CardZoom({
   src,
@@ -21,6 +36,8 @@ export default function CardZoom({
   alt: string;
   onClose: () => void;
 }) {
+  const [fellBack, setFellBack] = useState(false);
+  const shown = fellBack ? src : biggerSrc(src);
   // Escape closes it. The overlay sits on top of a modal that also closes on
   // Escape, so this listener is added last and stops the event — otherwise
   // one key press would shut both and drop somebody out of the card panel
@@ -47,11 +64,16 @@ export default function CardZoom({
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={src}
+        src={shown}
         alt={alt}
-        // Sized to fit the screen, whichever way the phone is held. The
-        // container scrolls, so a pinch-zoom past the edges still works.
-        className="max-h-[92vh] max-w-full rounded-xl object-contain shadow-2xl"
+        onError={() => setFellBack(true)}
+        // A card-sized card, whatever the screen. max-* alone let a
+        // thumbnail render at its natural ~150px in the middle of a 27"
+        // monitor — so this SETS the width: the viewport's width on a
+        // phone, a readable 30rem on a desktop, and never taller than the
+        // screen (65vh of width ≈ 91vh of card height at the 5:7 aspect).
+        // The container scrolls, so pinch-zoom past the edges still works.
+        className="h-auto w-[min(92vw,30rem,65vh)] rounded-xl shadow-2xl"
       />
       <button
         className="fixed right-4 top-4 rounded-full bg-white/90 px-3 py-1.5 text-sm font-semibold text-slate-700 shadow"
