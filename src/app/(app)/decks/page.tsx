@@ -1996,7 +1996,14 @@ export default function DecksPage() {
                 <h4 className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-400">
                   {cat} ({groups[cat].reduce((s, c) => s + c.quantity, 0)})
                 </h4>
-                <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 xl:grid-cols-7">
+                {/* Sized by MINIMUM TILE, not by column count. Fixed columns
+                    made the tile whatever was left over — seven across a
+                    modal panel that also holds the strategy text came to
+                    ~85px on a desktop, unreadable next to the collection
+                    page's ~170px tiles. auto-fill keeps every tile at least
+                    8rem and lets the panel decide how many fit. */}
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-2">
+
                   {groups[cat].map((c, i) => (
                     <button
                       key={i}
