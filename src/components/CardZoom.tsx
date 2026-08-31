@@ -19,8 +19,11 @@ import { useEffect, useState } from "react";
  *  zoom surface at once; a guess that doesn't exist falls back to the
  *  original via onError, so the worst case is exactly what shipped. */
 function biggerSrc(src: string): string {
-  // Scryfall: .../small/front/... → .../normal/front/... (488px wide).
-  if (src.includes("cards.scryfall.io/small/")) return src.replace("/small/", "/normal/");
+  // Scryfall: .../small/front/... → .../large/front/... (672px wide).
+  // "normal" (488px) looked right until a HiDPI screen doubled the physical
+  // pixels behind the ~480px card and made every zoom read as soft.
+  if (src.includes("cards.scryfall.io/small/")) return src.replace("/small/", "/large/");
+  if (src.includes("cards.scryfall.io/normal/")) return src.replace("/normal/", "/large/");
   // pokemontcg.io: .../sv1/25.png has a _hires.png sibling.
   const m = src.match(/^(https:\/\/images\.pokemontcg\.io\/[^/]+\/[^_./]+)\.png$/);
   if (m) return `${m[1]}_hires.png`;
