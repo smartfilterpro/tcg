@@ -18,6 +18,7 @@ import {
   validateEdit,
   missingCopies,
   categoryFromSupertype,
+  MAX_EDIT_CHANGES,
   type DeckEditProposal,
 } from "@/lib/deckEdit";
 import type { DeckEntry } from "@/lib/deckLegality";
@@ -36,7 +37,10 @@ export const DECK_EDIT_TOOL = {
     "player owns, but a saved deck is a RECORD of a deck they like rather " +
     "than a claim to have it sleeved up, so proposing a card they don't own " +
     "yet is fine as long as you say so. A card is never unavailable because " +
-    "another of their decks lists it; decks don't reserve anything.",
+    "another of their decks lists it; decks don't reserve anything. One " +
+    "proposal carries at most 40 changed names — enough for a full overhaul; " +
+    "for a brand-new deck from scratch, point the player at the deck " +
+    "builder on the Decks page instead.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -119,6 +123,20 @@ export async function runDeckEditProposal(
   );
   if (!deckId || changes.length === 0) {
     return { forModel: "No deck id or no changes given — nothing to propose.", proposal: null };
+  }
+  // The same cap the apply route enforces, checked HERE so the model learns
+  // and trims in the same turn — the alternative was a rendered proposal
+  // whose Apply button was guaranteed to answer "too many changes".
+  if (changes.length > MAX_EDIT_CHANGES) {
+    return {
+      forModel:
+        `That is ${changes.length} changed names — more than the ${MAX_EDIT_CHANGES} one ` +
+        `proposal can carry, so it was NOT offered to the player. Trim it to the changes ` +
+        `that matter most and propose again, or — if this is really a ground-up rebuild — ` +
+        `tell the player the deck builder (Decks page → build) is the better tool and ` +
+        `offer to describe the list instead.`,
+      proposal: null,
+    };
   }
 
   const { data: deck } = await supabase

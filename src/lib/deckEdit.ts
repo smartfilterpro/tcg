@@ -25,6 +25,14 @@ import type { DeckEntry } from "@/lib/deckLegality";
 import { checkDeck, isBasicEnergy } from "@/lib/deckLegality";
 import { checkMtgDeck, isBasicLand, type MtgFormat } from "@/lib/mtgDeckLegality";
 
+/** Most changed names one proposal may carry, shared by the proposal tool
+ *  and the apply route — the ONE number both ends must agree on. The apply
+ *  route enforced 30 alone, so the tool could show the player a 30+ line
+ *  overhaul whose Apply button was guaranteed to fail. Forty fits a full
+ *  60-card rebuild (cut a dozen names, add two dozen) while still bounding
+ *  what one press of Apply can do. */
+export const MAX_EDIT_CHANGES = 40;
+
 export interface DeckEditChange {
   /** Card name, exactly as it should read in the deck. */
   name: string;
