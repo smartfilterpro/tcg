@@ -48,6 +48,76 @@ function cleanupJobs() {
   }
 }
 
+/** Trending rows the player's own words name — the "beat Dragapult" case.
+ *
+ *  An archetype's exact current list used to reach the model only through
+ *  the trending page's Build-this-deck hand-off, and only as the deck to
+ *  BUILD. A typed prompt like "make a deck that beats Dragapult" got the
+ *  archetype's name and share (dream mode) or nothing (collection mode),
+ *  and the model leaned on training-era memory for what Dragapult runs —
+ *  the staleness the meta table exists to correct.
+ *
+ *  Matching is by word, deterministic, and additive-only: no match means
+ *  no text and no cost. Words under five letters don't count ("ex",
+ *  "bolt") — archetype words start being names at about five. */
+async function metaDecksNamedInPrompt(
+  admin: ReturnType<typeof createAdminClient>,
+  game: "pokemon" | "mtg",
+  format: string,
+  prompt: string | null | undefined,
+  /** The Build-this-deck archetype, already injected as the TARGET —
+   *  repeating it here as an opponent would contradict that block. */
+  excludeArchetype: string | null
+): Promise<string | null> {
+  const text = (prompt ?? "").toLowerCase();
+  if (text.trim().length < 4) return null;
+  const promptWords = new Set(
+    text
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+  );
+  try {
+    const { data } = await admin
+      .from("meta_decks")
+      .select("archetype, share, core_cards")
+      .eq("game", game)
+      .eq("format", format)
+      .limit(30);
+    const skip = excludeArchetype ? normalizeForSearch(excludeArchetype) : null;
+    const hits: string[] = [];
+    for (const r of data ?? []) {
+      const name = (r.archetype as string) ?? "";
+      if (!name || (skip && normalizeForSearch(name) === skip)) continue;
+      const words = name
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length >= 5);
+      if (!words.some((w) => promptWords.has(w))) continue;
+      const core = (r.core_cards as Array<{ name: string; count: number }> | null) ?? [];
+      if (core.length === 0) continue;
+      hits.push(
+        `"${name}"${r.share != null ? ` (${r.share}% of top finishes)` : ""}:\n` +
+          core.map((c) => `${c.count} ${c.name}`).join("\n")
+      );
+      // Two is plenty — a prompt naming three archetypes is a conversation
+      // for the chat, not a build instruction.
+      if (hits.length >= 2) break;
+    }
+    if (hits.length === 0) return null;
+    return (
+      "DECKS THE REQUEST MENTIONS — their CURRENT lists from the app's own " +
+      "trending data. Use these, not memory, for what they run (e.g. as the " +
+      "deck to beat):\n\n" +
+      hits.join("\n\n")
+    );
+  } catch {
+    // Pre-074 database or no meta rows — the build works ungrounded.
+    return null;
+  }
+}
+
 const DECK_SCHEMA = {
   type: "object",
   properties: {
@@ -787,8 +857,20 @@ export async function POST(req: Request) {
             }
           }
 
+          // Archetypes the player's own request names — every pool mode,
+          // because "build from my cards something that beats Azusa" is
+          // exactly when the current list matters most.
+          const mtgOpponents = await metaDecksNamedInPrompt(
+            admin,
+            "mtg",
+            mtgFormat,
+            prompt,
+            targetArchetype
+          );
+
           const variableContent = [
             mtgMetaContext,
+            mtgOpponents,
             `REQUEST: ${
               prompt?.trim() ||
               (poolMode === "all"
@@ -1725,9 +1807,21 @@ export async function POST(req: Request) {
           }
         }
 
+        // Archetypes the player's own request names — every pool mode,
+        // because "build from my collection something that beats Dragapult"
+        // is exactly when the current list matters most.
+        const opponents = await metaDecksNamedInPrompt(
+          admin,
+          "pokemon",
+          "standard",
+          prompt,
+          targetArchetype
+        );
+
         // Changes on every build, so it sits outside the cached prefix.
         const variableContent = [
           metaContext,
+          opponents,
           priorDecks.length > 0
             ? `DECKS THIS PLAYER ALREADY HAS (newest first):\n${priorDecks
                 .map((d, i) => `${i + 1}. ${d}`)

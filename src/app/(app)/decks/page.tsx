@@ -1792,9 +1792,20 @@ export default function DecksPage() {
               >
                 <div className="font-bold">
                   {deck.name}
-                  {isMtgDeck(deck) && (
+                  {/* Both games wear a chip — Magic-only tagging read as
+                      Pokémon decks missing theirs, not as a default. */}
+                  {isMtgDeck(deck) ? (
                     <span className="ml-2 chip bg-purple-100 text-purple-700">
                       🪄 {deck.format === "standard" ? "Magic · Standard" : "Magic · Commander"}
+                    </span>
+                  ) : (
+                    <span className="ml-2 chip bg-amber-100 text-amber-700">
+                      ⚡ Pokémon
+                      {deck.format === "standard"
+                        ? " · Standard"
+                        : deck.format === "expanded"
+                          ? " · Expanded"
+                          : ""}
                     </span>
                   )}
                   {deck.shared && (
@@ -1829,7 +1840,14 @@ export default function DecksPage() {
                 className="card-panel p-4 text-left hover:shadow-md"
                 onClick={() => setViewing(deck)}
               >
-                <div className="font-bold">{deck.name}</div>
+                <div className="font-bold">
+                  {deck.name}
+                  {isMtgDeck(deck) ? (
+                    <span className="ml-2 chip bg-purple-100 text-purple-700">🪄 Magic</span>
+                  ) : (
+                    <span className="ml-2 chip bg-amber-100 text-amber-700">⚡ Pokémon</span>
+                  )}
+                </div>
                 <div className="text-xs text-slate-500">
                   {deck.owner_name} · {(deck.cards ?? []).reduce((s, c) => s + c.quantity, 0)} cards
                   · {new Date(deck.created_at).toLocaleDateString()}
