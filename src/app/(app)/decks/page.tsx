@@ -1100,14 +1100,19 @@ const MTG_FORMAT_NOTES: Record<string, string> = {
  *  reloading a backgrounded tab) can resume watching the same build. */
 const JOB_STORAGE_KEY = "pokedeck-build-job";
 
+/** Last loaded deck lists, module scope — same stale-while-revalidate as
+ *  the collection page: a revisited tab paints its decks instantly while
+ *  the fetch refreshes them, instead of several blank seconds. */
+let decksCache: { decks: Deck[]; family: Deck[] } | null = null;
+
 export default function DecksPage() {
   const credits = useCredits();
-  const [decks, setDecks] = useState<Deck[]>([]);
+  const [decks, setDecks] = useState<Deck[]>(decksCache?.decks ?? []);
   // The rest of the household's, read-only. Kept apart from `decks` rather
   // than flagged inside it: every action on this page — edit, delete, share,
   // the free-tier deck count — means "mine", and one merged list would have
   // to remember that in a dozen places.
-  const [familyDecks, setFamilyDecks] = useState<Deck[]>([]);
+  const [familyDecks, setFamilyDecks] = useState<Deck[]>(decksCache?.family ?? []);
   const [styleNotes, setStyleNotes] = useState("");
   const [styleSaved, setStyleSaved] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -1247,6 +1252,7 @@ export default function DecksPage() {
         if (!ok) throw new Error(j.error || "load failed");
         setDecks(j.decks ?? []);
         setFamilyDecks(j.family ?? []);
+        decksCache = { decks: j.decks ?? [], family: j.family ?? [] };
       })
       .catch((e) => {
         const detail = e instanceof Error ? e.message : "load failed";

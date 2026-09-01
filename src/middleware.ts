@@ -109,23 +109,40 @@ export async function middleware(request: NextRequest) {
   // query error) skip the gate gracefully.
   // "/" is public for strangers but NOT TOS-exempt: for a signed-in account
   // it renders the collection, which the terms gate must still cover.
-  if (user && !TOS_EXEMPT_PATHS.some((p) => pathname.startsWith(p))) {
+  //
+  // Two performance carve-outs, neither weakening the gate:
+  //  - /api/* skips this entirely: requireUser inside every route enforces
+  //    the same 403 itself (its comment has said so all along), so this
+  //    query was pure duplication on the app's hottest path — every fetch
+  //    a page makes was paying an extra database round trip here.
+  //  - Pages memo the answer in a cookie keyed to the USER ID, so the
+  //    query runs about once per sign-in rather than once per navigation.
+  //    Keyed to the id because a shared browser can hold a different next
+  //    account; acceptance is never revoked in-app, so a memo can't go
+  //    stale in the direction that matters.
+  const TOS_COOKIE = "td_tos_ok";
+  if (
+    user &&
+    !pathname.startsWith("/api/") &&
+    !TOS_EXEMPT_PATHS.some((p) => pathname.startsWith(p)) &&
+    request.cookies.get(TOS_COOKIE)?.value !== user.id
+  ) {
     const { data: prof, error } = await supabase
       .from("profiles")
       .select("tos_accepted_at")
       .eq("id", user.id)
       .maybeSingle();
     if (!error && prof && prof.tos_accepted_at == null) {
-      if (pathname.startsWith("/api/")) {
-        return NextResponse.json(
-          { error: "Please accept the Terms of Service to continue." },
-          { status: 403 }
-        );
-      }
       const url = request.nextUrl.clone();
       url.pathname = "/accept-terms";
       return NextResponse.redirect(url);
     }
+    response.cookies.set(TOS_COOKIE, user.id, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    });
   }
 
   return response;

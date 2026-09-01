@@ -6,7 +6,16 @@
  *  `build` must return a FRESH query each call (builders are single-use),
  *  and that query MUST have a total order — an ordering with ties isn't
  *  stable between requests, so tied rows can repeat on one page and vanish
- *  from another. Add `.order("id")` after the sort you actually want. */
+ *  from another. Add `.order("id")` after the sort you actually want.
+ *
+ *  Pages after the first are fetched a few at a time IN PARALLEL. The
+ *  sequential loop made a 4,000-row collection cost four full round trips
+ *  end to end — most of the "seconds to see my cards" a big collection
+ *  paid. The first page still goes alone (most reads fit in it and pay
+ *  nothing extra); past that, a batch costs one round trip instead of
+ *  three, at worst over-asking one empty page beyond the end. Results are
+ *  appended in page order, so the total order the caller established is
+ *  preserved exactly as before. */
 export async function fetchAllRows<T>(
   build: () => {
     range: (
@@ -17,12 +26,27 @@ export async function fetchAllRows<T>(
   maxRows = 20000
 ): Promise<{ data: T[]; error: { message: string } | null }> {
   const PAGE = 1000;
-  const all: T[] = [];
-  for (let from = 0; from < maxRows; from += PAGE) {
-    const { data, error } = await build().range(from, from + PAGE - 1);
-    if (error) return { data: all, error };
-    all.push(...(data ?? []));
-    if (!data || data.length < PAGE) break;
+  const BATCH = 3;
+
+  const first = await build().range(0, PAGE - 1);
+  if (first.error) return { data: [], error: first.error };
+  const all: T[] = [...(first.data ?? [])];
+  if (!first.data || first.data.length < PAGE) return { data: all, error: null };
+
+  for (let from = PAGE; from < maxRows; ) {
+    const starts: number[] = [];
+    while (starts.length < BATCH && from < maxRows) {
+      starts.push(from);
+      from += PAGE;
+    }
+    const results = await Promise.all(starts.map((s) => build().range(s, s + PAGE - 1)));
+    let done = false;
+    for (const r of results) {
+      if (r.error) return { data: all, error: r.error };
+      all.push(...(r.data ?? []));
+      if (!r.data || r.data.length < PAGE) done = true;
+    }
+    if (done) break;
   }
   return { data: all, error: null };
 }

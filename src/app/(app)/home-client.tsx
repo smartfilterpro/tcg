@@ -28,6 +28,15 @@ import {
 
 type SortKey = "newest" | "name" | "price" | "set";
 
+/** The last loaded collection, held at module scope so it survives
+ *  client-side navigation. Leaving the tab and coming back re-mounted this
+ *  page and re-fetched everything from a spinner — several seconds on a
+ *  big collection — for rows the browser was holding moments ago. Cached
+ *  rows paint instantly; the fetch still runs and replaces them, so what's
+ *  shown is at worst one visit stale for the second it takes to refresh.
+ *  Own collection only — a family member's binder stays fetch-on-view. */
+let collectionCache: CollectionItem[] | null = null;
+
 export default function CollectionPage({
   isAdmin = false,
 }: {
@@ -50,7 +59,7 @@ export default function CollectionPage({
   // which was a promise a free account couldn't keep — at exactly the moment
   // somebody cancelling most wants to take their cards with them. "You can
   // leave with your data" is worth more as a promise than as an upsell.
-  const [items, setItems] = useState<CollectionItem[] | null>(null);
+  const [items, setItems] = useState<CollectionItem[] | null>(collectionCache);
   const [error, setError] = useState<string | null>(null);
   // Whose cards are on screen. Null means yours.
   //
@@ -213,6 +222,7 @@ export default function CollectionPage({
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
       setItems(json.items);
+      if (!member) collectionCache = json.items;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load collection");
     }
@@ -240,7 +250,9 @@ export default function CollectionPage({
   }, []);
 
   useEffect(() => {
-    setItems(null);
+    // Back on your own binder, the cache paints while the refresh runs;
+    // a member's binder starts from the spinner as before.
+    setItems(member ? null : collectionCache);
     setSelected(null);
     setError(null);
     load();
