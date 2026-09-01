@@ -2345,6 +2345,11 @@ export async function POST(req: Request) {
           // Owner lookup is a bonus — never fail the build over it.
         }
 
+        // Stamped like the Magic path stamps game/format: the save carries
+        // it through, and the deck list's chip can then say which format
+        // this deck was built for instead of a bare "Pokémon".
+        if (fmt) (deck as { format?: string }).format = fmt;
+
         jobs.set(jobId, { userId: user.id, status: "done", deck, created: Date.now() });
       } catch (err) {
         if (buildAbort.signal.aborted) {
