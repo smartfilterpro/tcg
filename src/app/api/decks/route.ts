@@ -100,10 +100,17 @@ export async function POST(req: Request) {
       format?: string;
     };
     const deckGame = body.game === "mtg" ? "mtg" : null;
+    // Each game's own format names, and nothing else. Pokémon formats used
+    // to be dropped here entirely, which is why every Pokémon deck's chip
+    // read bare "Pokémon" while Magic's said "Magic · Standard".
     const deckFormat =
-      deckGame === "mtg" && (body.format === "commander" || body.format === "standard")
-        ? body.format
-        : null;
+      deckGame === "mtg"
+        ? body.format === "commander" || body.format === "standard"
+          ? body.format
+          : null
+        : body.format === "standard" || body.format === "expanded"
+          ? body.format
+          : null;
     if (!body.name?.trim() || !Array.isArray(body.cards) || body.cards.length === 0) {
       return NextResponse.json({ error: "Name and cards are required" }, { status: 400 });
     }

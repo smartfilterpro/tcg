@@ -1429,7 +1429,11 @@ export default function DecksPage() {
         strategy: built.strategy,
         cards: built.cards,
         suggestions: built.missing_suggestions ?? [],
-        ...(isMtgDeck(built) ? { game: "mtg", format: built.format ?? "commander" } : {}),
+        ...(isMtgDeck(built)
+          ? { game: "mtg", format: built.format ?? "commander" }
+          : built.format
+            ? { format: built.format }
+            : {}),
       }),
     });
     const json = await res.json();

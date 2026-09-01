@@ -616,6 +616,18 @@ async function runChat(opts: {
   // Has this reply looked anything up yet? The answer decides how hard the
   // next round thinks — see chatEffort.
   let usedTools = false;
+  // Text written BEFORE a tool call, per round. It streams to the screen —
+  // the player watches it being written — and taking only the LAST round's
+  // text as the answer threw it away, so a reply would visibly "switch"
+  // from a real answer to whatever short note followed the tool call.
+  // What was watched is what gets kept.
+  const narration: string[] = [];
+  const onPartialFull = onPartial
+    ? (soFar: string) => {
+        const prefix = narration.join("\n\n");
+        onPartial(prefix ? (soFar ? `${prefix}\n\n${soFar}` : prefix) : soFar);
+      }
+    : undefined;
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     // A stop that landed while a tool was running (a lookup, a vision read)
     // has nothing to abort mid-flight — it is honoured here instead, before
@@ -653,11 +665,13 @@ async function runChat(opts: {
         messages,
       },
       (r) => logAiUsage(supabase, userId, "chat", MODEL, r.usage, effort),
-      onPartial,
+      onPartialFull,
       { signal }
     );
     if (response.stop_reason !== "tool_use") break;
     usedTools = true;
+    const said = answerText(response);
+    if (said) narration.push(said);
 
     messages.push({ role: "assistant", content: response.content });
     const results: Anthropic.ToolResultBlockParam[] = [];
@@ -693,7 +707,8 @@ async function runChat(opts: {
   const refused = response.stop_reason === "refusal";
   const answer = refused
     ? OFF_TOPIC_REPLY
-    : answerText(response) || noAnswerReply(response, "the assistant chat");
+    : [...narration, answerText(response)].filter(Boolean).join("\n\n") ||
+      noAnswerReply(response, "the assistant chat");
 
   await save("assistant", answer, refused, pendingEdit ? { deckEdit: pendingEdit } : null);
   return { answer, refused, pendingEdit };
