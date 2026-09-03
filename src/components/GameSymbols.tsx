@@ -51,13 +51,15 @@ function manaGlyph(sym: string, fg: string, bg: string): ReactNode | null {
     case "W":
       return (
         <>
-          <circle cx="12" cy="12" r="4.4" fill={fg} />
-          <path
-            stroke={fg}
-            strokeWidth="2"
-            strokeLinecap="round"
-            d="M12 2.2v3.2M12 18.6v3.2M2.2 12h3.2M18.6 12h3.2M5 5l2.3 2.3M16.7 16.7 19 19M19 5l-2.3 2.3M7.3 16.7 5 19"
-          />
+          <circle cx="12" cy="12" r="3.7" fill={fg} />
+          {Array.from({ length: 8 }).map((_, i) => (
+            <path
+              key={i}
+              fill={fg}
+              transform={`rotate(${i * 45} 12 12)`}
+              d="M12 1.4c1 2 1 3.9 0 5.8-1-1.9-1-3.8 0-5.8z"
+            />
+          ))}
         </>
       );
     case "U":
@@ -67,11 +69,12 @@ function manaGlyph(sym: string, fg: string, bg: string): ReactNode | null {
         <>
           <path
             fill={fg}
-            d="M12 3a7.2 7.2 0 0 0-7.2 7.2c0 2.6 1.4 4.5 3.1 5.6V19a2 2 0 0 0 2 2h4.2a2 2 0 0 0 2-2v-3.2c1.7-1.1 3.1-3 3.1-5.6A7.2 7.2 0 0 0 12 3z"
+            d="M12 2.4c-4.3 0-7.7 3.1-7.7 7.1 0 2.5 1.3 4.5 3.1 5.7l.3 3.3c.1 1 .9 1.8 2 1.8h4.6c1.1 0 1.9-.8 2-1.8l.3-3.3c1.8-1.2 3.1-3.2 3.1-5.7 0-4-3.4-7.1-7.7-7.1z"
           />
-          <circle cx="9.3" cy="10.7" r="1.7" fill={bg} />
-          <circle cx="14.7" cy="10.7" r="1.7" fill={bg} />
-          <path stroke={bg} strokeWidth="1.2" d="M10.6 18.4v2M13.4 18.4v2" />
+          <ellipse cx="9.1" cy="10.3" rx="1.9" ry="2.3" fill={bg} />
+          <ellipse cx="14.9" cy="10.3" rx="1.9" ry="2.3" fill={bg} />
+          <path fill={bg} d="M12 12.6l-1.2 2.4h2.4z" />
+          <path stroke={bg} strokeWidth="1.1" d="M9.8 17.4v2.6M12 17.4v2.6M14.2 17.4v2.6" />
         </>
       );
     case "R":
@@ -83,10 +86,16 @@ function manaGlyph(sym: string, fg: string, bg: string): ReactNode | null {
       );
     case "G":
       return (
-        <>
-          <path fill={fg} d="M12 2.2C8.3 5.4 5.6 8.4 5.6 11.6a6.4 6.4 0 0 0 12.8 0c0-3.2-2.7-6.2-6.4-9.4z" />
-          <path stroke={fg} strokeWidth="2" strokeLinecap="round" d="M12 12v9.4" />
-        </>
+        <g fill={fg}>
+          <circle cx="12" cy="7.2" r="3.7" />
+          <circle cx="8.1" cy="10" r="3.3" />
+          <circle cx="15.9" cy="10" r="3.3" />
+          <circle cx="9" cy="13.3" r="3.1" />
+          <circle cx="15" cy="13.3" r="3.1" />
+          <circle cx="12" cy="11.5" r="3.4" />
+          <path d="M11 14h2v6.2h-2z" />
+          <path d="M8.2 21.4c1.1-1 2.4-1.5 3.8-1.5s2.7.5 3.8 1.5z" />
+        </g>
       );
     case "C":
       return <path fill={fg} d="M12 3l6.8 9L12 21 5.2 12z" />;
@@ -202,11 +211,14 @@ function energyGlyph(type: string, fg: string, bg: string): ReactNode {
     case "fighting":
       return (
         <>
-          <path
-            fill={fg}
-            d="M5.5 12.5a6.5 6.5 0 0 1 13 0v3.2a4.3 4.3 0 0 1-4.3 4.3H9.8a4.3 4.3 0 0 1-4.3-4.3z"
-          />
-          <path stroke={bg} strokeWidth="1.4" fill="none" d="M10 7.5v6M14 7.5v6" />
+          <g fill={fg}>
+            <rect x="4.6" y="5" width="3.1" height="8" rx="1.55" />
+            <rect x="8.1" y="3.8" width="3.1" height="9.2" rx="1.55" />
+            <rect x="11.6" y="3.8" width="3.1" height="9.2" rx="1.55" />
+            <rect x="15.1" y="5" width="3.1" height="8" rx="1.55" />
+            <path d="M4.6 11h13.6v4.2c0 3.1-2.5 5.6-5.6 5.6h-2.4c-3.1 0-5.6-2.5-5.6-5.6z" />
+          </g>
+          <path stroke={bg} strokeWidth="1.2" d="M8.1 11.2v3M11.6 11.2v3M15.1 11.2v3" />
         </>
       );
     case "darkness":
@@ -214,12 +226,30 @@ function energyGlyph(type: string, fg: string, bg: string): ReactNode {
     case "metal":
       return (
         <>
-          <path fill={fg} d="M12 2.8 20 7.4v9.2L12 21.2 4 16.6V7.4z" />
-          <circle cx="12" cy="12" r="3.2" fill={bg} />
+          <path fill={fg} d="M12 2.6 20.2 7.3v9.4L12 21.4 3.8 16.7V7.3z" />
+          <path fill={bg} d="M12 6.6l4.7 2.7v5.4L12 17.4l-4.7-2.7V9.3z" />
         </>
       );
     case "fairy":
-      return <path fill={fg} d="M12 2.6l2.3 7 7 2.4-7 2.4-2.3 7-2.3-7-7-2.4 7-2.4z" />;
+      return (
+        <>
+          <path
+            stroke={fg}
+            fill="none"
+            strokeWidth="2.6"
+            strokeLinecap="round"
+            d="M12 3.5a8.5 8.5 0 1 1-8.5 8.5"
+          />
+          <path
+            stroke={fg}
+            fill="none"
+            strokeWidth="2.6"
+            strokeLinecap="round"
+            d="M12 7.5a4.5 4.5 0 1 1-4.5 4.5"
+          />
+          <circle cx="12" cy="12" r="1.6" fill={fg} />
+        </>
+      );
     case "dragon":
       return <path fill={fg} d="M12 2.8 19 9l-7 12.2L5 9z" />;
     case "colorless":
