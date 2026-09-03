@@ -28,6 +28,7 @@
 
 import { Fragment, type ReactNode } from "react";
 import { isTrustedShopLink } from "@/lib/buyLink";
+import { withManaSymbols } from "@/components/GameSymbols";
 
 /* ------------------------------------------------------------------ inline */
 
@@ -52,7 +53,10 @@ function inlineMatcher(): RegExp {
   );
 }
 
-/** Inline spans of one line of markdown. */
+/** Inline spans of one line of markdown. Plain text runs pass through the
+ *  mana renderer, so a chat answer quoting "{2}{U} · Instant" shows the
+ *  symbols the card shows — everywhere Markdown renders: chat, coach,
+ *  deck strategies, reviews. */
 export function inlineNodes(src: string, key: string): ReactNode[] {
   const out: ReactNode[] = [];
   const re = inlineMatcher();
@@ -60,7 +64,7 @@ export function inlineNodes(src: string, key: string): ReactNode[] {
   let n = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(src)) !== null) {
-    if (m.index > last) out.push(src.slice(last, m.index));
+    if (m.index > last) out.push(...withManaSymbols(src.slice(last, m.index), `${key}-x${n++}`));
     const k = `${key}-${n++}`;
     if (m[2] != null) {
       out.push(
@@ -100,7 +104,7 @@ export function inlineNodes(src: string, key: string): ReactNode[] {
     }
     last = m.index + m[0].length;
   }
-  if (last < src.length) out.push(src.slice(last));
+  if (last < src.length) out.push(...withManaSymbols(src.slice(last), `${key}-tail`));
   return out;
 }
 
