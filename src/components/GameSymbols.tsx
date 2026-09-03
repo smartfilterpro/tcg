@@ -43,17 +43,76 @@ function manaLook(sym: string): { bg: string; fg: string; label: string; name: s
   return null;
 }
 
+/** The five colors' printed glyphs — sun, droplet, skull, flame, tree —
+ *  plus colorless's diamond. Generic costs stay numerals, exactly as the
+ *  cards print them: {4}{G} is a numeral beside a tree. */
+function manaGlyph(sym: string, fg: string, bg: string): ReactNode | null {
+  switch (sym) {
+    case "W":
+      return (
+        <>
+          <circle cx="12" cy="12" r="4.4" fill={fg} />
+          <path
+            stroke={fg}
+            strokeWidth="2"
+            strokeLinecap="round"
+            d="M12 2.2v3.2M12 18.6v3.2M2.2 12h3.2M18.6 12h3.2M5 5l2.3 2.3M16.7 16.7 19 19M19 5l-2.3 2.3M7.3 16.7 5 19"
+          />
+        </>
+      );
+    case "U":
+      return <path fill={fg} d="M12 2.5C8.2 8 6 11.4 6 14.4a6 6 0 0 0 12 0c0-3-2.2-6.4-6-11.9z" />;
+    case "B":
+      return (
+        <>
+          <path
+            fill={fg}
+            d="M12 3a7.2 7.2 0 0 0-7.2 7.2c0 2.6 1.4 4.5 3.1 5.6V19a2 2 0 0 0 2 2h4.2a2 2 0 0 0 2-2v-3.2c1.7-1.1 3.1-3 3.1-5.6A7.2 7.2 0 0 0 12 3z"
+          />
+          <circle cx="9.3" cy="10.7" r="1.7" fill={bg} />
+          <circle cx="14.7" cy="10.7" r="1.7" fill={bg} />
+          <path stroke={bg} strokeWidth="1.2" d="M10.6 18.4v2M13.4 18.4v2" />
+        </>
+      );
+    case "R":
+      return (
+        <path
+          fill={fg}
+          d="M12 2c3 4.2 6 6.3 6 11a6 6 0 0 1-12 0c0-2 .7-3.6 2-5.1-.2 1.9.6 2.9 1.7 3.2C9.2 8.2 10.2 5 12 2z"
+        />
+      );
+    case "G":
+      return (
+        <>
+          <path fill={fg} d="M12 2.2C8.3 5.4 5.6 8.4 5.6 11.6a6.4 6.4 0 0 0 12.8 0c0-3.2-2.7-6.2-6.4-9.4z" />
+          <path stroke={fg} strokeWidth="2" strokeLinecap="round" d="M12 12v9.4" />
+        </>
+      );
+    case "C":
+      return <path fill={fg} d="M12 3l6.8 9L12 21 5.2 12z" />;
+    default:
+      return null;
+  }
+}
+
 function ManaChip({ sym }: { sym: string }) {
   const look = manaLook(sym);
   if (!look) return <>{`{${sym}}`}</>;
+  const glyph = manaGlyph(sym.toUpperCase(), look.fg, look.bg);
   return (
     <span
       title={look.name}
       aria-label={look.name}
-      className="mx-px inline-flex h-[1.1em] min-w-[1.1em] shrink-0 items-center justify-center rounded-full px-[0.1em] align-[-0.15em] text-[0.72em] font-bold leading-none shadow-[inset_0_-1px_1px_rgba(0,0,0,0.18)]"
+      className="mx-px inline-flex h-[1.1em] min-w-[1.1em] shrink-0 items-center justify-center overflow-hidden rounded-full px-[0.1em] align-[-0.15em] text-[0.72em] font-bold leading-none shadow-[inset_0_-1px_1px_rgba(0,0,0,0.18)]"
       style={{ background: look.bg, color: look.fg }}
     >
-      {look.label}
+      {glyph ? (
+        <svg viewBox="0 0 24 24" className="h-[1.18em] w-[1.18em]" aria-hidden="true">
+          {glyph}
+        </svg>
+      ) : (
+        look.label
+      )}
     </span>
   );
 }
