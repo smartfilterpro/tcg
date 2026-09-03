@@ -25,6 +25,10 @@ const PUBLIC_PATHS = [
   // The bulk-scan feeder rig posts photos with a per-job device key, no
   // session — the route itself refuses anything without a matching key.
   "/api/bulk/photo",
+  // Phone-camera client for the same bulk-scan contract — same auth model
+  // as the rig (device key only, checked by /api/bulk/photo itself), so it
+  // stays out of the session-gated app surface for the same reason.
+  "/bulk/capture",
   // Family invitations are answered by people who may not have an account
   // yet — that is the entire point of the change. The page itself resolves
   // the token through a security-definer function and shows nothing for a
