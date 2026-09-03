@@ -97,6 +97,18 @@ const STARTERS = [
   "Is anything I own worth grading?",
 ];
 
+/** Hand DeckAI a question from anywhere in the app.
+ *
+ *  The card sheet's quick-ask chips use this: the chat panel opens and the
+ *  question — with the card's identity baked into the text, so the model
+ *  looks up the right printing — sends as if typed. An event rather than
+ *  context/props because the chat lives in the layout and the askers live
+ *  many trees away; one dispatch beats threading a callback through all of
+ *  them. */
+export function askDeckAI(question: string): void {
+  window.dispatchEvent(new CustomEvent("deckai:ask", { detail: { question } }));
+}
+
 export default function TrainerChat() {
   const credits = useCredits();
   const [open, setOpen] = useState(false);
@@ -170,6 +182,22 @@ export default function TrainerChat() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Questions handed over from elsewhere in the app (see askDeckAI). If a
+  // reply is already being written, the question waits in the box rather
+  // than interleaving two answers.
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const q = (e as CustomEvent<{ question?: string }>).detail?.question?.trim();
+      if (!q) return;
+      setOpen(true);
+      if (busy) setDraft(q);
+      else void send(q);
+    };
+    window.addEventListener("deckai:ask", onAsk);
+    return () => window.removeEventListener("deckai:ask", onAsk);
+    // send closes over current state; re-binding per render keeps it fresh.
+  });
 
   async function send(text: string) {
     const question = text.trim();
@@ -267,7 +295,10 @@ export default function TrainerChat() {
           setOpen(!open);
           setTimeout(() => inputRef.current?.focus(), 80);
         }}
-        className={`fixed bottom-4 right-4 z-40 flex h-[52px] items-center gap-2.5 rounded-full px-4 text-brand-canvas shadow-lg transition-transform hover:scale-105 sm:bottom-6 sm:right-6 ${
+        // z-[55]: above the card sheets (z-50), below the full-screen card
+        // zoom (z-60) — the quick-ask chips live INSIDE those sheets, and a
+        // chat that opened underneath one answered into the void.
+        className={`fixed bottom-4 right-4 z-[55] flex h-[52px] items-center gap-2.5 rounded-full px-4 text-brand-canvas shadow-lg transition-transform hover:scale-105 sm:bottom-6 sm:right-6 ${
           open ? "bg-brand-ink2" : "bg-brand-ink"
         }`}
       >
@@ -286,7 +317,7 @@ export default function TrainerChat() {
           on a 27" monitor makes it four screens of scrolling. */}
       {open && (
         <div
-          className="fixed inset-x-0 bottom-0 z-40 flex max-h-[86vh] flex-col rounded-t-[20px] border border-brand-line bg-brand-canvas shadow-2xl sm:inset-x-auto sm:bottom-24 sm:right-6 sm:max-h-[min(720px,80vh)] sm:w-[min(32rem,calc(100vw-3rem))] sm:rounded-[20px] lg:max-h-[min(820px,82vh)] lg:w-[38rem]"
+          className="fixed inset-x-0 bottom-0 z-[55] flex max-h-[86vh] flex-col rounded-t-[20px] border border-brand-line bg-brand-canvas shadow-2xl sm:inset-x-auto sm:bottom-24 sm:right-6 sm:max-h-[min(720px,80vh)] sm:w-[min(32rem,calc(100vw-3rem))] sm:rounded-[20px] lg:max-h-[min(820px,82vh)] lg:w-[38rem]"
           role="dialog"
           aria-label={`${AI_NAME} chat`}
         >

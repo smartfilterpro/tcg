@@ -5,6 +5,8 @@ import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
 import CardText, { useCardText } from "@/components/CardText";
 import CardZoom from "@/components/CardZoom";
+import { askDeckAI } from "@/components/TrainerChat";
+import { AI_NAME } from "@/lib/branding";
 import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
 import PriceHistory from "@/components/PriceHistory";
 import { artSrc } from "@/lib/art";
@@ -1267,6 +1269,43 @@ export default function CollectionPage({
                 onRetry={cardText.retry}
                 missingNote="No printed text on file for this card yet — it fills in automatically as the card databases are read."
               />
+            </div>
+
+            {/* The card, as a question. The printed text above says WHAT the
+                card does; these hand the card to DeckAI for the questions
+                text can't answer — how it plays, what a term means, whether
+                it belongs in one of your decks. The card's identity rides in
+                the question so the chat looks up this exact printing. */}
+            <div className="mt-3">
+              <div className="mb-1.5 text-xs font-semibold text-slate-500">
+                Ask {AI_NAME} about this card
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {(() => {
+                  const who = `${selected.card.name} (${selected.card.set_name ?? "unknown set"} #${selected.card.number ?? "?"})`;
+                  const asks: Array<[string, string]> = [
+                    ["How do I play it?", `How do I play ${who} well? Walk me through when and why.`],
+                    [
+                      "Explain it simply",
+                      `Explain what ${who} does in simple terms — assume I'm still learning the game.`,
+                    ],
+                    [
+                      "Fit my decks?",
+                      `Would ${who} improve any of my saved decks or fit a strategy I could build?`,
+                    ],
+                  ];
+                  return asks.map(([label, q]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:border-brand-accent hover:text-brand-accent"
+                      onClick={() => askDeckAI(q)}
+                    >
+                      💬 {label}
+                    </button>
+                  ));
+                })()}
+              </div>
             </div>
 
             <PriceHistory cardId={selected.card.id} />
