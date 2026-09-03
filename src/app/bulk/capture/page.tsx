@@ -134,9 +134,14 @@ export default function BulkCapturePage() {
         });
         if (res.status === 200) {
           const body = await res.json();
-          if (body.seq !== seq) {
+          // body.ordinal echoes the position WITHIN this pass (what we
+          // sent) — that's the drift check. body.seq is deliberately
+          // something else on pass 2: the paired PASS-1 row (N+1-ordinal),
+          // by design, per the contract. Comparing seq here would false-
+          // positive-halt on almost every pass-2 upload.
+          if (body.ordinal !== seq) {
             throw new HaltError(
-              `sent seq=${seq} but server echoed seq=${body.seq} — pairing is drifting, stop and check the job`
+              `sent seq=${seq} but server assigned ordinal=${body.ordinal} within this pass — pairing is drifting, stop and check the job`
             );
           }
           return body;
