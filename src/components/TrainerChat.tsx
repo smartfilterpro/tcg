@@ -125,6 +125,18 @@ export default function TrainerChat() {
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // The composer grows with what's typed. A fixed one-line box scrolled
+  // internally, so anything past a dozen words meant editing through a
+  // letterbox. Height follows content up to the existing max-h cap (7rem),
+  // then scrolls; keyed off draft so programmatic fills (a quick-ask chip
+  // parked while busy, a failed send restoring the question) resize too.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 112)}px`;
+  }, [draft, open]);
+
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/assistant");
@@ -452,7 +464,7 @@ export default function TrainerChat() {
               ref={inputRef}
               rows={1}
               maxLength={2000}
-              className="max-h-28 min-h-[38px] flex-1 resize-none rounded-[14px] border border-brand-line-strong bg-white px-3 py-2 text-[13.5px] outline-none focus:border-brand-accent"
+              className="max-h-28 min-h-[38px] flex-1 resize-none overflow-y-auto rounded-[14px] border border-brand-line-strong bg-white px-3 py-2 text-[13.5px] outline-none focus:border-brand-accent"
               placeholder={`Ask about Pokémon…`}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
