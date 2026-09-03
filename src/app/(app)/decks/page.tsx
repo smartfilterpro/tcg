@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
+import { askDeckAI } from "@/components/TrainerChat";
 import { artSrc } from "@/lib/art";
 import { matchesSearch } from "@/lib/text";
 import type { CollectionItem, Deck, DeckCardEntry, DeckSuggestion } from "@/lib/types";
@@ -2136,6 +2137,32 @@ export default function DecksPage() {
 
           {/* Shared with the collection's card panel — see components/CardText. */}
           <CardText detail={d ?? null} loading={readingBusy} />
+
+          {/* Same quick-asks as the collection sheet: reading a card in a
+              deck is exactly when "how do I actually play this" comes up. */}
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {(() => {
+              const who = `${reading.name}${d?.setName ? ` (${d.setName}${d.number ? ` #${d.number}` : ""})` : ""}`;
+              const asks: Array<[string, string]> = [
+                ["💬 How do I play it?", `How do I play ${who} well? Walk me through when and why.`],
+                [
+                  "💬 Explain it simply",
+                  `Explain what ${who} does in simple terms — assume I'm still learning the game.`,
+                ],
+                ["💬 Why is it in this deck?", `In my deck this card sits in, what job does ${who} do and when should I use it?`],
+              ];
+              return asks.map(([label, q]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:border-brand-accent hover:text-brand-accent"
+                  onClick={() => askDeckAI(q)}
+                >
+                  {label}
+                </button>
+              ));
+            })()}
+          </div>
         </div>
         {zoomed && (
           <CardZoom src={zoomed} alt={reading.name} onClose={() => setZoomed(null)} />
