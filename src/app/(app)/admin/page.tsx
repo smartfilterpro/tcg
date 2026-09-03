@@ -2678,6 +2678,14 @@ function PriceSyncPanel() {
 }
 
 
+/** The link a phone can open directly against /bulk/capture — job, key and
+ *  pass pre-filled so there's nothing to type on the device itself. */
+function bulkCaptureLink(jobId: string, key: string, pass: 1 | 2): string {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const params = new URLSearchParams({ job: jobId, key, pass: String(pass) });
+  return `${origin}/bulk/capture?${params.toString()}`;
+}
+
 /** Fold duplicate card rows — the same card held under two ids because two
  *  sources spelled its number differently ("#050" vs "#50"). Dry run first,
  *  always: this rewrites what people own. */
@@ -2858,6 +2866,15 @@ function BulkScanPanel() {
               &quot;x-bulk-key: {newKey.key.slice(0, 8)}…&quot; -F job={newKey.id} -F pass=1 -F
               photo=@card.jpg
             </div>
+            <div className="mt-2 text-brand-ink3">
+              Phone capture link — open on the phone, or turn into a QR code:
+            </div>
+            <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 1)}</div>
+            <div className="mt-1.5 text-brand-ink4">
+              Pass 2 (same job/key, for after flipping the pile — save this now, the key won&apos;t be
+              shown again once you leave this page):
+            </div>
+            <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 2)}</div>
           </div>
         )}
 
