@@ -43,17 +43,85 @@ function manaLook(sym: string): { bg: string; fg: string; label: string; name: s
   return null;
 }
 
+/** The five colors' printed glyphs — sun, droplet, skull, flame, tree —
+ *  plus colorless's diamond. Generic costs stay numerals, exactly as the
+ *  cards print them: {4}{G} is a numeral beside a tree. */
+function manaGlyph(sym: string, fg: string, bg: string): ReactNode | null {
+  switch (sym) {
+    case "W":
+      return (
+        <>
+          <circle cx="12" cy="12" r="3.7" fill={fg} />
+          {Array.from({ length: 8 }).map((_, i) => (
+            <path
+              key={i}
+              fill={fg}
+              transform={`rotate(${i * 45} 12 12)`}
+              d="M12 1.4c1 2 1 3.9 0 5.8-1-1.9-1-3.8 0-5.8z"
+            />
+          ))}
+        </>
+      );
+    case "U":
+      return <path fill={fg} d="M12 2.5C8.2 8 6 11.4 6 14.4a6 6 0 0 0 12 0c0-3-2.2-6.4-6-11.9z" />;
+    case "B":
+      return (
+        <>
+          <path
+            fill={fg}
+            d="M12 2.4c-4.3 0-7.7 3.1-7.7 7.1 0 2.5 1.3 4.5 3.1 5.7l.3 3.3c.1 1 .9 1.8 2 1.8h4.6c1.1 0 1.9-.8 2-1.8l.3-3.3c1.8-1.2 3.1-3.2 3.1-5.7 0-4-3.4-7.1-7.7-7.1z"
+          />
+          <ellipse cx="9.1" cy="10.3" rx="1.9" ry="2.3" fill={bg} />
+          <ellipse cx="14.9" cy="10.3" rx="1.9" ry="2.3" fill={bg} />
+          <path fill={bg} d="M12 12.6l-1.2 2.4h2.4z" />
+          <path stroke={bg} strokeWidth="1.1" d="M9.8 17.4v2.6M12 17.4v2.6M14.2 17.4v2.6" />
+        </>
+      );
+    case "R":
+      return (
+        <path
+          fill={fg}
+          d="M12 2c3 4.2 6 6.3 6 11a6 6 0 0 1-12 0c0-2 .7-3.6 2-5.1-.2 1.9.6 2.9 1.7 3.2C9.2 8.2 10.2 5 12 2z"
+        />
+      );
+    case "G":
+      return (
+        <g fill={fg}>
+          <circle cx="12" cy="7.2" r="3.7" />
+          <circle cx="8.1" cy="10" r="3.3" />
+          <circle cx="15.9" cy="10" r="3.3" />
+          <circle cx="9" cy="13.3" r="3.1" />
+          <circle cx="15" cy="13.3" r="3.1" />
+          <circle cx="12" cy="11.5" r="3.4" />
+          <path d="M11 14h2v6.2h-2z" />
+          <path d="M8.2 21.4c1.1-1 2.4-1.5 3.8-1.5s2.7.5 3.8 1.5z" />
+        </g>
+      );
+    case "C":
+      return <path fill={fg} d="M12 3l6.8 9L12 21 5.2 12z" />;
+    default:
+      return null;
+  }
+}
+
 function ManaChip({ sym }: { sym: string }) {
   const look = manaLook(sym);
   if (!look) return <>{`{${sym}}`}</>;
+  const glyph = manaGlyph(sym.toUpperCase(), look.fg, look.bg);
   return (
     <span
       title={look.name}
       aria-label={look.name}
-      className="mx-px inline-flex h-[1.1em] min-w-[1.1em] shrink-0 items-center justify-center rounded-full px-[0.1em] align-[-0.15em] text-[0.72em] font-bold leading-none shadow-[inset_0_-1px_1px_rgba(0,0,0,0.18)]"
+      className="mx-px inline-flex h-[1.1em] min-w-[1.1em] shrink-0 items-center justify-center overflow-hidden rounded-full px-[0.1em] align-[-0.15em] text-[0.72em] font-bold leading-none shadow-[inset_0_-1px_1px_rgba(0,0,0,0.18)]"
       style={{ background: look.bg, color: look.fg }}
     >
-      {look.label}
+      {glyph ? (
+        <svg viewBox="0 0 24 24" className="h-[1.18em] w-[1.18em]" aria-hidden="true">
+          {glyph}
+        </svg>
+      ) : (
+        look.label
+      )}
     </span>
   );
 }
@@ -90,19 +158,111 @@ export function withManaSymbols(text: string, key: string): ReactNode[] {
 
 /* --------------------------------------------------------------- Pokémon */
 
-const ENERGY: Record<string, { bg: string; fg: string; letter: string }> = {
-  grass: { bg: "#78b21f", fg: "#ffffff", letter: "G" },
-  fire: { bg: "#e04c39", fg: "#ffffff", letter: "R" },
-  water: { bg: "#2e9be0", fg: "#ffffff", letter: "W" },
-  lightning: { bg: "#f5c500", fg: "#5e4a00", letter: "L" },
-  psychic: { bg: "#a65e9a", fg: "#ffffff", letter: "P" },
-  fighting: { bg: "#c56f38", fg: "#ffffff", letter: "F" },
-  darkness: { bg: "#2a4a5c", fg: "#ffffff", letter: "D" },
-  metal: { bg: "#8a9aa4", fg: "#ffffff", letter: "M" },
-  fairy: { bg: "#e06c9f", fg: "#ffffff", letter: "Y" },
-  dragon: { bg: "#b8862f", fg: "#ffffff", letter: "N" },
-  colorless: { bg: "#d8d4cf", fg: "#4b463f", letter: "C" },
+const ENERGY: Record<string, { bg: string; fg: string }> = {
+  grass: { bg: "#78b21f", fg: "#ffffff" },
+  fire: { bg: "#e04c39", fg: "#ffffff" },
+  water: { bg: "#2e9be0", fg: "#ffffff" },
+  lightning: { bg: "#f5c500", fg: "#5e4a00" },
+  psychic: { bg: "#a65e9a", fg: "#ffffff" },
+  fighting: { bg: "#c56f38", fg: "#ffffff" },
+  darkness: { bg: "#2a4a5c", fg: "#ffffff" },
+  metal: { bg: "#8a9aa4", fg: "#ffffff" },
+  fairy: { bg: "#e06c9f", fg: "#ffffff" },
+  dragon: { bg: "#b8862f", fg: "#ffffff" },
+  colorless: { bg: "#d8d4cf", fg: "#4b463f" },
 };
+
+/** The glyph inside the disc — hand-drawn approximations of the shapes the
+ *  cards print (a droplet, a flame, a leaf...), not letters. `fg` fills the
+ *  glyph; `bg` cuts details back out of it (an eye's pupil, a leaf's vein).
+ *  Inline SVG rather than image assets: nothing to load, crisp at text
+ *  size, recolorable, and no third-party artwork to license. */
+function energyGlyph(type: string, fg: string, bg: string): ReactNode {
+  switch (type) {
+    case "water":
+      return <path fill={fg} d="M12 2.5C8.2 8 6 11.4 6 14.4a6 6 0 0 0 12 0c0-3-2.2-6.4-6-11.9z" />;
+    case "fire":
+      return (
+        <path
+          fill={fg}
+          d="M12 2c3 4.2 6 6.3 6 11a6 6 0 0 1-12 0c0-2 .7-3.6 2-5.1-.2 1.9.6 2.9 1.7 3.2C9.2 8.2 10.2 5 12 2z"
+        />
+      );
+    case "grass":
+      return (
+        <>
+          <path fill={fg} d="M19.5 4C10 3.6 4.5 8.5 4.5 14.6c0 3.2 2.2 5.4 5.3 5.4 6.4 0 10.6-6.6 9.7-16z" />
+          <path stroke={bg} strokeWidth="1.6" fill="none" d="M7.5 17.5C10.5 13.5 13.5 10.5 17 7.5" />
+        </>
+      );
+    case "lightning":
+      return <path fill={fg} d="M13.2 2 5 14h4.6l-1.4 8L17 10h-4.6l.8-8z" />;
+    case "psychic":
+      return (
+        <>
+          <path
+            fill={fg}
+            d="M12 5.8c-5 0-8.6 5.4-8.8 6.2.2.8 3.8 6.2 8.8 6.2s8.6-5.4 8.8-6.2c-.2-.8-3.8-6.2-8.8-6.2z"
+          />
+          <circle cx="12" cy="12" r="3.4" fill={bg} />
+          <circle cx="12" cy="12" r="1.5" fill={fg} />
+        </>
+      );
+    case "fighting":
+      return (
+        <>
+          <g fill={fg}>
+            <rect x="4.6" y="5" width="3.1" height="8" rx="1.55" />
+            <rect x="8.1" y="3.8" width="3.1" height="9.2" rx="1.55" />
+            <rect x="11.6" y="3.8" width="3.1" height="9.2" rx="1.55" />
+            <rect x="15.1" y="5" width="3.1" height="8" rx="1.55" />
+            <path d="M4.6 11h13.6v4.2c0 3.1-2.5 5.6-5.6 5.6h-2.4c-3.1 0-5.6-2.5-5.6-5.6z" />
+          </g>
+          <path stroke={bg} strokeWidth="1.2" d="M8.1 11.2v3M11.6 11.2v3M15.1 11.2v3" />
+        </>
+      );
+    case "darkness":
+      return <path fill={fg} d="M14.5 3a9.5 9.5 0 1 0 6.2 15.9A10.5 10.5 0 0 1 14.5 3z" />;
+    case "metal":
+      return (
+        <>
+          <path fill={fg} d="M12 2.6 20.2 7.3v9.4L12 21.4 3.8 16.7V7.3z" />
+          <path fill={bg} d="M12 6.6l4.7 2.7v5.4L12 17.4l-4.7-2.7V9.3z" />
+        </>
+      );
+    case "fairy":
+      return (
+        <>
+          <path
+            stroke={fg}
+            fill="none"
+            strokeWidth="2.6"
+            strokeLinecap="round"
+            d="M12 3.5a8.5 8.5 0 1 1-8.5 8.5"
+          />
+          <path
+            stroke={fg}
+            fill="none"
+            strokeWidth="2.6"
+            strokeLinecap="round"
+            d="M12 7.5a4.5 4.5 0 1 1-4.5 4.5"
+          />
+          <circle cx="12" cy="12" r="1.6" fill={fg} />
+        </>
+      );
+    case "dragon":
+      return <path fill={fg} d="M12 2.8 19 9l-7 12.2L5 9z" />;
+    case "colorless":
+      return (
+        <path
+          fill={fg}
+          d="M12 2.8l2.5 6 6.4.5-4.9 4.2 1.5 6.3L12 16.4l-5.5 3.4 1.5-6.3-4.9-4.2 6.4-.5z"
+        />
+      );
+    default:
+      return null;
+  }
+}
 
 /** The bracket convention's single letters → type names. R is Fire and W
  *  is Water by long-standing community convention, not initials. */
@@ -133,10 +293,12 @@ export function EnergyIcon({ type }: { type: string }) {
     <span
       title={`${fullName} Energy`}
       aria-label={`${fullName} Energy`}
-      className="mx-px inline-flex h-[1.1em] w-[1.1em] shrink-0 items-center justify-center rounded-full align-[-0.15em] text-[0.68em] font-bold leading-none shadow-[inset_0_-1px_1px_rgba(0,0,0,0.18)]"
-      style={{ background: look.bg, color: look.fg }}
+      className="mx-px inline-flex h-[1.15em] w-[1.15em] shrink-0 items-center justify-center rounded-full align-[-0.18em] shadow-[inset_0_-1px_1px_rgba(0,0,0,0.2)]"
+      style={{ background: look.bg }}
     >
-      {look.letter}
+      <svg viewBox="0 0 24 24" className="h-[0.85em] w-[0.85em]" aria-hidden="true">
+        {energyGlyph(resolved, look.fg, look.bg)}
+      </svg>
     </span>
   );
 }
