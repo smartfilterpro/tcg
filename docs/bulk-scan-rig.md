@@ -42,10 +42,14 @@ Success response (HTTP 200):
 { "ok": true, "pass": 1, "seq": 17, "ordinal": 17 }
 ```
 
-For pass 2 the server answers with the pass-1 position it paired to:
-pass-2 card `s` of `N` pairs with pass-1 card `N+1−s`. If `seq` is echoed
-back as something other than what your local counter expects, **stop and
-tell the operator** — the pairing is drifting.
+For pass 2 the server answers with `seq` set to the pass-1 position it
+paired to: pass-2 card `s` of `N` pairs with pass-1 card `N+1−s`. **The
+field to check against your own local counter is `ordinal`, not `seq`.**
+`ordinal` always echoes the position you sent (or were assigned) within
+*this* pass; `seq` is deliberately something else on pass 2 — that's the
+whole point of the pairing. If `ordinal` comes back as something other
+than what your local counter expects, **stop and tell the operator** —
+the pairing is drifting.
 
 ### Errors
 

@@ -134,9 +134,14 @@ export default function BulkCapturePage() {
         });
         if (res.status === 200) {
           const body = await res.json();
-          if (body.seq !== seq) {
+          // body.ordinal echoes the position WITHIN this pass (what we
+          // sent) — that's the drift check. body.seq is deliberately
+          // something else on pass 2: the paired PASS-1 row (N+1-ordinal),
+          // by design, per the contract. Comparing seq here would false-
+          // positive-halt on almost every pass-2 upload.
+          if (body.ordinal !== seq) {
             throw new HaltError(
-              `sent seq=${seq} but server echoed seq=${body.seq} — pairing is drifting, stop and check the job`
+              `sent seq=${seq} but server assigned ordinal=${body.ordinal} within this pass — pairing is drifting, stop and check the job`
             );
           }
           return body;
@@ -362,6 +367,23 @@ export default function BulkCapturePage() {
           </div>
         )}
 
+        {/* Always mounted, even outside "watching" — startCapture() attaches
+            the stream to this element the moment getUserMedia resolves, and
+            a conditionally-rendered <video> wouldn't exist in the DOM yet at
+            that point (videoRef.current would be null, the attach would
+            silently no-op, and the element that mounts afterward would never
+            get the stream — permission granted, black screen). */}
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          className={
+            phase === "watching"
+              ? "w-full rounded border border-neutral-800 bg-black"
+              : "hidden"
+          }
+        />
+
         {phase === "watching" && (
           <div className="space-y-3">
             <div className="flex items-center justify-between text-sm text-neutral-400">
@@ -376,12 +398,6 @@ export default function BulkCapturePage() {
                 Stop
               </button>
             </div>
-            <video
-              ref={videoRef}
-              playsInline
-              muted
-              className="w-full rounded border border-neutral-800 bg-black"
-            />
             <button
               type="button"
               onClick={captureAndUpload}
