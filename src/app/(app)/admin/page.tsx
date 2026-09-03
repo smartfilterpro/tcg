@@ -2678,6 +2678,14 @@ function PriceSyncPanel() {
 }
 
 
+/** The link a phone can open directly against /bulk/capture — job, key and
+ *  pass pre-filled so there's nothing to type on the device itself. */
+function bulkCaptureLink(jobId: string, key: string, pass: 1 | 2): string {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const params = new URLSearchParams({ job: jobId, key, pass: String(pass) });
+  return `${origin}/bulk/capture?${params.toString()}`;
+}
+
 /** Fold duplicate card rows — the same card held under two ids because two
  *  sources spelled its number differently ("#050" vs "#50"). Dry run first,
  *  always: this rewrites what people own. */
@@ -2770,7 +2778,10 @@ function BulkScanPanel() {
     setBusy(true);
     setError(null);
     setMessage(null);
-    const method = action === "finalize" || action === "reopen" || action === "cancel" ? "PATCH" : "POST";
+    const method =
+      action === "finalize" || action === "reopen" || action === "cancel" || action === "rotate_key"
+        ? "PATCH"
+        : "POST";
     const res = await fetch(`/api/admin/bulk/${jobId}`, {
       method,
       headers: { "Content-Type": "application/json" },
@@ -2787,6 +2798,7 @@ function BulkScanPanel() {
       }
       if (action === "upload") setMessage(`Loaded ${json.cards} cards (${json.lines} lines) into ${json.member}'s collection.`);
       if (action === "undo") setMessage(`Undone: ${json.removed} rows removed, ${json.decremented} quantities decremented.`);
+      if (action === "rotate_key" && json.device_key) setNewKey({ id: jobId, key: json.device_key });
       load();
       if (open === jobId) loadRows(jobId);
     }
@@ -2851,13 +2863,25 @@ function BulkScanPanel() {
         </div>
         {newKey && (
           <div className="mt-2 rounded-lg border border-brand-line p-2.5 font-mono text-[11px]">
-            <div className="mb-1 text-brand-ink3">Device key for the rig (also shown on the job row):</div>
+            <div className="mb-1 text-brand-ink3">
+              Device key for the rig — shown once; use &quot;Rotate key&quot; on the job row below if
+              you lose it:
+            </div>
             <div className="select-all break-all">{newKey.key}</div>
             <div className="mt-1.5 text-brand-ink4">
               curl -X POST {typeof window !== "undefined" ? window.location.origin : ""}/api/bulk/photo -H
               &quot;x-bulk-key: {newKey.key.slice(0, 8)}…&quot; -F job={newKey.id} -F pass=1 -F
               photo=@card.jpg
             </div>
+            <div className="mt-2 text-brand-ink3">
+              Phone capture link — open on the phone, or turn into a QR code:
+            </div>
+            <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 1)}</div>
+            <div className="mt-1.5 text-brand-ink4">
+              Pass 2 (same job/key, for after flipping the pile — save this now, the key won&apos;t be
+              shown again once you leave this page):
+            </div>
+            <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 2)}</div>
           </div>
         )}
 
@@ -2928,6 +2952,21 @@ function BulkScanPanel() {
                         Reopen
                       </button>
                     )}
+                    <button
+                      className="btn text-xs text-brand-ink4 hover:bg-slate-100"
+                      disabled={busy}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Rotate the device key for "${j.label}"? The old key stops working immediately — anything still using it (a rig mid-job, an open phone capture tab) needs the new link.`
+                          )
+                        ) {
+                          jobAction(j.id, "rotate_key");
+                        }
+                      }}
+                    >
+                      Rotate key
+                    </button>
                     {j.status !== "cancelled" && j.status !== "uploaded" && (
                       <button
                         className="btn text-xs text-red-600 hover:bg-red-50"
