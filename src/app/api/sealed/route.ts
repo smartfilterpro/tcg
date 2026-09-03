@@ -131,9 +131,11 @@ export async function POST(req: Request) {
           .single());
       }
       if (insErr) {
-        if (missingTable(insErr.message)) {
-          return NextResponse.json({ error: NOT_SET_UP }, { status: 400 });
-        }
+        // Order matters: PostgREST's missing-COLUMN message names the table
+        // too ("Could not find the 'game' column of 'sealed_products'…"),
+        // so the missing-TABLE check below would misdiagnose a pre-077
+        // database as pre-045 and send the admin to re-run a migration
+        // they applied long ago. The specific complaint wins.
         if (/game/.test(insErr.message) && game === "mtg") {
           return NextResponse.json(
             {
@@ -142,6 +144,9 @@ export async function POST(req: Request) {
             },
             { status: 400 }
           );
+        }
+        if (missingTable(insErr.message)) {
+          return NextResponse.json({ error: NOT_SET_UP }, { status: 400 });
         }
         throw insErr;
       }
