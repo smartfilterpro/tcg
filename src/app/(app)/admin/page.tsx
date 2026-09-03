@@ -2778,7 +2778,10 @@ function BulkScanPanel() {
     setBusy(true);
     setError(null);
     setMessage(null);
-    const method = action === "finalize" || action === "reopen" || action === "cancel" ? "PATCH" : "POST";
+    const method =
+      action === "finalize" || action === "reopen" || action === "cancel" || action === "rotate_key"
+        ? "PATCH"
+        : "POST";
     const res = await fetch(`/api/admin/bulk/${jobId}`, {
       method,
       headers: { "Content-Type": "application/json" },
@@ -2795,6 +2798,7 @@ function BulkScanPanel() {
       }
       if (action === "upload") setMessage(`Loaded ${json.cards} cards (${json.lines} lines) into ${json.member}'s collection.`);
       if (action === "undo") setMessage(`Undone: ${json.removed} rows removed, ${json.decremented} quantities decremented.`);
+      if (action === "rotate_key" && json.device_key) setNewKey({ id: jobId, key: json.device_key });
       load();
       if (open === jobId) loadRows(jobId);
     }
@@ -2859,7 +2863,10 @@ function BulkScanPanel() {
         </div>
         {newKey && (
           <div className="mt-2 rounded-lg border border-brand-line p-2.5 font-mono text-[11px]">
-            <div className="mb-1 text-brand-ink3">Device key for the rig (also shown on the job row):</div>
+            <div className="mb-1 text-brand-ink3">
+              Device key for the rig — shown once; use &quot;Rotate key&quot; on the job row below if
+              you lose it:
+            </div>
             <div className="select-all break-all">{newKey.key}</div>
             <div className="mt-1.5 text-brand-ink4">
               curl -X POST {typeof window !== "undefined" ? window.location.origin : ""}/api/bulk/photo -H
@@ -2945,6 +2952,21 @@ function BulkScanPanel() {
                         Reopen
                       </button>
                     )}
+                    <button
+                      className="btn text-xs text-brand-ink4 hover:bg-slate-100"
+                      disabled={busy}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Rotate the device key for "${j.label}"? The old key stops working immediately — anything still using it (a rig mid-job, an open phone capture tab) needs the new link.`
+                          )
+                        ) {
+                          jobAction(j.id, "rotate_key");
+                        }
+                      }}
+                    >
+                      Rotate key
+                    </button>
                     {j.status !== "cancelled" && j.status !== "uploaded" && (
                       <button
                         className="btn text-xs text-red-600 hover:bg-red-50"

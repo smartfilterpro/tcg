@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { randomBytes } from "crypto";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { BULK_BUCKET, finalizeJob, type BulkRead } from "@/lib/bulkScan";
@@ -77,6 +78,7 @@ export async function GET(req: Request, { params }: Params) {
  *  { action: "finalize" }                          pair passes, set confidence
  *  { action: "reopen" }                            back to accepting photos
  *  { action: "cancel" }                            close it out
+ *  { action: "rotate_key" }                        new device key, old one dead immediately
  *  { row, cardId?, variant?, note? }               a human's verdict on a row */
 export async function PATCH(req: Request, { params }: Params) {
   try {
@@ -139,6 +141,18 @@ export async function PATCH(req: Request, { params }: Params) {
     if (body.action === "cancel") {
       await admin.from("bulk_jobs").update({ status: "cancelled", updated_at: new Date().toISOString() }).eq("id", id);
       return NextResponse.json({ ok: true });
+    }
+    if (body.action === "rotate_key") {
+      // The recovery path for "I lost the link before pass 2" — the old
+      // key stops working the instant this write lands, same one-time
+      // visibility as a freshly created job's key, just not a new job.
+      const deviceKey = `bk_${randomBytes(24).toString("base64url")}`;
+      const { error } = await admin
+        .from("bulk_jobs")
+        .update({ device_key: deviceKey, updated_at: new Date().toISOString() })
+        .eq("id", id);
+      if (error) throw error;
+      return NextResponse.json({ ok: true, device_key: deviceKey });
     }
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (err) {
