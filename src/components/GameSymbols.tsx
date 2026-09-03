@@ -58,21 +58,30 @@ function ManaChip({ sym }: { sym: string }) {
   );
 }
 
-/** Matches the mana tokens worth converting; anything else in braces stays
- *  literal text, so a stray {like this} can never half-render. */
-const MANA_TOKEN = /\{(\d{1,2}|[WUBRGCSXYZTQE]|[0-9WUBRGC]\/[WUBRGCP])\}/gi;
+/** The two games' inline cost notations, one pass:
+ *  - Magic braces: {2}{U}, {T}, {W/P} — Scryfall's oracle convention.
+ *  - Pokémon brackets: [C][C], [W][D], [Grass] — the community (and our
+ *    card reads) write attack costs this way.
+ *  Anything else in braces or brackets stays literal text, so a stray
+ *  {like this} or [footnote] can never half-render. Pokémon letters are
+ *  matched uppercase-only — the convention writes them that way, and it
+ *  keeps prose like "[a]" out of the symbol path. */
+const COST_TOKEN =
+  /\{(\d{1,2}|[WUBRGCSXYZTQE]|[0-9WUBRGC]\/[WUBRGCP])\}|\[(G|R|W|L|P|F|D|M|Y|N|C|Grass|Fire|Water|Lightning|Psychic|Fighting|Darkness|Metal|Fairy|Dragon|Colorless)\]/g;
 
-/** A line of text with its {mana} tokens rendered as symbols. */
+/** A line of text with its {mana} and [energy] tokens rendered as the
+ *  symbols the cards themselves print. */
 export function withManaSymbols(text: string, key: string): ReactNode[] {
-  if (!text.includes("{")) return [text];
+  if (!text.includes("{") && !text.includes("[")) return [text];
   const out: ReactNode[] = [];
-  const re = new RegExp(MANA_TOKEN.source, "gi");
+  const re = new RegExp(COST_TOKEN.source, "g");
   let last = 0;
   let n = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) out.push(text.slice(last, m.index));
-    out.push(<ManaChip key={`${key}-m${n++}`} sym={m[1]} />);
+    if (m[1] != null) out.push(<ManaChip key={`${key}-m${n++}`} sym={m[1]} />);
+    else out.push(<EnergyIcon key={`${key}-m${n++}`} type={m[2]} />);
     last = m.index + m[0].length;
   }
   if (last < text.length) out.push(text.slice(last));
@@ -95,15 +104,35 @@ const ENERGY: Record<string, { bg: string; fg: string; letter: string }> = {
   colorless: { bg: "#d8d4cf", fg: "#4b463f", letter: "C" },
 };
 
-/** One energy symbol, by type name ("Grass", "colorless"...). Unknown types
- *  fall back to the word itself, so new energy never renders as nothing. */
+/** The bracket convention's single letters → type names. R is Fire and W
+ *  is Water by long-standing community convention, not initials. */
+const ENERGY_LETTERS: Record<string, string> = {
+  g: "grass",
+  r: "fire",
+  w: "water",
+  l: "lightning",
+  p: "psychic",
+  f: "fighting",
+  d: "darkness",
+  m: "metal",
+  y: "fairy",
+  n: "dragon",
+  c: "colorless",
+};
+
+/** One energy symbol, by type name ("Grass", "colorless") or bracket letter
+ *  ("C", "W"). Unknown types fall back to the word itself, so new energy
+ *  never renders as nothing. */
 export function EnergyIcon({ type }: { type: string }) {
-  const look = ENERGY[type.trim().toLowerCase()];
+  const raw = type.trim().toLowerCase();
+  const resolved = raw.length === 1 ? (ENERGY_LETTERS[raw] ?? raw) : raw;
+  const look = ENERGY[resolved];
   if (!look) return <>{type}</>;
+  const fullName = resolved.charAt(0).toUpperCase() + resolved.slice(1);
   return (
     <span
-      title={`${type} Energy`}
-      aria-label={`${type} Energy`}
+      title={`${fullName} Energy`}
+      aria-label={`${fullName} Energy`}
       className="mx-px inline-flex h-[1.1em] w-[1.1em] shrink-0 items-center justify-center rounded-full align-[-0.15em] text-[0.68em] font-bold leading-none shadow-[inset_0_-1px_1px_rgba(0,0,0,0.18)]"
       style={{ background: look.bg, color: look.fg }}
     >
