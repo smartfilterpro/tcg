@@ -14,15 +14,24 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // CORS is needed — this page must stay served from this app, not a
 // separate static host.
 
-const MOTION_THRESHOLD = 18; // 0-255 avg luma diff; tune against real cards/lighting
+// Motion is measured as the FRACTION OF PIXELS that changed meaningfully,
+// not the average brightness change of the whole frame. The average was the
+// original sin: a card dropping into a bucket that fills 15% of the view is
+// a big change in a small area, and averaged over the frame it vanished —
+// close-up tests worked, the real rig never triggered. A pixel counts as
+// changed past PIXEL_DELTA luma; the thresholds below are fractions of the
+// frame. The live meter on the watching screen shows the exact number the
+// detector sees, so aiming and tuning stop being guesswork.
+const PIXEL_DELTA = 26; // 0-255 per-pixel luma difference that counts as change
+const MOTION_FRAC = 0.03; // ≥3% of pixels changing = motion
 const STABLE_TICKS_NEEDED = 4; // consecutive quiet ticks before a capture fires
 // After the motion settles, the scene must actually DIFFER from what it was
 // before the motion began, or nothing is captured. A hand reaching over the
 // table (usually for the Stop button) is motion followed by the exact same
 // scene — which used to earn every session a phantom duplicate photo of the
-// last card. A genuinely new card, even another copy of the same Mountain,
-// lands at a different angle and offset and clears this easily.
-const SCENE_CHANGE_MIN = 6;
+// last card. A landed card, even in a far corner of the frame, moves well
+// over this fraction of pixels.
+const SCENE_CHANGE_FRAC = 0.012;
 const TICK_MS = 120;
 const DETECT_W = 160;
 const DETECT_H = 120;
@@ -39,16 +48,18 @@ interface LogEntry {
 
 class HaltError extends Error {}
 
-function frameDiff(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
-  let sum = 0;
+/** Fraction of pixels whose luma moved more than PIXEL_DELTA — localized
+ *  change at full strength instead of diluted into a frame-wide average. */
+function changedFraction(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
+  let changed = 0;
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
     const la = 0.299 * a[i] + 0.587 * a[i + 1] + 0.114 * a[i + 2];
     const lb = 0.299 * b[i] + 0.587 * b[i + 1] + 0.114 * b[i + 2];
-    sum += Math.abs(la - lb);
+    if (Math.abs(la - lb) > PIXEL_DELTA) changed++;
     n++;
   }
-  return n ? sum / n : 0;
+  return n ? changed / n : 0;
 }
 
 export default function BulkCapturePage() {
@@ -64,6 +75,8 @@ export default function BulkCapturePage() {
   const armedRef = useRef(false);
   const stableTicksRef = useRef(0);
   const capturingRef = useRef(false);
+  /** The live motion readout; written imperatively from the tick loop. */
+  const meterRef = useRef<HTMLSpanElement>(null);
 
   // Locked in at "Start" so an in-flight upload never races a form edit.
   const jobRef = useRef("");
@@ -244,9 +257,17 @@ export default function BulkCapturePage() {
     prevFrameRef.current = new Uint8ClampedArray(frame);
     if (!prev) return;
 
-    const diff = frameDiff(prev, frame);
+    const diff = changedFraction(prev, frame);
 
-    if (diff > MOTION_THRESHOLD) {
+    // The live meter: what the detector sees, updated imperatively so 8
+    // ticks a second never re-render the page.
+    if (meterRef.current) {
+      meterRef.current.textContent = `motion ${(diff * 100).toFixed(1)}% · ${
+        capturingRef.current ? "uploading" : armedRef.current ? "armed, waiting to settle" : "watching"
+      }`;
+    }
+
+    if (diff > MOTION_FRAC) {
       if (!armedRef.current) preMotionFrameRef.current = prev;
       armedRef.current = true;
       stableTicksRef.current = 0;
@@ -263,8 +284,8 @@ export default function BulkCapturePage() {
     const before = preMotionFrameRef.current;
     preMotionFrameRef.current = null;
     // Settled back to the same scene: a hand passed over, nothing changed —
-    // not a card. See SCENE_CHANGE_MIN.
-    if (before && frameDiff(before, frame) < SCENE_CHANGE_MIN) return;
+    // not a card. See SCENE_CHANGE_FRAC.
+    if (before && changedFraction(before, frame) < SCENE_CHANGE_FRAC) return;
     captureAndUpload();
   }, [captureAndUpload]);
 
@@ -415,6 +436,8 @@ export default function BulkCapturePage() {
             <div className="flex items-center justify-between text-sm text-neutral-400">
               <span>
                 pass {passRef.current} · seq {seqRef.current} · {cardsCaptured} uploaded
+                <br />
+                <span ref={meterRef} className="font-mono text-xs text-neutral-500" />
               </span>
               <button
                 type="button"
