@@ -184,10 +184,14 @@ export async function PATCH(req: Request, { params }: Params) {
     }
     if (body.action === "reread") {
       // Second chances without re-feeding cardboard: the photos are already
-      // in storage, so every row still stuck in review gets a fresh
-      // identify-and-check with whatever the reader has learned since it
-      // was shot. Batched with a time budget — a big queue takes several
-      // clicks, each one reporting how many are left.
+      // in storage, so every MACHINE-decided row — the review queue AND the
+      // machine's own "verified" calls — gets a fresh identify-and-check
+      // with whatever the reader has learned since it was shot. Verified
+      // rows are included on purpose: when a reader flaw is systematic
+      // (every card called reverse holo under the rig's lamp), the wrong
+      // answers are the confident ones. Only human verdicts are untouched.
+      // Batched with a time budget — a big job takes several clicks, each
+      // one reporting how many are left.
       if (job.status === "uploaded") {
         return NextResponse.json({ error: "Already uploaded — undo first." }, { status: 409 });
       }
@@ -195,7 +199,6 @@ export async function PATCH(req: Request, { params }: Params) {
         .from("bulk_cards")
         .select("id, seq, pass1_path")
         .eq("job_id", id)
-        .eq("confidence", "review")
         .eq("reviewed", false)
         .not("pass1_path", "is", null)
         .order("seq");
