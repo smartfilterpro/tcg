@@ -13,10 +13,11 @@ export const maxDuration = 120;
 //     -H "x-bulk-key: <device_key>" \
 //     -F job=<job_id> -F pass=1 -F seq=17 -F photo=@card.jpg
 //
-// seq is optional (defaults to next); pass 2 arrives in REVERSE feed order
-// and is attached to the matching pass-1 row: pass-2 card s pairs with
-// pass-1 card (N+1−s). Identification starts immediately, detached, so by
-// the time the stack finishes most reads are already done.
+// seq is optional (defaults to next); pass 2 pairs with pass 1 by feed
+// order — REVERSE by default (pass-2 card s pairs with pass-1 card
+// N+1−s), or 1:1 when the client sends order=same. Identification starts
+// immediately, detached, so by the time the stack finishes most reads are
+// already done.
 
 /** DELETE ?job=<id>&pass=1|2 — erase one pass and start it over.
  *
@@ -93,6 +94,12 @@ export async function POST(req: Request) {
     if (!form) return NextResponse.json({ error: "Send multipart/form-data." }, { status: 400 });
     const jobId = String(form.get("job") ?? "");
     const pass = String(form.get("pass") ?? "1") === "2" ? 2 : 1;
+    // How pass 2 was fed. "reverse" (the default, and the Pi rig's
+    // contract) is the natural result of picking a stack up and feeding it
+    // again; "same" is for rigs whose second run preserves order — the
+    // phone chute, per its operator. Decided per photo by the client that
+    // knows how the cards actually moved.
+    const order = String(form.get("order") ?? "reverse") === "same" ? "same" : "reverse";
     const seqRaw = form.get("seq");
     const photo = form.get("photo");
     if (!jobId) return NextResponse.json({ error: "Missing job field." }, { status: 400 });
@@ -135,8 +142,9 @@ export async function POST(req: Request) {
 
     const given = seqRaw != null ? parseInt(String(seqRaw), 10) : NaN;
     const ordinal = Number.isFinite(given) && given > 0 ? given : (pass === 1 ? (pass1Count ?? 0) : (pass2Count ?? 0)) + 1;
-    // Pass 2 runs the stack in reverse: its s-th card is pass 1's (N+1−s)-th.
-    const targetSeq = pass === 1 ? ordinal : (pass1Count ?? 0) + 1 - ordinal;
+    // Reverse: pass 2's s-th card is pass 1's (N+1−s)-th. Same: it's just s.
+    const targetSeq =
+      pass === 1 ? ordinal : order === "same" ? ordinal : (pass1Count ?? 0) + 1 - ordinal;
 
     const buffer = Buffer.from(await photo.arrayBuffer());
     const contentType = photo.type || "image/jpeg";

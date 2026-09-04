@@ -2846,7 +2846,8 @@ function BulkScanPanel() {
         <h2 className="mb-2 font-display text-[17px] font-bold">📦 Mail-in scanning jobs</h2>
         <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
           One job per customer stack. The rig posts one photo per card with the job&apos;s device
-          key — pass 1 in feed order, pass 2 with the stack reversed. Two passes agreeing on the
+          key — pass 1 in feed order, then pass 2 as a second look (reversed stack or same order;
+          the capture client says which). Two passes agreeing on the
           same catalogue card is what verifies a card with no human; everything else lands in
           the review queue below. AI spend is metered on the job, never on a member.
         </p>
