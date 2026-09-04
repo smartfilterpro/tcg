@@ -23,15 +23,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // frame. The live meter on the watching screen shows the exact number the
 // detector sees, so aiming and tuning stop being guesswork.
 const PIXEL_DELTA = 26; // 0-255 per-pixel luma difference that counts as change
-const MOTION_FRAC = 0.03; // ≥3% of pixels changing = motion
-const STABLE_TICKS_NEEDED = 4; // consecutive quiet ticks before a capture fires
-// After the motion settles, the scene must actually DIFFER from what it was
-// before the motion began, or nothing is captured. A hand reaching over the
-// table (usually for the Stop button) is motion followed by the exact same
-// scene — which used to earn every session a phantom duplicate photo of the
-// last card. A landed card, even in a far corner of the frame, moves well
-// over this fraction of pixels.
-const SCENE_CHANGE_FRAC = 0.012;
+// Hysteresis, tuned against the real rig: a card drop peaks 23-50% and
+// settles to 0-1% (field-measured on the meter). ARM sits comfortably
+// under the weakest observed peak so a soft drop still registers; SETTLE
+// sits just over the observed calm. The PEAK IS THE EVIDENCE: an armed
+// episode captures when the motion falls back to calm, full stop — no
+// does-the-scene-look-different test, because a card that disappears into
+// the bucket leaves the settled scene looking like it did before, and
+// that test was eating every capture.
+const ARM_FRAC = 0.15; // an episode starts when ≥15% of pixels change
+const SETTLE_FRAC = 0.02; // …and captures when change falls back under 2%
+const STABLE_TICKS_NEEDED = 2; // ~240ms of calm — fire on the drop from peak
 const TICK_MS = 120;
 const DETECT_W = 160;
 const DETECT_H = 120;
@@ -69,11 +71,12 @@ export default function BulkCapturePage() {
   const streamRef = useRef<MediaStream | null>(null);
   const tickHandleRef = useRef<number | null>(null);
   const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
-  /** What the table looked like just before the current disturbance began —
-   *  the reference for "did anything actually change?". */
-  const preMotionFrameRef = useRef<Uint8ClampedArray | null>(null);
   const armedRef = useRef(false);
   const stableTicksRef = useRef(0);
+  /** Strongest motion seen in the current episode / the previous one —
+   *  shown on the meter so threshold tuning stays evidence-based. */
+  const peakRef = useRef(0);
+  const lastPeakRef = useRef(0);
   const capturingRef = useRef(false);
   /** True only while actually capturing (not preview): the tick loop and
    *  meter run in both modes, the shutter only in this one. */
@@ -307,28 +310,36 @@ export default function BulkCapturePage() {
     if (!prev) return;
 
     const diff = changedFraction(prev, frame);
+    if (armedRef.current) peakRef.current = Math.max(peakRef.current, diff);
 
     // The live meter: what the detector sees, updated imperatively so 8
     // ticks a second never re-render the page.
     if (meterRef.current) {
-      meterRef.current.textContent = `motion ${(diff * 100).toFixed(1)}% · ${
-        !detectionActiveRef.current
-          ? "preview — not capturing"
-          : capturingRef.current
-            ? "uploading"
-            : armedRef.current
-              ? "armed, waiting to settle"
-              : "watching"
-      }`;
+      const peak = armedRef.current ? peakRef.current : lastPeakRef.current;
+      meterRef.current.textContent =
+        `motion ${(diff * 100).toFixed(1)}% · peak ${(peak * 100).toFixed(0)}% · ${
+          !detectionActiveRef.current
+            ? "preview — not capturing"
+            : capturingRef.current
+              ? "uploading"
+              : armedRef.current
+                ? "armed — will capture when calm"
+                : "watching"
+        }`;
     }
     if (!detectionActiveRef.current) return;
 
-    if (diff > MOTION_FRAC) {
-      if (!armedRef.current) preMotionFrameRef.current = prev;
+    if (diff > ARM_FRAC) {
+      if (!armedRef.current) peakRef.current = diff;
       armedRef.current = true;
       stableTicksRef.current = 0;
       return;
     }
+
+    // The dead zone between SETTLE and ARM neither counts as calm nor
+    // resets the calm already banked — a brief flicker mid-settle (auto-
+    // exposure catching up with the new card) must not hold the shutter.
+    if (diff > SETTLE_FRAC) return;
 
     stableTicksRef.current += 1;
     if (!armedRef.current || stableTicksRef.current < STABLE_TICKS_NEEDED) return;
@@ -337,11 +348,8 @@ export default function BulkCapturePage() {
     if (capturingRef.current) return;
     armedRef.current = false;
     stableTicksRef.current = 0;
-    const before = preMotionFrameRef.current;
-    preMotionFrameRef.current = null;
-    // Settled back to the same scene: a hand passed over, nothing changed —
-    // not a card. See SCENE_CHANGE_FRAC.
-    if (before && changedFraction(before, frame) < SCENE_CHANGE_FRAC) return;
+    lastPeakRef.current = peakRef.current;
+    peakRef.current = 0;
     captureAndUpload();
   }, [captureAndUpload]);
 
