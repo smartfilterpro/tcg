@@ -23,6 +23,10 @@ export interface BulkRead {
   name?: string;
   number?: string;
   set_name?: string;
+  /** Which game's card the photo shows — decides which half of the
+   *  catalogue the read matches against. Absent on reads made before the
+   *  reader learned Magic; treated as Pokémon, which they all were. */
+  game?: "pokemon" | "mtg";
   finish?: string;
   /** The finish, pattern and stamp as one phrase — the same shape the phone
    *  scanner produces, so both feed the same finish rules. */
@@ -57,17 +61,33 @@ const BALL_WORDS: Record<string, string> = {
 const READ_SCHEMA = {
   type: "object",
   properties: {
+    game: {
+      type: "string",
+      enum: ["pokemon", "mtg"],
+      description:
+        "Which game printed this card. Magic: The Gathering cards have a mana " +
+        "cost top-right, a type line mid-card ('Creature — ...', 'Instant', " +
+        "'Basic Land — Mountain') and a set code bottom-left. Pokémon cards " +
+        "have HP top-right, energy-cost attacks, and a NNN/NNN collector number.",
+    },
     name: { type: "string", description: "The card's printed name, exactly as printed." },
     number: {
       type: "string",
-      description: "Collector number as printed, e.g. '050/191' or 'TG12/TG30'. Empty if unreadable.",
+      description:
+        "Collector number as printed. Pokémon: e.g. '050/191' or 'TG12/TG30'. " +
+        "Magic: bottom-left, e.g. '0170' or '123/281'. Empty if unreadable.",
     },
-    set_name: { type: "string", description: "Set name if identifiable, else empty." },
+    set_name: {
+      type: "string",
+      description:
+        "Set name if identifiable (for Magic, the 3-5 letter set code bottom-left " +
+        "also counts), else empty.",
+    },
     finish: {
       type: "string",
       enum: ["normal", "holofoil", "reverse_holofoil"],
       description:
-        "Where the shine is. 'holofoil': the ARTWORK window is foil and the rest is matte (or the whole card is foil, as on full arts and ex cards). 'reverse_holofoil': the opposite — matte artwork, shiny card body, usually with an etched repeating pattern. 'normal': no foil. Require positive evidence — rainbow colour shift or an etched pattern — before answering either foil value; glare from the rig's lights is not foil.",
+        "Where the shine is. 'holofoil': the ARTWORK window is foil and the rest is matte (or the whole card is foil, as on full arts, ex cards, and Magic foils — a foil Magic card is 'holofoil'). 'reverse_holofoil': Pokémon only — matte artwork, shiny card body, usually with an etched repeating pattern. 'normal': no foil. Require positive evidence — rainbow colour shift or an etched pattern — before answering either foil value; glare from the rig's lights is not foil.",
     },
     pattern: {
       type: "string",
@@ -95,7 +115,7 @@ const READ_SCHEMA = {
       description: "False if the photo shows no readable card (blank, sleeve, misfeed).",
     },
   },
-  required: ["name", "number", "set_name", "finish", "pattern", "stamp", "readable"],
+  required: ["game", "name", "number", "set_name", "finish", "pattern", "stamp", "readable"],
   // The structured-output API refuses object schemas without this — every
   // bulk read was 400ing ("'additionalProperties' must be explicitly set
   // to false"), and unlike the aiJson surfaces this path has no
@@ -103,12 +123,14 @@ const READ_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-const READ_SYSTEM = `You read a single Pokémon TCG card from one photograph
-taken by a card-feeding machine. The card fills most of the frame and may be
-slightly rotated. Report exactly what is printed — name, collector number,
-set if identifiable from the set symbol or bottom text, finish, reverse-holo
-pattern, and any gold stamp. If the photo does not show a readable card face
-(blank frame, card back, misfeed), set readable=false.
+const READ_SYSTEM = `You read a single trading card — Pokémon TCG or Magic:
+The Gathering — from one photograph taken by a card-feeding machine. The
+card fills most of the frame and may be slightly rotated. First decide which
+game printed it, then report exactly what is printed — name, collector
+number, set if identifiable, finish, and (Pokémon only) reverse-holo pattern
+and any gold stamp; for a Magic card answer pattern='none' and stamp='none'.
+A card from EITHER game is readable; set readable=false ONLY when the photo
+shows no card face at all (blank frame, card back, misfeed).
 
 The card fills the frame, so you can see detail a phone snapshot of a whole
 binder page cannot. Use it. The reverse-holo PATTERN is the field most worth
@@ -178,6 +200,7 @@ export async function identifyPhoto(
 
     const block = res.content.find((b) => b.type === "text");
     const parsed = JSON.parse(block && block.type === "text" ? block.text : "{}") as {
+      game?: string;
       name?: string;
       number?: string;
       set_name?: string;
@@ -208,6 +231,7 @@ export async function identifyPhoto(
       name: parsed.name ?? "",
       number: parsed.number ?? "",
       set_name: parsed.set_name ?? "",
+      game: parsed.game === "mtg" ? "mtg" : "pokemon",
       finish: parsed.finish ?? "normal",
       hint,
     };
@@ -250,6 +274,13 @@ async function matchCatalogue(
     rarity: string | null;
     prices: Record<string, number | null> | null;
   }>;
+  // Only the read's own game gets a say. The catalogue holds both games in
+  // one table, and an unfiltered name match let a Magic "Mountain" court
+  // whatever shared the name — id prefix rather than the game column, so
+  // this works mid-migration like every other discriminator.
+  const isMtg = read.game === "mtg";
+  const gameRows = rows.filter((c) => c.id.startsWith("scry-") === isMtg);
+
   // Exact name, PLUS the printings of it.
   //
   // An exact-name filter is what keeps "Charizard" from matching "Charizard
@@ -258,7 +289,7 @@ async function matchCatalogue(
   // read could report a Master Ball and the matcher had no Master Ball row
   // to give it. A name that is the read plus a parenthetical is the same
   // card in a different printing, and belongs in the candidates.
-  let hits = rows.filter((c) => {
+  let hits = gameRows.filter((c) => {
     const n = normalizeForSearch(c.name);
     return n === wanted || (n.startsWith(wanted) && isSpecificPrinting(c.name));
   });
@@ -282,8 +313,10 @@ async function matchCatalogue(
   // printing, so a Poké Ball reverse holo has its own. Pick the one the
   // photo shows — the named printing when the read saw that ball, the plain
   // row when it saw none. A machine nobody checks afterwards must not file a
-  // Master Ball reverse as the common version.
-  const picked = pickPrinting(hits, hint);
+  // Master Ball reverse as the common version. (Ball printings are a
+  // Pokémon institution; Magic's one-row-per-printing means any survivor
+  // of the checks above is already the card.)
+  const picked = isMtg ? hits[0] : pickPrinting(hits, hint);
   if (!picked) return none;
   return {
     cardId: picked.id,
@@ -293,8 +326,8 @@ async function matchCatalogue(
     // In the app's vocabulary, and aware of the card: a printing that only
     // exists as a reverse holo can't be recorded as a plain one, and a row
     // that IS the Poké Ball printing takes its own finish rather than the
-    // pattern label.
-    variant: defaultVariantFor(picked, hint),
+    // pattern label. Magic speaks foil/normal instead.
+    variant: isMtg ? (/holo/i.test(hint) ? "foil" : "normal") : defaultVariantFor(picked, hint),
   };
 }
 

@@ -88,9 +88,13 @@ export default function BulkCapturePage() {
     const j = params.get("job");
     const k = params.get("key");
     const p = params.get("pass");
+    // seq: for the re-shoot flow — a link can point straight at the card
+    // to replace, since posting the same seq overwrites that position.
+    const s = parseInt(params.get("seq") ?? "", 10);
     if (j) setJob(j);
     if (k) setKey(k);
     if (p === "2") setPass(2);
+    if (Number.isFinite(s) && s >= 1) setStartSeq(s);
   }, []);
 
   const stopEverything = useCallback(() => {
