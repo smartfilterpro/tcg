@@ -444,10 +444,17 @@ export async function identifyPhoto(
               },
               {
                 type: "text",
+                // The set name stays OUT of this message on purpose. The set
+                // was pinned deterministically (number + printed set size);
+                // the name is the one field the checker can only "verify"
+                // against remembered trivia, and remembered trivia about
+                // sets newer than its training is where the false
+                // rejections came from ("that code means a different set",
+                // "a Digimon-style name"). Name, number, finish — things
+                // the photo can actually answer.
                 text:
                   `The first read filed this card as:\n` +
-                  `${matched.cardName} — collector number ${matched.cardNumber}` +
-                  `${matched.cardSet ? `, from ${matched.cardSet}` : ""}\n` +
+                  `${matched.cardName} — collector number ${matched.cardNumber}\n` +
                   `finish: ${parsed.finish ?? "normal"}, pattern: ${parsed.pattern ?? "none"}, ` +
                   `stamp: ${parsed.stamp ?? "none"}\n\nCheck it against the photo.`,
               },
