@@ -162,9 +162,11 @@ const CHECK_SCHEMA = {
         "False ONLY when something legible in the photo CONTRADICTS the " +
         "identification — a different name, a different collector number, a " +
         "visibly different card. A detail you cannot make out (an illegible " +
-        "set name, a blurry symbol) is NOT a contradiction: the identification " +
-        "came from a catalogue match on what IS legible, and doubt about the " +
-        "rest belongs in 'concern', with same_card still true.",
+        "set name, a blurry symbol) is NOT a contradiction, and neither is a " +
+        "set code or set name that doesn't match your MEMORY of it — the " +
+        "catalogue knows sets you don't. The identification came from a " +
+        "catalogue match on what IS legible; doubt about the rest belongs in " +
+        "'concern', with same_card still true.",
     },
     finish: {
       type: "string",
@@ -211,7 +213,13 @@ a name or number that reads differently, a finish the first look got
 wrong. But doubt is not disagreement. You are not asked to re-prove the
 identification from nothing — a set name you cannot make out, a symbol
 too blurry to name, a card photographed upside down are not evidence
-against it. Reject what contradicts the photo; confirm what nothing
+against it. And rejections must come from the cardboard, not from
+memory: never overrule a match with recalled trivia about set codes,
+set names, or what a set "should" contain. Sets newer than your
+knowledge exist and the catalogue is the authority on them — a set code
+you don't recognize, or remember differently, means nothing. A
+different printed NAME or a different printed NUMBER is a real
+contradiction. Reject what contradicts the photo; confirm what nothing
 contradicts; put what you merely couldn't verify in 'concern'.`;
 
 /** Read one photo and resolve it against the catalogue. Charges the JOB,
@@ -337,7 +345,9 @@ export async function identifyPhoto(
             "matcher narrowed it to the candidates listed but could not choose. " +
             "Look closely at the photo — the collector number line, set symbol, " +
             "artwork, rarity mark — and answer with the id of the candidate that " +
-            "IS this exact printing. Answer \"none\" unless one of them clearly is.",
+            "IS this exact printing. Judge only from what is printed in the photo " +
+            "and the candidate list, never from memory of set codes or sets — the " +
+            "catalogue knows sets you don't. Answer \"none\" unless one clearly is.",
           output_config: {
             format: {
               type: "json_schema",
