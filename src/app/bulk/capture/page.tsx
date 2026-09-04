@@ -23,19 +23,24 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // frame. The live meter on the watching screen shows the exact number the
 // detector sees, so aiming and tuning stop being guesswork.
 const PIXEL_DELTA = 26; // 0-255 per-pixel luma difference that counts as change
-const MOTION_FRAC = 0.03; // ≥3% of pixels changing = motion
-const STABLE_TICKS_NEEDED = 4; // consecutive quiet ticks before a capture fires
-// After the motion settles, the scene must actually DIFFER from what it was
-// before the motion began, or nothing is captured. A hand reaching over the
-// table (usually for the Stop button) is motion followed by the exact same
-// scene — which used to earn every session a phantom duplicate photo of the
-// last card. A landed card, even in a far corner of the frame, moves well
-// over this fraction of pixels.
-const SCENE_CHANGE_FRAC = 0.012;
+// Hysteresis, tuned against the real rig: a card drop peaks 23-50% and
+// settles to 0-1% (field-measured on the meter). ARM sits comfortably
+// under the weakest observed peak so a soft drop still registers; SETTLE
+// sits just over the observed calm. The PEAK IS THE EVIDENCE: an armed
+// episode captures when the motion falls back to calm, full stop — no
+// does-the-scene-look-different test, because a card that disappears into
+// the bucket leaves the settled scene looking like it did before, and
+// that test was eating every capture.
+const ARM_FRAC = 0.15; // an episode starts when ≥15% of pixels change
+const SETTLE_FRAC = 0.02; // …and captures when change falls back under 2%
+const STABLE_TICKS_NEEDED = 2; // ~240ms of calm — fire on the drop from peak
 const TICK_MS = 120;
 const DETECT_W = 160;
 const DETECT_H = 120;
 const MAX_UPLOAD_ATTEMPTS = 5;
+// Parallel uploads in the air before the shutter waits. The phone's uplink
+// is the real limit; four keeps a fast chute moving without swamping it.
+const MAX_IN_FLIGHT = 4;
 
 type Phase = "setup" | "watching" | "halted";
 
@@ -65,16 +70,18 @@ function changedFraction(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
 export default function BulkCapturePage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const detectCanvasRef = useRef<HTMLCanvasElement>(null);
-  const captureCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const tickHandleRef = useRef<number | null>(null);
   const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
-  /** What the table looked like just before the current disturbance began —
-   *  the reference for "did anything actually change?". */
-  const preMotionFrameRef = useRef<Uint8ClampedArray | null>(null);
   const armedRef = useRef(false);
   const stableTicksRef = useRef(0);
-  const capturingRef = useRef(false);
+  /** Strongest motion seen in the current episode / the previous one —
+   *  shown on the meter so threshold tuning stays evidence-based. */
+  const peakRef = useRef(0);
+  const lastPeakRef = useRef(0);
+  /** Uploads currently in the air; the shutter only waits at the cap. */
+  const inFlightRef = useRef(0);
+  const lowestFailedSeqRef = useRef<number | null>(null);
   /** True only while actually capturing (not preview): the tick loop and
    *  meter run in both modes, the shutter only in this one. */
   const detectionActiveRef = useRef(false);
@@ -236,33 +243,44 @@ export default function BulkCapturePage() {
   }
 
   const captureAndUpload = useCallback(() => {
-    if (capturingRef.current) return;
     const video = videoRef.current;
-    const canvas = captureCanvasRef.current;
-    if (!video || !canvas || video.videoWidth === 0) return;
-    capturingRef.current = true;
+    if (!video || video.videoWidth === 0) return;
+    if (inFlightRef.current >= MAX_IN_FLIGHT) return;
 
+    // Claim the position NOW. Uploads run in PARALLEL — a chute feeds a
+    // card every ~700ms and an upload takes longer than that, so the old
+    // serial flow (shutter locked until the last photo landed) capped the
+    // whole rig at one card per round trip. Claiming seq at capture time
+    // is what keeps parallel uploads honestly numbered.
+    const seq = seqRef.current;
+    seqRef.current += 1;
+
+    // A fresh canvas per capture: the next card can arrive and be drawn
+    // before this one's blob has finished encoding.
+    const canvas = document.createElement("canvas");
     const { sx, sy, sw, sh } = cropOf(video);
     canvas.width = Math.round(sw);
     canvas.height = Math.round(sh);
     const ctx = canvas.getContext("2d");
     if (!ctx) {
-      capturingRef.current = false;
+      // Refund the claim only if nothing claimed after us — a numbering
+      // hole would shift the pass-2 pairing of everything behind it.
+      if (seqRef.current === seq + 1) seqRef.current = seq;
       return;
     }
     ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     const thumbnail = canvas.toDataURL("image/jpeg", 0.4);
 
+    inFlightRef.current += 1;
     canvas.toBlob(
       (blob) => {
         if (!blob) {
-          capturingRef.current = false;
+          inFlightRef.current -= 1;
+          if (seqRef.current === seq + 1) seqRef.current = seq;
           return;
         }
-        const seq = seqRef.current;
         uploadFrame(blob, seq)
           .then((body) => {
-            seqRef.current += 1;
             setCardsCaptured((c) => c + 1);
             setLog((l) =>
               [{ seq, ok: true, message: `uploaded (ordinal ${body.ordinal})`, thumbnail }, ...l].slice(
@@ -274,12 +292,16 @@ export default function BulkCapturePage() {
           .catch((e) => {
             const message = e instanceof Error ? e.message : String(e);
             setLog((l) => [{ seq, ok: false, message, thumbnail }, ...l].slice(0, 20));
+            // Resume must restart at the FIRST hole, not past the frames
+            // claimed after it while uploads overlapped.
+            lowestFailedSeqRef.current = Math.min(lowestFailedSeqRef.current ?? seq, seq);
+            seqRef.current = lowestFailedSeqRef.current;
             setHaltMessage(message);
             setPhase("halted");
             stopEverything();
           })
           .finally(() => {
-            capturingRef.current = false;
+            inFlightRef.current -= 1;
           });
       },
       "image/jpeg",
@@ -307,41 +329,44 @@ export default function BulkCapturePage() {
     if (!prev) return;
 
     const diff = changedFraction(prev, frame);
+    if (armedRef.current) peakRef.current = Math.max(peakRef.current, diff);
 
     // The live meter: what the detector sees, updated imperatively so 8
     // ticks a second never re-render the page.
     if (meterRef.current) {
-      meterRef.current.textContent = `motion ${(diff * 100).toFixed(1)}% · ${
-        !detectionActiveRef.current
-          ? "preview — not capturing"
-          : capturingRef.current
-            ? "uploading"
+      const peak = armedRef.current ? peakRef.current : lastPeakRef.current;
+      meterRef.current.textContent =
+        `motion ${(diff * 100).toFixed(1)}% · peak ${(peak * 100).toFixed(0)}% · ${
+          !detectionActiveRef.current
+            ? "preview — not capturing"
             : armedRef.current
-              ? "armed, waiting to settle"
+              ? "armed — will capture when calm"
               : "watching"
-      }`;
+        }${inFlightRef.current > 0 ? ` · ${inFlightRef.current} uploading` : ""}`;
     }
     if (!detectionActiveRef.current) return;
 
-    if (diff > MOTION_FRAC) {
-      if (!armedRef.current) preMotionFrameRef.current = prev;
+    if (diff > ARM_FRAC) {
+      if (!armedRef.current) peakRef.current = diff;
       armedRef.current = true;
       stableTicksRef.current = 0;
       return;
     }
 
+    // The dead zone between SETTLE and ARM neither counts as calm nor
+    // resets the calm already banked — a brief flicker mid-settle (auto-
+    // exposure catching up with the new card) must not hold the shutter.
+    if (diff > SETTLE_FRAC) return;
+
     stableTicksRef.current += 1;
     if (!armedRef.current || stableTicksRef.current < STABLE_TICKS_NEEDED) return;
-    // An upload is in flight: stay armed with the counter satisfied, and
-    // fire on the first tick after the pipe frees up.
-    if (capturingRef.current) return;
+    // At the parallel-upload cap: stay armed with the counter satisfied,
+    // and fire on the first tick with room in the pipe.
+    if (inFlightRef.current >= MAX_IN_FLIGHT) return;
     armedRef.current = false;
     stableTicksRef.current = 0;
-    const before = preMotionFrameRef.current;
-    preMotionFrameRef.current = null;
-    // Settled back to the same scene: a hand passed over, nothing changed —
-    // not a card. See SCENE_CHANGE_FRAC.
-    if (before && changedFraction(before, frame) < SCENE_CHANGE_FRAC) return;
+    lastPeakRef.current = peakRef.current;
+    peakRef.current = 0;
     captureAndUpload();
   }, [captureAndUpload]);
 
@@ -351,6 +376,7 @@ export default function BulkCapturePage() {
       return;
     }
     setSetupError(null);
+    lowestFailedSeqRef.current = null;
     jobRef.current = job.trim();
     keyRef.current = key.trim();
     passRef.current = pass;
@@ -647,7 +673,6 @@ export default function BulkCapturePage() {
         )}
 
         <canvas ref={detectCanvasRef} width={DETECT_W} height={DETECT_H} className="hidden" />
-        <canvas ref={captureCanvasRef} className="hidden" />
       </div>
     </main>
   );
