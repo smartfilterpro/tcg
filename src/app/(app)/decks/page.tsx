@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
 import { askDeckAI } from "@/components/TrainerChat";
 import { artSrc } from "@/lib/art";
@@ -1117,6 +1117,16 @@ export default function DecksPage() {
   const [styleNotes, setStyleNotes] = useState("");
   const [styleSaved, setStyleSaved] = useState(false);
   const [prompt, setPrompt] = useState("");
+  // Grows with what's typed, same as the chat composer: a deck request is
+  // often a paragraph ("beat Dragapult, lean on my Vampires, budget $30"),
+  // and a one-line box made writing one feel like threading a needle.
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = promptRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [prompt]);
   // Which game the AI builder is building for. The manual builder below
   // stays Pokémon-shaped for now; Magic decks come from this builder.
   const [buildGame, setBuildGame] = useState<"pokemon" | "mtg">("pokemon");
@@ -1564,12 +1574,21 @@ export default function DecksPage() {
             : `${AI_NAME} looks at your whole collection and builds a legal 60-card deck. Basic energy is assumed — no need to scan energy cards. Can take a minute.`}
         </p>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <input
-            className="input"
+          <textarea
+            ref={promptRef}
+            rows={1}
+            className="input max-h-40 min-h-[42px] flex-1 resize-none overflow-y-auto"
             placeholder='e.g. "an aggressive fire deck" or leave blank for the best deck possible'
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !building && build()}
+            onKeyDown={(e) => {
+              // Enter builds, Shift+Enter breaks the line — same convention
+              // as the chat box.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (!building) build();
+              }
+            }}
           />
           {/* Wraps: three selects and a button never fit one phone-width
               row, and a row that can't wrap clips the format picker off
