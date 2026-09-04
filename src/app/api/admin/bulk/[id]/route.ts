@@ -88,13 +88,40 @@ export async function GET(req: Request, { params }: Params) {
  *  cards were written to the member and stay theirs — deleting the job
  *  deletes the paperwork, not the delivery (that's what Undo upload is
  *  for, before deleting). */
-export async function DELETE(_req: Request, { params }: Params) {
+export async function DELETE(req: Request, { params }: Params) {
   try {
     await requireAdmin();
     const { id } = await params;
     const admin = createAdminClient();
-    const { data: job } = await admin.from("bulk_jobs").select("id").eq("id", id).maybeSingle();
+    const { data: job } = await admin.from("bulk_jobs").select("id, status").eq("id", id).maybeSingle();
     if (!job) return NextResponse.json({ error: "Job not found." }, { status: 404 });
+
+    // ?row=<id> — delete ONE row: the shutter fired on a hand, an empty
+    // bucket, a black frame. The photo goes too, and with the row gone it
+    // no longer blocks the upload gate.
+    const rowId = new URL(req.url).searchParams.get("row");
+    if (rowId) {
+      if (job.status === "uploaded") {
+        return NextResponse.json({ error: "Already uploaded — undo first to edit." }, { status: 409 });
+      }
+      const { data: row } = await admin
+        .from("bulk_cards")
+        .select("id, pass1_path, pass2_path")
+        .eq("id", rowId)
+        .eq("job_id", id)
+        .maybeSingle();
+      if (!row) return NextResponse.json({ error: "Row not found." }, { status: 404 });
+      const paths = [row.pass1_path, row.pass2_path].filter(
+        (p): p is string => typeof p === "string" && p.length > 0
+      );
+      if (paths.length > 0) {
+        const { error: rmErr } = await admin.storage.from(BULK_BUCKET).remove(paths);
+        if (rmErr) throw rmErr;
+      }
+      const { error: delErr } = await admin.from("bulk_cards").delete().eq("id", row.id);
+      if (delErr) throw delErr;
+      return NextResponse.json({ ok: true, row: row.id });
+    }
 
     // Storage first. list() pages at 100 by default; loop each pass folder
     // until it runs dry — an 8,000-card job holds up to 16k files.
