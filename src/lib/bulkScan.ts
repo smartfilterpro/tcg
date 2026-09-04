@@ -337,81 +337,258 @@ export interface PairingResult {
   review: number;
   pass1Count: number;
   pass2Count: number;
+  /** Every pass-1 card found a pass-2 partner and no photo was left over. */
   aligned: boolean;
 }
 
-/** Pair pass 2 (reversed) onto pass 1 and set each row's confidence.
+/** How strongly two reads look like the same physical card. Zero when
+ *  either side is unreadable — no evidence either way, and the surrounding
+ *  matches anchor the unreadable one to its position. */
+function pairScore(a: BulkRead | null, b: BulkRead | null): number {
+  if (!a?.cardId || !b?.cardId) return 0;
+  if (a.cardId === b.cardId) return 3;
+  // Same name, different printing pick — still clearly the same card in
+  // the feeder; the disagreement goes to review, but it shouldn't shove
+  // the alignment sideways.
+  if (a.cardName && b.cardName && normalizeForSearch(a.cardName) === normalizeForSearch(b.cardName)) {
+    return 2;
+  }
+  return -2;
+}
+
+const GAP = -1;
+
+/** Global sequence alignment (the diff algorithm) between the two passes'
+ *  reads: the best way to line up pass 2 against pass 1 allowing skips on
+ *  either side. Banded — a shift bigger than the band would need dozens of
+ *  consecutive misses, at which point review is the right answer anyway. */
+function alignPasses(
+  a: Array<BulkRead | null>,
+  b: Array<BulkRead | null>
+): { pairs: Array<[number, number]>; score: number } {
+  const n = a.length;
+  const m = b.length;
+  const NEG = -1e9;
+  const lo = Math.min(0, m - n) - 64;
+  const hi = Math.max(0, m - n) + 64;
+  const width = hi - lo + 1;
+  const dp = new Float64Array((n + 1) * width).fill(NEG);
+  const at = (i: number, j: number) => {
+    const d = j - i;
+    return j < 0 || j > m || d < lo || d > hi ? NEG : dp[i * width + (d - lo)];
+  };
+  const put = (i: number, j: number, v: number) => {
+    dp[i * width + (j - i - lo)] = v;
+  };
+  put(0, 0, 0);
+  for (let j = 1; j <= Math.min(m, hi); j++) put(0, j, j * GAP);
+  for (let i = 1; i <= n; i++) {
+    for (let d = Math.max(lo, -i); d <= hi; d++) {
+      const j = i + d;
+      if (j < 0 || j > m) continue;
+      let best = NEG;
+      const diag = at(i - 1, j - 1);
+      const up = at(i - 1, j);
+      const left = at(i, j - 1);
+      if (j > 0 && diag > NEG / 2) best = Math.max(best, diag + pairScore(a[i - 1], b[j - 1]));
+      if (up > NEG / 2) best = Math.max(best, up + GAP);
+      if (j > 0 && left > NEG / 2) best = Math.max(best, left + GAP);
+      put(i, j, best);
+    }
+  }
+  const pairs: Array<[number, number]> = [];
+  let i = n;
+  let j = m;
+  while (i > 0 || j > 0) {
+    const here = at(i, j);
+    if (i > 0 && j > 0 && here === at(i - 1, j - 1) + pairScore(a[i - 1], b[j - 1])) {
+      pairs.push([i - 1, j - 1]);
+      i--;
+      j--;
+    } else if (i > 0 && here === at(i - 1, j) + GAP) {
+      i--;
+    } else if (j > 0) {
+      j--;
+    } else {
+      i--;
+    }
+  }
+  pairs.reverse();
+  return { pairs, score: at(n, m) };
+}
+
+/** Pair pass 2 onto pass 1 and set each row's confidence.
  *
- *  Alignment is strict: if the pass counts differ, ONE slipped card would
- *  shift every later pairing by one and manufacture a wall of false
- *  disagreements — so mismatched counts pair nothing and every row goes to
- *  review instead. Re-runnable until the job uploads. */
+ *  Pairing is by CONTENT, not position. Positional pairing meant one
+ *  missed card shifted every later pair by one and the whole job drowned
+ *  in false disagreements — so it refused to pair at all when the counts
+ *  differed, which broke the job a different way. Instead: every pass-2
+ *  photo keeps its feed ordinal (parsed from its storage path), the two
+ *  passes are lined up by sequence alignment in both directions (pass 2
+ *  fed same-order or reversed — whichever aligns better wins, no setting
+ *  to get wrong), and a missed card costs exactly one review row: the
+ *  unpartnered card. Re-runnable until the job uploads; re-running
+ *  re-derives the pairing from scratch, so late reads and re-shoots slot
+ *  in. */
 export async function finalizeJob(admin: SupabaseClient, jobId: string): Promise<PairingResult> {
   const { data } = await admin
     .from("bulk_cards")
-    .select("id, seq, pass1_read, pass2_read, reviewed, confidence, card_id, variant")
+    .select("id, seq, pass1_path, pass2_path, pass1_read, pass2_read, reviewed, confidence, card_id, variant")
     .eq("job_id", jobId)
     .order("seq");
   const rows = (data ?? []) as Array<{
     id: string;
     seq: number;
+    pass1_path: string | null;
+    pass2_path: string | null;
     pass1_read: BulkRead | null;
     pass2_read: BulkRead | null;
     reviewed: boolean;
     confidence: string | null;
   }>;
-
-  const pass1Count = rows.filter((r) => r.pass1_read != null).length;
-  const pass2Count = rows.filter((r) => r.pass2_read != null).length;
-  const aligned = pass2Count > 0 && pass1Count === pass2Count;
+  const now = () => new Date().toISOString();
 
   let verified = 0;
   let review = 0;
-  for (const row of rows) {
-    // A human's decision outlives re-finalizing.
-    if (row.reviewed) {
-      if (row.confidence !== "corrected") {
-        await admin.from("bulk_cards").update({ confidence: "corrected" }).eq("id", row.id);
-      }
-      continue;
+
+  // A human's decision outlives re-finalizing — those rows, pairing
+  // included, are frozen.
+  const live = rows.filter((r) => !r.reviewed);
+  for (const row of rows.filter((r) => r.reviewed)) {
+    if (row.confidence !== "corrected") {
+      await admin.from("bulk_cards").update({ confidence: "corrected" }).eq("id", row.id);
     }
+  }
+
+  // Pass-1 anchors, in feed order; and the pool of every un-frozen pass-2
+  // photo with its own feed ordinal (encoded in the storage path, which
+  // survives however many times finalize has already moved it around).
+  const anchors = live.filter((r) => r.seq < 10000 && (r.pass1_path || r.pass1_read));
+  type P2 = { ordinal: number; path: string; read: BulkRead | null };
+  const poolByOrdinal = new Map<number, P2>();
+  for (const r of live) {
+    if (!r.pass2_path) continue;
+    const m = /pass2\/0*(\d+)\./.exec(r.pass2_path);
+    const ordinal = m ? parseInt(m[1], 10) : r.seq >= 10000 ? r.seq - 10000 : r.seq;
+    poolByOrdinal.set(ordinal, { ordinal, path: r.pass2_path, read: r.pass2_read });
+  }
+  const pool = [...poolByOrdinal.values()].sort((x, y) => x.ordinal - y.ordinal);
+
+  const pass1Count = anchors.length;
+  const pass2Count = pool.length;
+
+  // Line them up. The operator may have re-fed the stack in the same order
+  // or flipped it — try both, keep the better alignment. Ties (all reads
+  // identical, or nothing readable) pick same-order; with a tie the choice
+  // can't change what verifies.
+  const p1Reads = anchors.map((r) => r.pass1_read);
+  const forward = alignPasses(p1Reads, pool.map((p) => p.read));
+  const reversedPool = [...pool].reverse();
+  const backward = alignPasses(p1Reads, reversedPool.map((p) => p.read));
+  const useReverse = pass2Count > 0 && backward.score > forward.score;
+  const chosenPool = useReverse ? reversedPool : pool;
+  const chosen = useReverse ? backward : forward;
+
+  const partnerOf = new Map<number, P2>(); // anchor index → pass-2 photo
+  const taken = new Set<number>(); // ordinals that found a pass-1 card
+  for (const [ai, bi] of chosen.pairs) {
+    partnerOf.set(ai, chosenPool[bi]);
+    taken.add(chosenPool[bi].ordinal);
+  }
+
+  // Anchors: write the (possibly new) partner and the verdict in one go.
+  for (let ai = 0; ai < anchors.length; ai++) {
+    const row = anchors[ai];
     const p1 = row.pass1_read;
-    const p2 = row.pass2_read;
+    const partner = partnerOf.get(ai) ?? null;
+    const p2 = partner?.read ?? null;
     const agree =
-      aligned &&
       p1?.cardId != null &&
       p2?.cardId != null &&
       p1.cardId === p2.cardId &&
       (p1.variant ?? p1.finish ?? "normal") === (p2.variant ?? p2.finish ?? "normal");
+    const base = {
+      pass2_path: partner?.path ?? null,
+      pass2_read: p2,
+      updated_at: now(),
+    };
     const patch = agree
       ? {
+          ...base,
           confidence: "verified",
           card_id: p1!.cardId,
           variant: p1!.variant ?? p1!.finish ?? "normal",
           review_note: null,
-          updated_at: new Date().toISOString(),
         }
       : {
+          ...base,
           confidence: "review",
           card_id: p1?.cardId ?? p2?.cardId ?? null,
           variant: p1?.variant ?? p1?.finish ?? p2?.variant ?? p2?.finish ?? "normal",
-          review_note: !aligned
-            ? pass2Count === 0
+          review_note:
+            pass2Count === 0
               ? "single pass — no verification photo"
-              : "pass counts differ — pairing unsafe (misfeed?)"
-            : p1?.error || p2?.error
-              ? `read failed: ${p1?.error ?? p2?.error}`
-              : p1?.cardId == null || p2?.cardId == null
-                ? "no exact catalogue match"
-                : p1.cardId !== p2.cardId
-                  ? "passes disagree on the card"
-                  : "passes disagree on the finish",
-          updated_at: new Date().toISOString(),
+              : !partner
+                ? "no pass-2 photo pairs with this card — missed during pass 2?"
+                : (row.pass1_path && !p1) || (partner && !p2)
+                  ? "a read is still running — re-run Finalize in a minute"
+                  : p1?.error || p2?.error
+                    ? `read failed: ${p1?.error ?? p2?.error}`
+                    : p1?.cardId == null || p2?.cardId == null
+                      ? "no exact catalogue match"
+                      : p1.cardId !== p2.cardId
+                        ? "passes disagree on the card"
+                        : "passes disagree on the finish",
         };
     await admin.from("bulk_cards").update(patch).eq("id", row.id);
     if (agree) verified++;
     else review++;
   }
 
-  return { total: rows.length, verified, review, pass1Count, pass2Count, aligned };
+  // Leftover pass-2 photos become (or remain) their own review rows at
+  // 10000+ordinal; orphan rows whose photo found a home, and anchor-less
+  // shells emptied by the moves above, are cleaned up.
+  const leftovers = pool.filter((p) => !taken.has(p.ordinal));
+  for (const p of leftovers) {
+    const { error } = await admin.from("bulk_cards").upsert(
+      {
+        job_id: jobId,
+        seq: 10000 + p.ordinal,
+        pass1_path: null,
+        pass1_read: null,
+        pass2_path: p.path,
+        pass2_read: p.read,
+        confidence: "review",
+        card_id: p.read?.cardId ?? null,
+        variant: p.read?.variant ?? p.read?.finish ?? "normal",
+        review_note: "extra pass-2 photo — no pass-1 card to pair it with",
+        updated_at: now(),
+      },
+      { onConflict: "job_id,seq" }
+    );
+    if (error) throw error;
+    review++;
+  }
+  const keepSeqs = new Set(leftovers.map((p) => 10000 + p.ordinal));
+  for (const r of live) {
+    // A non-anchor row below 10000 is a shell with no pass-1 photo (its
+    // pass-2 half, if any, just moved through the pool); orphan rows only
+    // survive if their photo is still unmatched.
+    const emptyShell = r.seq < 10000 && !r.pass1_path && !r.pass1_read;
+    const staleOrphan = r.seq >= 10000 && !keepSeqs.has(r.seq);
+    if (staleOrphan || emptyShell) {
+      await admin.from("bulk_cards").delete().eq("id", r.id);
+    }
+  }
+
+  const aligned =
+    pass2Count > 0 && leftovers.length === 0 && anchors.every((_, ai) => partnerOf.has(ai));
+  return {
+    total: anchors.length + leftovers.length + rows.filter((r) => r.reviewed).length,
+    verified,
+    review,
+    pass1Count,
+    pass2Count,
+    aligned,
+  };
 }

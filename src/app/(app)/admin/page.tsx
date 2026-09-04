@@ -2793,7 +2793,7 @@ function BulkScanPanel() {
       if (action === "finalize" && json.result) {
         setMessage(
           `Paired ${json.result.total} cards: ${json.result.verified} verified, ${json.result.review} for review` +
-            (json.result.aligned ? "." : " — pass counts differ, so nothing auto-verified.")
+            (json.result.aligned ? "." : " — some photos had no partner in the other pass; they're in the review queue.")
         );
       }
       if (action === "upload") setMessage(`Loaded ${json.cards} cards (${json.lines} lines) into ${json.member}'s collection.`);
@@ -2846,8 +2846,9 @@ function BulkScanPanel() {
         <h2 className="mb-2 font-display text-[17px] font-bold">📦 Mail-in scanning jobs</h2>
         <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
           One job per customer stack. The rig posts one photo per card with the job&apos;s device
-          key — pass 1 in feed order, then pass 2 as a second look (reversed stack or same order;
-          the capture client says which). Two passes agreeing on the
+          key — pass 1 in feed order, then pass 2 as a second look, fed in either direction.
+          Finalize pairs the two passes by what the cards are, so a card missed in one pass only
+          sends itself to review. Two passes agreeing on the
           same catalogue card is what verifies a card with no human; everything else lands in
           the review queue below. AI spend is metered on the job, never on a member.
         </p>
