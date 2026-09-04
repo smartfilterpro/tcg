@@ -38,6 +38,9 @@ const TICK_MS = 120;
 const DETECT_W = 160;
 const DETECT_H = 120;
 const MAX_UPLOAD_ATTEMPTS = 5;
+// Parallel uploads in the air before the shutter waits. The phone's uplink
+// is the real limit; four keeps a fast chute moving without swamping it.
+const MAX_IN_FLIGHT = 4;
 
 type Phase = "setup" | "watching" | "halted";
 
@@ -67,7 +70,6 @@ function changedFraction(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
 export default function BulkCapturePage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const detectCanvasRef = useRef<HTMLCanvasElement>(null);
-  const captureCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const tickHandleRef = useRef<number | null>(null);
   const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
@@ -77,7 +79,9 @@ export default function BulkCapturePage() {
    *  shown on the meter so threshold tuning stays evidence-based. */
   const peakRef = useRef(0);
   const lastPeakRef = useRef(0);
-  const capturingRef = useRef(false);
+  /** Uploads currently in the air; the shutter only waits at the cap. */
+  const inFlightRef = useRef(0);
+  const lowestFailedSeqRef = useRef<number | null>(null);
   /** True only while actually capturing (not preview): the tick loop and
    *  meter run in both modes, the shutter only in this one. */
   const detectionActiveRef = useRef(false);
@@ -239,33 +243,44 @@ export default function BulkCapturePage() {
   }
 
   const captureAndUpload = useCallback(() => {
-    if (capturingRef.current) return;
     const video = videoRef.current;
-    const canvas = captureCanvasRef.current;
-    if (!video || !canvas || video.videoWidth === 0) return;
-    capturingRef.current = true;
+    if (!video || video.videoWidth === 0) return;
+    if (inFlightRef.current >= MAX_IN_FLIGHT) return;
 
+    // Claim the position NOW. Uploads run in PARALLEL — a chute feeds a
+    // card every ~700ms and an upload takes longer than that, so the old
+    // serial flow (shutter locked until the last photo landed) capped the
+    // whole rig at one card per round trip. Claiming seq at capture time
+    // is what keeps parallel uploads honestly numbered.
+    const seq = seqRef.current;
+    seqRef.current += 1;
+
+    // A fresh canvas per capture: the next card can arrive and be drawn
+    // before this one's blob has finished encoding.
+    const canvas = document.createElement("canvas");
     const { sx, sy, sw, sh } = cropOf(video);
     canvas.width = Math.round(sw);
     canvas.height = Math.round(sh);
     const ctx = canvas.getContext("2d");
     if (!ctx) {
-      capturingRef.current = false;
+      // Refund the claim only if nothing claimed after us — a numbering
+      // hole would shift the pass-2 pairing of everything behind it.
+      if (seqRef.current === seq + 1) seqRef.current = seq;
       return;
     }
     ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     const thumbnail = canvas.toDataURL("image/jpeg", 0.4);
 
+    inFlightRef.current += 1;
     canvas.toBlob(
       (blob) => {
         if (!blob) {
-          capturingRef.current = false;
+          inFlightRef.current -= 1;
+          if (seqRef.current === seq + 1) seqRef.current = seq;
           return;
         }
-        const seq = seqRef.current;
         uploadFrame(blob, seq)
           .then((body) => {
-            seqRef.current += 1;
             setCardsCaptured((c) => c + 1);
             setLog((l) =>
               [{ seq, ok: true, message: `uploaded (ordinal ${body.ordinal})`, thumbnail }, ...l].slice(
@@ -277,12 +292,16 @@ export default function BulkCapturePage() {
           .catch((e) => {
             const message = e instanceof Error ? e.message : String(e);
             setLog((l) => [{ seq, ok: false, message, thumbnail }, ...l].slice(0, 20));
+            // Resume must restart at the FIRST hole, not past the frames
+            // claimed after it while uploads overlapped.
+            lowestFailedSeqRef.current = Math.min(lowestFailedSeqRef.current ?? seq, seq);
+            seqRef.current = lowestFailedSeqRef.current;
             setHaltMessage(message);
             setPhase("halted");
             stopEverything();
           })
           .finally(() => {
-            capturingRef.current = false;
+            inFlightRef.current -= 1;
           });
       },
       "image/jpeg",
@@ -320,12 +339,10 @@ export default function BulkCapturePage() {
         `motion ${(diff * 100).toFixed(1)}% · peak ${(peak * 100).toFixed(0)}% · ${
           !detectionActiveRef.current
             ? "preview — not capturing"
-            : capturingRef.current
-              ? "uploading"
-              : armedRef.current
-                ? "armed — will capture when calm"
-                : "watching"
-        }`;
+            : armedRef.current
+              ? "armed — will capture when calm"
+              : "watching"
+        }${inFlightRef.current > 0 ? ` · ${inFlightRef.current} uploading` : ""}`;
     }
     if (!detectionActiveRef.current) return;
 
@@ -343,9 +360,9 @@ export default function BulkCapturePage() {
 
     stableTicksRef.current += 1;
     if (!armedRef.current || stableTicksRef.current < STABLE_TICKS_NEEDED) return;
-    // An upload is in flight: stay armed with the counter satisfied, and
-    // fire on the first tick after the pipe frees up.
-    if (capturingRef.current) return;
+    // At the parallel-upload cap: stay armed with the counter satisfied,
+    // and fire on the first tick with room in the pipe.
+    if (inFlightRef.current >= MAX_IN_FLIGHT) return;
     armedRef.current = false;
     stableTicksRef.current = 0;
     lastPeakRef.current = peakRef.current;
@@ -359,6 +376,7 @@ export default function BulkCapturePage() {
       return;
     }
     setSetupError(null);
+    lowestFailedSeqRef.current = null;
     jobRef.current = job.trim();
     keyRef.current = key.trim();
     passRef.current = pass;
@@ -655,7 +673,6 @@ export default function BulkCapturePage() {
         )}
 
         <canvas ref={detectCanvasRef} width={DETECT_W} height={DETECT_H} className="hidden" />
-        <canvas ref={captureCanvasRef} className="hidden" />
       </div>
     </main>
   );
