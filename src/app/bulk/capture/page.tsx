@@ -512,8 +512,8 @@ export default function BulkCapturePage() {
                   value={pass}
                   onChange={(e) => setPass(Number(e.target.value) as 1 | 2)}
                 >
-                  <option value={1}>1 (feed order)</option>
-                  <option value={2}>2 (verification — any order)</option>
+                  <option value={1}>1 (the only pass you need)</option>
+                  <option value={2}>2 (optional — any order)</option>
                 </select>
               </label>
               <label className="flex-1 text-sm">

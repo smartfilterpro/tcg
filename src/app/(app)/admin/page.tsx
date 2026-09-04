@@ -2792,8 +2792,10 @@ function BulkScanPanel() {
     else {
       if (action === "finalize" && json.result) {
         setMessage(
-          `Paired ${json.result.total} cards: ${json.result.verified} verified, ${json.result.review} for review` +
-            (json.result.aligned ? "." : " — some photos had no partner in the other pass; they're in the review queue.")
+          `${json.result.total} cards: ${json.result.verified} verified, ${json.result.review} for review` +
+            (json.result.pass2Count > 0 && !json.result.aligned
+              ? " — some photos had no partner in the other pass; they're in the review queue."
+              : ".")
         );
       }
       if (action === "upload") setMessage(`Loaded ${json.cards} cards (${json.lines} lines) into ${json.member}'s collection.`);
@@ -2846,11 +2848,12 @@ function BulkScanPanel() {
         <h2 className="mb-2 font-display text-[17px] font-bold">📦 Mail-in scanning jobs</h2>
         <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
           One job per customer stack. The rig posts one photo per card with the job&apos;s device
-          key — pass 1 in feed order, then pass 2 as a second look, fed in either direction.
-          Finalize pairs the two passes by what the cards are, so a card missed in one pass only
-          sends itself to review. Two passes agreeing on the
-          same catalogue card is what verifies a card with no human; everything else lands in
-          the review queue below. AI spend is metered on the job, never on a member.
+          key, and one pass is enough: every photo gets two AI looks — one to identify the card,
+          then an independent second look that must confirm the card AND its finish (holo,
+          reverse pattern, stamp) before it counts as verified. Feeding the stack again as an
+          optional pass 2 (either direction; Finalize pairs by content) verifies by
+          photo-vs-photo agreement instead. Everything unconfirmed lands in the review queue
+          below. AI spend is metered on the job, never on a member.
         </p>
         <div className="flex flex-wrap gap-2">
           <input
@@ -2880,8 +2883,8 @@ function BulkScanPanel() {
             </div>
             <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 1)}</div>
             <div className="mt-1.5 text-brand-ink4">
-              Pass 2 (same job/key, for after flipping the pile — save this now, the key won&apos;t be
-              shown again once you leave this page):
+              Optional pass 2 (same job/key, only if you want photo-vs-photo verification — save
+              this now, the key won&apos;t be shown again once you leave this page):
             </div>
             <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 2)}</div>
           </div>
@@ -3049,7 +3052,7 @@ function BulkScanPanel() {
                         Pass 1 read: <b>{r.read1?.error ?? `${r.read1?.name ?? "—"} #${r.read1?.number ?? "?"}`}</b>
                       </div>
                       <div>
-                        Pass 2 read: <b>{r.read2?.error ?? (r.read2 ? `${r.read2.name ?? "—"} #${r.read2.number ?? "?"}` : "no pass 2")}</b>
+                        Pass 2 read: <b>{r.read2?.error ?? (r.read2 ? `${r.read2.name ?? "—"} #${r.read2.number ?? "?"}` : "no pass 2 (single-pass job)")}</b>
                       </div>
                       <div className="mt-1">
                         System pick:{" "}

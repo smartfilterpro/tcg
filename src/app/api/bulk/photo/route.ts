@@ -169,11 +169,18 @@ export async function POST(req: Request) {
     const rowId = row.id as string;
 
     // Identify in the background; the rig gets its 200 and keeps feeding.
+    // Pass-1 photos get the full treatment — identify, then a second
+    // independent look that must confirm the card and the finish — because
+    // a single pass is the normal flow now. Pass-2 photos (optional) keep
+    // the quick read: their verification is agreement with pass 1.
     const adminUserId = (job.created_by as string | null) ?? "";
-    void identifyPhoto(admin, jobId, adminUserId, {
-      data: buffer.toString("base64"),
-      mediaType: contentType,
-    }).then(async (read) => {
+    void identifyPhoto(
+      admin,
+      jobId,
+      adminUserId,
+      { data: buffer.toString("base64"), mediaType: contentType },
+      { check: pass === 1 }
+    ).then(async (read) => {
       await admin
         .from("bulk_cards")
         .update(
