@@ -2779,7 +2779,7 @@ function BulkScanPanel() {
     setError(null);
     setMessage(null);
     const method =
-      action === "finalize" || action === "reopen" || action === "cancel" || action === "rotate_key"
+      action === "finalize" || action === "reread" || action === "reopen" || action === "cancel" || action === "rotate_key"
         ? "PATCH"
         : "POST";
     const res = await fetch(`/api/admin/bulk/${jobId}`, {
@@ -2796,6 +2796,13 @@ function BulkScanPanel() {
             (json.result.pass2Count > 0 && !json.result.aligned
               ? " — some photos had no partner in the other pass; they're in the review queue."
               : ".")
+        );
+      }
+      if (action === "reread" && json.result) {
+        setMessage(
+          `Re-read ${json.reread} photo${json.reread === 1 ? "" : "s"}` +
+            (json.remaining > 0 ? ` (${json.remaining} still queued — run it again)` : "") +
+            ` — now ${json.result.verified} verified, ${json.result.review} for review.`
         );
       }
       if (action === "upload") setMessage(`Loaded ${json.cards} cards (${json.lines} lines) into ${json.member}'s collection.`);
@@ -2909,6 +2916,16 @@ function BulkScanPanel() {
                     {j.status !== "uploaded" && j.status !== "cancelled" && (
                       <button className="btn text-xs text-brand-ink4 hover:bg-slate-100" disabled={busy} onClick={() => jobAction(j.id, "finalize")}>
                         {j.status === "ready" ? "Re-pair" : "Finalize"}
+                      </button>
+                    )}
+                    {j.status === "ready" && (
+                      <button
+                        className="btn text-xs text-brand-ink4 hover:bg-slate-100"
+                        disabled={busy}
+                        title="Run the AI again on every photo still in review — no re-feeding needed"
+                        onClick={() => jobAction(j.id, "reread")}
+                      >
+                        Re-read
                       </button>
                     )}
                     {j.needsReview > 0 && (

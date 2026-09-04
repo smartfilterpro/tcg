@@ -159,9 +159,12 @@ const CHECK_SCHEMA = {
     same_card: {
       type: "boolean",
       description:
-        "Does the photograph really show EXACTLY the named printing — same name, " +
-        "same collector number where legible, same set where identifiable? " +
-        "False if anything printed on the card contradicts it.",
+        "False ONLY when something legible in the photo CONTRADICTS the " +
+        "identification — a different name, a different collector number, a " +
+        "visibly different card. A detail you cannot make out (an illegible " +
+        "set name, a blurry symbol) is NOT a contradiction: the identification " +
+        "came from a catalogue match on what IS legible, and doubt about the " +
+        "rest belongs in 'concern', with same_card still true.",
     },
     finish: {
       type: "string",
@@ -201,9 +204,15 @@ machine. A first read identified the photographed card; your job is to
 catch its mistakes before the card is filed with no human ever checking.
 Judge INDEPENDENTLY from the photograph: does it truly show the named
 printing, and — examined from scratch, foil area specifically — what is
-the finish, the reverse-holo pattern, and any gold stamp? Confirming a
-wrong answer is the one failure this machine cannot afford; disagreeing
-when you see a real discrepancy is exactly what you are for.`;
+the finish, the reverse-holo pattern, and any gold stamp?
+
+Disagreeing when you SEE a real discrepancy is exactly what you are for:
+a name or number that reads differently, a finish the first look got
+wrong. But doubt is not disagreement. You are not asked to re-prove the
+identification from nothing — a set name you cannot make out, a symbol
+too blurry to name, a card photographed upside down are not evidence
+against it. Reject what contradicts the photo; confirm what nothing
+contradicts; put what you merely couldn't verify in 'concern'.`;
 
 /** Read one photo and resolve it against the catalogue. Charges the JOB,
  *  never a member: usage is logged under the admin who created the job with

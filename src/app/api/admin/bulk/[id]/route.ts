@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { BULK_BUCKET, finalizeJob, type BulkRead } from "@/lib/bulkScan";
+import { BULK_BUCKET, finalizeJob, identifyPhoto, type BulkRead } from "@/lib/bulkScan";
 import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 300;
@@ -138,7 +138,11 @@ export async function PATCH(req: Request, { params }: Params) {
       note?: string;
     };
     const admin = createAdminClient();
-    const { data: job } = await admin.from("bulk_jobs").select("id, status").eq("id", id).maybeSingle();
+    const { data: job } = await admin
+      .from("bulk_jobs")
+      .select("id, status, created_by")
+      .eq("id", id)
+      .maybeSingle();
     if (!job) return NextResponse.json({ error: "Job not found." }, { status: 404 });
 
     if (body.row) {
@@ -176,6 +180,57 @@ export async function PATCH(req: Request, { params }: Params) {
         .update({ status: "ready", updated_at: new Date().toISOString() })
         .eq("id", id);
       return NextResponse.json({ ok: true, result });
+    }
+    if (body.action === "reread") {
+      // Second chances without re-feeding cardboard: the photos are already
+      // in storage, so every row still stuck in review gets a fresh
+      // identify-and-check with whatever the reader has learned since it
+      // was shot. Batched with a time budget — a big queue takes several
+      // clicks, each one reporting how many are left.
+      if (job.status === "uploaded") {
+        return NextResponse.json({ error: "Already uploaded — undo first." }, { status: 409 });
+      }
+      const { data: stuck } = await admin
+        .from("bulk_cards")
+        .select("id, seq, pass1_path")
+        .eq("job_id", id)
+        .eq("confidence", "review")
+        .eq("reviewed", false)
+        .not("pass1_path", "is", null)
+        .order("seq");
+      const rows = (stuck ?? []) as Array<{ id: string; seq: number; pass1_path: string }>;
+      const adminUserId = (job.created_by as string | null) ?? "";
+      const started = Date.now();
+      let done = 0;
+      for (let i = 0; i < rows.length; i += 4) {
+        if (Date.now() - started > 220_000) break;
+        await Promise.all(
+          rows.slice(i, i + 4).map(async (r) => {
+            const { data: file } = await admin.storage.from(BULK_BUCKET).download(r.pass1_path);
+            if (!file) return;
+            const buf = Buffer.from(await file.arrayBuffer());
+            const mediaType = r.pass1_path.endsWith(".png")
+              ? "image/png"
+              : r.pass1_path.endsWith(".webp")
+                ? "image/webp"
+                : "image/jpeg";
+            const read = await identifyPhoto(
+              admin,
+              id,
+              adminUserId,
+              { data: buf.toString("base64"), mediaType },
+              { check: true }
+            );
+            await admin
+              .from("bulk_cards")
+              .update({ pass1_read: read, updated_at: new Date().toISOString() })
+              .eq("id", r.id);
+            done++;
+          })
+        );
+      }
+      const result = await finalizeJob(admin, id);
+      return NextResponse.json({ ok: true, reread: done, remaining: rows.length - done, result });
     }
     if (body.action === "reopen") {
       if (job.status === "uploaded") {
