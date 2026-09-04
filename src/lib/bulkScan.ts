@@ -54,6 +54,9 @@ export interface BulkRead {
    *  no second look ran (an old read, or a pass-2 photo). */
   checked?: boolean;
   checkNote?: string | null;
+  /** When cardId is null: WHY the catalogue match came up empty, in words a
+   *  reviewer can act on. */
+  matchNote?: string | null;
   error?: string;
 }
 
@@ -305,8 +308,96 @@ export async function identifyPhoto(
       finish: parsed.finish ?? "normal",
       hint,
     };
-    const matched: BulkRead = { ...read, ...(await matchCatalogue(admin, read, hint)) };
-    if (!opts?.check || !matched.cardId) return matched;
+    const { candidates, ...matchResult } = await matchCatalogue(admin, read, hint);
+    let matched: BulkRead = { ...read, ...matchResult };
+    if (!opts?.check) return matched;
+
+    // Arbitration: the deterministic matcher refused but had a shortlist.
+    // Rules can't tell two sets apart from a name and a number — eyes can.
+    // The schema's enum is the candidate ids, so the model can only pick a
+    // row we actually hold, or "none"; its pick still faces the second
+    // look below before anything verifies.
+    if (!matched.cardId && candidates && candidates.length > 0) {
+      try {
+        const arb = await client.messages.create({
+          model: SCAN_MODEL,
+          max_tokens: 200,
+          thinking: { type: "disabled" },
+          system:
+            "You match a photographed trading card to a catalogue. The automatic " +
+            "matcher narrowed it to the candidates listed but could not choose. " +
+            "Look closely at the photo — the collector number line, set symbol, " +
+            "artwork, rarity mark — and answer with the id of the candidate that " +
+            "IS this exact printing. Answer \"none\" unless one of them clearly is.",
+          output_config: {
+            format: {
+              type: "json_schema",
+              schema: {
+                type: "object",
+                properties: {
+                  card_id: {
+                    type: "string",
+                    enum: [...candidates.map((c) => c.id), "none"],
+                    description: "The candidate that is the photographed card, or \"none\".",
+                  },
+                },
+                required: ["card_id"],
+                additionalProperties: false,
+              },
+            },
+          },
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: image.mediaType as "image/jpeg" | "image/png" | "image/webp",
+                    data: image.data,
+                  },
+                },
+                {
+                  type: "text",
+                  text:
+                    `The read saw: ${read.name} #${read.number || "?"}` +
+                    `${read.set_name ? ` (${read.set_name})` : ""}.\nCandidates:\n` +
+                    candidates
+                      .map(
+                        (c) =>
+                          `${c.id} — ${c.name} #${c.number}` +
+                          `${c.set_printed_total ? `/${c.set_printed_total}` : ""}` +
+                          `${c.set_name ? ` · ${c.set_name}` : ""}${c.rarity ? ` · ${c.rarity}` : ""}`
+                      )
+                      .join("\n"),
+                },
+              ],
+            },
+          ],
+        });
+        logUsage(arb.usage);
+        const ablock = arb.content.find((b) => b.type === "text");
+        const answer = JSON.parse(ablock && ablock.type === "text" ? ablock.text : "{}") as {
+          card_id?: string;
+        };
+        const pick = candidates.find((c) => c.id === answer.card_id);
+        if (pick) {
+          matched = {
+            ...matched,
+            cardId: pick.id,
+            cardName: pick.name,
+            cardNumber: pick.number,
+            cardSet: pick.set_name,
+            variant: variantFor(read.game === "mtg", pick, hint),
+            matchNote: null,
+          };
+        }
+      } catch {
+        // Arbitration is a bonus try; its failure keeps the honest "none".
+      }
+    }
+    if (!matched.cardId) return matched;
 
     // The second look. Same photo, fresh eyes, and the first answer on the
     // table to be confirmed or torn up. A check failure must not cost the
@@ -391,14 +482,32 @@ export async function identifyPhoto(
   }
 }
 
+/** A catalogue row a failed match wants a second opinion on. */
+type MatchCandidate = {
+  id: string;
+  name: string;
+  number: string;
+  set_name: string | null;
+  set_printed_total: number | null;
+  rarity: string | null;
+  prices: Record<string, number | null> | null;
+};
+
 /** Same matching discipline as the CSV loader: exactly one catalogue card
  *  or nothing — a guessed printing would sail through as "verified" if the
- *  guess happened twice. */
+ *  guess happened twice. When it comes up empty it now says WHY
+ *  (matchNote) and hands back the rows it couldn't choose between
+ *  (candidates), so the caller can put the photo and the shortlist in
+ *  front of the model instead of shrugging. */
 async function matchCatalogue(
   admin: SupabaseClient,
   read: BulkRead,
   hint: string
-): Promise<Pick<BulkRead, "cardId" | "cardName" | "cardNumber" | "cardSet" | "variant">> {
+): Promise<
+  Pick<BulkRead, "cardId" | "cardName" | "cardNumber" | "cardSet" | "variant" | "matchNote"> & {
+    candidates?: MatchCandidate[];
+  }
+> {
   const none = {
     cardId: null,
     cardName: null,
@@ -407,23 +516,16 @@ async function matchCatalogue(
     variant: undefined,
   };
   const name = (read.name ?? "").trim();
-  if (!name) return none;
+  if (!name) return { ...none, matchNote: "the read produced no card name" };
   // rarity and prices come along because the finish is decided here — the
   // card's own printings are what make "reverse holo" mean something.
   const { data } = await admin
     .from("cards")
-    .select("id, name, number, set_name, rarity, prices")
+    .select("id, name, number, set_name, set_printed_total, rarity, prices")
     .ilike("name", `%${name.replace(/[%_]/g, " ")}%`)
     .limit(60);
   const wanted = normalizeForSearch(name);
-  const rows = (data ?? []) as Array<{
-    id: string;
-    name: string;
-    number: string;
-    set_name: string | null;
-    rarity: string | null;
-    prices: Record<string, number | null> | null;
-  }>;
+  const rows = (data ?? []) as MatchCandidate[];
   // Only the read's own game gets a say. The catalogue holds both games in
   // one table, and an unfiltered name match let a Magic "Mountain" court
   // whatever shared the name — id prefix rather than the game column, so
@@ -443,21 +545,46 @@ async function matchCatalogue(
     const n = normalizeForSearch(c.name);
     return n === wanted || (n.startsWith(wanted) && isSpecificPrinting(c.name));
   });
-  const printed = (read.number ?? "").split("/")[0].trim();
+  const nameHits = hits;
+  const [printedRaw, totalRaw] = (read.number ?? "").split("/");
+  const printed = (printedRaw ?? "").trim();
   if (printed) {
     const key = numberKey(printed);
     const byNumber = hits.filter((c) => numberKey(c.number) === key);
     if (byNumber.length > 0) hits = byNumber;
+  }
+  // The denominator is a set fingerprint the read carries for free:
+  // "002/086" can only come from a set that printed 86 cards. It's what
+  // picks the right Kakuna when the read couldn't name the set — the same
+  // name+number in another set has a different total.
+  const total = parseInt((totalRaw ?? "").trim(), 10);
+  if (Number.isFinite(total) && total > 0 && hits.length > 1) {
+    const byTotal = hits.filter((c) => c.set_printed_total === total);
+    if (byTotal.length > 0) hits = byTotal;
   }
   if (read.set_name && hits.length > 1) {
     const set = normalizeForSearch(read.set_name);
     const bySet = hits.filter((c) => normalizeForSearch(c.set_name ?? "").includes(set));
     if (bySet.length > 0) hits = bySet;
   }
-  if (hits.length === 0) return none;
+  if (hits.length === 0) {
+    return nameHits.length === 0
+      ? { ...none, matchNote: `nothing named "${name}" in the catalogue` }
+      : {
+          ...none,
+          matchNote: `"${name}" is in the catalogue but not with number ${printed || "?"}`,
+          candidates: nameHits.slice(0, 12),
+        };
+  }
   // Different collector numbers still means ambiguity and still refuses.
   const keys = new Set(hits.map((c) => numberKey(c.number)));
-  if (keys.size > 1) return none;
+  if (keys.size > 1) {
+    return {
+      ...none,
+      matchNote: `"${name}" matches several collector numbers — the set couldn't be pinned down`,
+      candidates: hits.slice(0, 12),
+    };
+  }
 
   // Same name and number is no longer one card: the sync creates a row per
   // printing, so a Poké Ball reverse holo has its own. Pick the one the
@@ -467,7 +594,17 @@ async function matchCatalogue(
   // Pokémon institution; Magic's one-row-per-printing means any survivor
   // of the checks above is already the card.)
   const picked = isMtg ? hits[0] : pickPrinting(hits, hint);
-  if (!picked) return none;
+  if (!picked) {
+    const sets = [...new Set(hits.map((c) => c.set_name ?? "?"))];
+    return {
+      ...none,
+      matchNote:
+        sets.length > 1
+          ? `"${name}" #${printed || "?"} exists in ${sets.length} sets (${sets.slice(0, 3).join("; ")}${sets.length > 3 ? "; …" : ""}) — couldn't tell which`
+          : `several printings of "${name}" #${printed || "?"} fit and none stood out`,
+      candidates: hits.slice(0, 12),
+    };
+  }
   return {
     cardId: picked.id,
     cardName: picked.name,
@@ -477,8 +614,17 @@ async function matchCatalogue(
     // exists as a reverse holo can't be recorded as a plain one, and a row
     // that IS the Poké Ball printing takes its own finish rather than the
     // pattern label. Magic speaks foil/normal instead.
-    variant: isMtg ? (/holo/i.test(hint) ? "foil" : "normal") : defaultVariantFor(picked, hint),
+    variant: variantFor(isMtg, picked, hint),
   };
+}
+
+/** One rule for both matchers: what finish label a picked row gets. */
+function variantFor(
+  isMtg: boolean,
+  picked: { name?: string; rarity?: string | null; prices?: Record<string, number | null> | null },
+  hint: string
+): string {
+  return isMtg ? (/holo/i.test(hint) ? "foil" : "normal") : defaultVariantFor(picked, hint);
 }
 
 export interface PairingResult {
@@ -694,12 +840,14 @@ export async function finalizeJob(admin: SupabaseClient, jobId: string): Promise
             }
             if (p1?.error || p2?.error) return `read failed: ${p1?.error ?? p2?.error}`;
             if (partner) {
-              if (p1?.cardId == null || p2?.cardId == null) return "no exact catalogue match";
+              if (p1?.cardId == null || p2?.cardId == null) {
+                return p1?.matchNote ?? p2?.matchNote ?? "no exact catalogue match";
+              }
               return p1.cardId !== p2.cardId
                 ? "passes disagree on the card"
                 : "passes disagree on the finish";
             }
-            if (p1?.cardId == null) return "no exact catalogue match";
+            if (p1?.cardId == null) return p1?.matchNote ?? "no exact catalogue match";
             if (p1.checked === false) return p1.checkNote ?? "the second look couldn't confirm the match";
             if (pass2Count > 0) return "no pass-2 photo pairs with this card — missed during pass 2?";
             // A read from before single-look verification existed.
