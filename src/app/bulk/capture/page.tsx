@@ -16,6 +16,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const MOTION_THRESHOLD = 18; // 0-255 avg luma diff; tune against real cards/lighting
 const STABLE_TICKS_NEEDED = 4; // consecutive quiet ticks before a capture fires
+// After the motion settles, the scene must actually DIFFER from what it was
+// before the motion began, or nothing is captured. A hand reaching over the
+// table (usually for the Stop button) is motion followed by the exact same
+// scene — which used to earn every session a phantom duplicate photo of the
+// last card. A genuinely new card, even another copy of the same Mountain,
+// lands at a different angle and offset and clears this easily.
+const SCENE_CHANGE_MIN = 6;
 const TICK_MS = 120;
 const DETECT_W = 160;
 const DETECT_H = 120;
@@ -51,6 +58,9 @@ export default function BulkCapturePage() {
   const streamRef = useRef<MediaStream | null>(null);
   const tickHandleRef = useRef<number | null>(null);
   const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
+  /** What the table looked like just before the current disturbance began —
+   *  the reference for "did anything actually change?". */
+  const preMotionFrameRef = useRef<Uint8ClampedArray | null>(null);
   const armedRef = useRef(false);
   const stableTicksRef = useRef(0);
   const capturingRef = useRef(false);
@@ -213,7 +223,11 @@ export default function BulkCapturePage() {
   }, [stopEverything]);
 
   const tick = useCallback(() => {
-    if (capturingRef.current) return;
+    // Detection keeps running DURING an upload — only the trigger waits.
+    // Skipping the whole tick made capture timing feel random: a card
+    // placed while the previous photo was still uploading was never seen
+    // (its motion happened during the blackout), and the stale previous
+    // frame caused a spurious "motion" spike the moment ticks resumed.
     const video = videoRef.current;
     const canvas = detectCanvasRef.current;
     if (!video || !canvas || video.readyState < 2) return;
@@ -229,17 +243,25 @@ export default function BulkCapturePage() {
     const diff = frameDiff(prev, frame);
 
     if (diff > MOTION_THRESHOLD) {
+      if (!armedRef.current) preMotionFrameRef.current = prev;
       armedRef.current = true;
       stableTicksRef.current = 0;
       return;
     }
 
     stableTicksRef.current += 1;
-    if (armedRef.current && stableTicksRef.current >= STABLE_TICKS_NEEDED) {
-      armedRef.current = false;
-      stableTicksRef.current = 0;
-      captureAndUpload();
-    }
+    if (!armedRef.current || stableTicksRef.current < STABLE_TICKS_NEEDED) return;
+    // An upload is in flight: stay armed with the counter satisfied, and
+    // fire on the first tick after the pipe frees up.
+    if (capturingRef.current) return;
+    armedRef.current = false;
+    stableTicksRef.current = 0;
+    const before = preMotionFrameRef.current;
+    preMotionFrameRef.current = null;
+    // Settled back to the same scene: a hand passed over, nothing changed —
+    // not a card. See SCENE_CHANGE_MIN.
+    if (before && frameDiff(before, frame) < SCENE_CHANGE_MIN) return;
+    captureAndUpload();
   }, [captureAndUpload]);
 
   async function startCapture() {

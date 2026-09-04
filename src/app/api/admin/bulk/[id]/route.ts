@@ -80,6 +80,52 @@ export async function GET(req: Request, { params }: Params) {
  *  { action: "cancel" }                            close it out
  *  { action: "rotate_key" }                        new device key, old one dead immediately
  *  { row, cardId?, variant?, note? }               a human's verdict on a row */
+/** DELETE — remove a job outright: its photos in storage, its card rows,
+ *  and the job itself, in that order so a failure partway leaves the job
+ *  visible (and re-deletable) rather than orphaning files under a job
+ *  nobody can see. Member collections are untouched: an uploaded job's
+ *  cards were written to the member and stay theirs — deleting the job
+ *  deletes the paperwork, not the delivery (that's what Undo upload is
+ *  for, before deleting). */
+export async function DELETE(_req: Request, { params }: Params) {
+  try {
+    await requireAdmin();
+    const { id } = await params;
+    const admin = createAdminClient();
+    const { data: job } = await admin.from("bulk_jobs").select("id").eq("id", id).maybeSingle();
+    if (!job) return NextResponse.json({ error: "Job not found." }, { status: 404 });
+
+    // Storage first. list() pages at 100 by default; loop each pass folder
+    // until it runs dry — an 8,000-card job holds up to 16k files.
+    for (const folder of [`${id}/pass1`, `${id}/pass2`, id]) {
+      for (;;) {
+        const { data: files } = await admin.storage
+          .from(BULK_BUCKET)
+          .list(folder, { limit: 100 });
+        // Subfolders list with a null id; only real files get removed, and
+        // an all-folders page breaks the loop like an empty one.
+        const paths = (files ?? [])
+          .filter((f) => f.name && (f as { id?: string | null }).id != null)
+          .map((f) => `${folder}/${f.name}`);
+        if (paths.length === 0) break;
+        const { error: rmErr } = await admin.storage.from(BULK_BUCKET).remove(paths);
+        if (rmErr) throw rmErr;
+      }
+    }
+
+    const { error: rowsErr } = await admin.from("bulk_cards").delete().eq("job_id", id);
+    if (rowsErr) throw rowsErr;
+    const { error: jobErr } = await admin.from("bulk_jobs").delete().eq("id", id);
+    if (jobErr) throw jobErr;
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return errorJson(err, "Couldn't delete the job");
+  }
+}
+
 export async function PATCH(req: Request, { params }: Params) {
   try {
     await requireAdmin();

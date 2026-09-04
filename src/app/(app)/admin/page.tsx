@@ -2967,6 +2967,32 @@ function BulkScanPanel() {
                     >
                       Rotate key
                     </button>
+                    <button
+                      className="btn text-xs text-red-600 hover:bg-red-50"
+                      disabled={busy}
+                      onClick={async () => {
+                        if (
+                          !confirm(
+                            `Delete "${j.label}" outright? Its photos and rows are removed for good. ` +
+                              `Cards already added to a member's collection stay theirs (use Undo upload first if that's not wanted).`
+                          )
+                        ) {
+                          return;
+                        }
+                        setBusy(true);
+                        setError(null);
+                        const res = await fetch(`/api/admin/bulk/${j.id}`, { method: "DELETE" });
+                        const json = await res.json().catch(() => ({}));
+                        if (!res.ok) setError(json.error ?? "Couldn't delete the job");
+                        else {
+                          if (open === j.id) setOpen(null);
+                          load();
+                        }
+                        setBusy(false);
+                      }}
+                    >
+                      Delete
+                    </button>
                     {j.status !== "cancelled" && j.status !== "uploaded" && (
                       <button
                         className="btn text-xs text-red-600 hover:bg-red-50"

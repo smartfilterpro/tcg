@@ -96,6 +96,11 @@ const READ_SCHEMA = {
     },
   },
   required: ["name", "number", "set_name", "finish", "pattern", "stamp", "readable"],
+  // The structured-output API refuses object schemas without this — every
+  // bulk read was 400ing ("'additionalProperties' must be explicitly set
+  // to false"), and unlike the aiJson surfaces this path has no
+  // schema-less retry, so the whole pipeline read nothing.
+  additionalProperties: false,
 } as const;
 
 const READ_SYSTEM = `You read a single Pokémon TCG card from one photograph
