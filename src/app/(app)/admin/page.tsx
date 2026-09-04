@@ -3168,6 +3168,23 @@ function BulkScanPanel() {
                         >
                           Save as id
                         </button>
+                        <button
+                          className="btn text-xs text-red-600 hover:bg-red-50"
+                          title="For shutter misfires — a hand, an empty bucket, a blank frame. Removes the photo and the row."
+                          onClick={async () => {
+                            if (!open) return;
+                            if (!confirm(`Delete card #${r.seq}? Its photo is removed from the job for good.`)) return;
+                            const res = await fetch(`/api/admin/bulk/${open}?row=${r.id}`, { method: "DELETE" });
+                            const json = await res.json().catch(() => ({}));
+                            if (!res.ok) setError(json.error ?? "Couldn't delete the row");
+                            else {
+                              loadRows(open, rowFilter, 0);
+                              load();
+                            }
+                          }}
+                        >
+                          Not a card — delete
+                        </button>
                       </div>
                       {(hits[r.id]?.length ?? 0) > 0 && (
                         <div className="mt-2 flex flex-col gap-1">
