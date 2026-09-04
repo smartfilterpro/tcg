@@ -1,12 +1,15 @@
 // The mail-in scanning service's brain: read one card photo, match it to
-// the catalogue, pair the two passes, and decide who needs a human.
+// the catalogue, verify the answer, and decide who needs a human.
 //
 // Confidence is deliberately binary-by-agreement, not a probability the
-// model reports about itself. A card is VERIFIED only when two independent
-// photographs, taken on different passes through the feeder, both resolve
-// to the same catalogue card. Everything else — disagreement, a failed
-// read, a missing pass — is a review row. Self-reported model confidence
-// is decoration; two matching reads of two different photos is evidence.
+// model reports about itself. A card is VERIFIED when two independent
+// looks agree: normally the identifying read plus a second, adversarial
+// examination of the same photo (confirm the card, re-judge the finish
+// from scratch); or, when the feeder runs an optional second pass, two
+// photographs resolving to the same catalogue card. Everything else —
+// disagreement, a failed read, an unconfirmed answer — is a review row.
+// Self-reported model confidence is decoration; two matching looks is
+// evidence.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
@@ -45,6 +48,12 @@ export interface BulkRead {
   cardName?: string | null;
   cardNumber?: string | null;
   cardSet?: string | null;
+  /** Did the second, independent look at the same photo confirm both the
+   *  identification and the finish? true verifies a single-pass row on its
+   *  own; false sends it to review with checkNote saying why; absent means
+   *  no second look ran (an old read, or a pass-2 photo). */
+  checked?: boolean;
+  checkNote?: string | null;
   error?: string;
 }
 
@@ -141,15 +150,73 @@ of this machine is that nobody has to check its work afterwards. Look at the
 foil area specifically, not the artwork. If you genuinely cannot tell, say
 'unknown' — that is a useful answer and a wrong ball is not.`;
 
+const CHECK_SCHEMA = {
+  type: "object",
+  properties: {
+    same_card: {
+      type: "boolean",
+      description:
+        "Does the photograph really show EXACTLY the named printing — same name, " +
+        "same collector number where legible, same set where identifiable? " +
+        "False if anything printed on the card contradicts it.",
+    },
+    finish: {
+      type: "string",
+      enum: ["normal", "holofoil", "reverse_holofoil"],
+      description:
+        "Your OWN finish call, examined from scratch. 'holofoil': the artwork window " +
+        "is foil (or the whole card is, as on full arts, ex cards, and foil Magic cards). " +
+        "'reverse_holofoil': Pokémon only — matte artwork, shiny card body. 'normal': no " +
+        "foil. Require positive evidence — rainbow colour shift or an etched pattern; " +
+        "glare from the rig's lights is not foil.",
+    },
+    pattern: {
+      type: "string",
+      enum: ["standard", "poke_ball", "master_ball", "friend_ball", "love_ball", "other_ball", "none", "unknown"],
+      description:
+        "ONLY when finish is reverse_holofoil: the motif etched into the foil. " +
+        "'none' when the card isn't reverse holo (always 'none' for Magic).",
+    },
+    stamp: {
+      type: "string",
+      enum: ["none", "pokemon_center", "prerelease", "staff", "unknown"],
+      description: "Gold foil stamp on the artwork, or 'none'.",
+    },
+    concern: {
+      type: "string",
+      description:
+        "Empty when confident. Otherwise ONE short sentence: exactly what made you " +
+        "unsure or disagree.",
+    },
+  },
+  required: ["same_card", "finish", "pattern", "stamp", "concern"],
+  additionalProperties: false,
+} as const;
+
+const CHECK_SYSTEM = `You are the second set of eyes on a card-scanning
+machine. A first read identified the photographed card; your job is to
+catch its mistakes before the card is filed with no human ever checking.
+Judge INDEPENDENTLY from the photograph: does it truly show the named
+printing, and — examined from scratch, foil area specifically — what is
+the finish, the reverse-holo pattern, and any gold stamp? Confirming a
+wrong answer is the one failure this machine cannot afford; disagreeing
+when you see a real discrepancy is exactly what you are for.`;
+
 /** Read one photo and resolve it against the catalogue. Charges the JOB,
  *  never a member: usage is logged under the admin who created the job with
  *  the bulk_scan endpoint tag, and the dollar cost is added to the job row
- *  for the service's own billing. */
+ *  for the service's own billing.
+ *
+ *  With opts.check, a matched read gets a SECOND, independent look at the
+ *  same photo — confirm the identification, re-examine the finish from
+ *  scratch. Agreement between two looks at one clear photo replaces the
+ *  old second feeding pass; disagreement goes to review with the reason. */
 export async function identifyPhoto(
   admin: SupabaseClient,
   jobId: string,
   adminUserId: string,
-  image: { data: string; mediaType: string }
+  image: { data: string; mediaType: string },
+  opts?: { check?: boolean }
 ): Promise<BulkRead> {
   try {
     const client = anthropic();
@@ -184,19 +251,22 @@ export async function identifyPhoto(
 
     // Bookkeeping rides behind the answer, not in front of it: three ledger
     // round trips were serialized between the model finishing and the match
-    // starting, on every single photo of an 8,000-card job. Two writers can
-    // race the cost increment (both passes identify concurrently); the
-    // read-modify-write may lose a cent on a race, which is noise next to
-    // the premium — correctness lives in ai_usage's rows.
-    void (async () => {
-      await logAiUsage(admin, adminUserId, "bulk_scan", SCAN_MODEL, res.usage);
-      const cost = estimateCostUsd(SCAN_MODEL, tokensFrom(res.usage));
-      const { data: job } = await admin.from("bulk_jobs").select("ai_cost_usd").eq("id", jobId).maybeSingle();
-      await admin
-        .from("bulk_jobs")
-        .update({ ai_cost_usd: Number(job?.ai_cost_usd ?? 0) + cost, updated_at: new Date().toISOString() })
-        .eq("id", jobId);
-    })().catch((err) => console.warn(`bulk job ${jobId}: usage logging failed`, err));
+    // starting, on every single photo of an 8,000-card job. Concurrent
+    // writers can race the cost increment; the read-modify-write may lose a
+    // cent on a race, which is noise next to the premium — correctness
+    // lives in ai_usage's rows.
+    const logUsage = (usage: typeof res.usage) => {
+      void (async () => {
+        await logAiUsage(admin, adminUserId, "bulk_scan", SCAN_MODEL, usage);
+        const cost = estimateCostUsd(SCAN_MODEL, tokensFrom(usage));
+        const { data: job } = await admin.from("bulk_jobs").select("ai_cost_usd").eq("id", jobId).maybeSingle();
+        await admin
+          .from("bulk_jobs")
+          .update({ ai_cost_usd: Number(job?.ai_cost_usd ?? 0) + cost, updated_at: new Date().toISOString() })
+          .eq("id", jobId);
+      })().catch((err) => console.warn(`bulk job ${jobId}: usage logging failed`, err));
+    };
+    logUsage(res.usage);
 
     const block = res.content.find((b) => b.type === "text");
     const parsed = JSON.parse(block && block.type === "text" ? block.text : "{}") as {
@@ -235,7 +305,87 @@ export async function identifyPhoto(
       finish: parsed.finish ?? "normal",
       hint,
     };
-    return { ...read, ...(await matchCatalogue(admin, read, hint)) };
+    const matched: BulkRead = { ...read, ...(await matchCatalogue(admin, read, hint)) };
+    if (!opts?.check || !matched.cardId) return matched;
+
+    // The second look. Same photo, fresh eyes, and the first answer on the
+    // table to be confirmed or torn up. A check failure must not cost the
+    // match we already have — it downgrades to "review", never to "error".
+    try {
+      const check = await client.messages.create({
+        model: SCAN_MODEL,
+        max_tokens: 300,
+        thinking: { type: "disabled" },
+        system: CHECK_SYSTEM,
+        output_config: {
+          format: { type: "json_schema", schema: CHECK_SCHEMA as unknown as Record<string, unknown> },
+        },
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: image.mediaType as "image/jpeg" | "image/png" | "image/webp",
+                  data: image.data,
+                },
+              },
+              {
+                type: "text",
+                text:
+                  `The first read filed this card as:\n` +
+                  `${matched.cardName} — collector number ${matched.cardNumber}` +
+                  `${matched.cardSet ? `, from ${matched.cardSet}` : ""}\n` +
+                  `finish: ${parsed.finish ?? "normal"}, pattern: ${parsed.pattern ?? "none"}, ` +
+                  `stamp: ${parsed.stamp ?? "none"}\n\nCheck it against the photo.`,
+              },
+            ],
+          },
+        ],
+      });
+      logUsage(check.usage);
+      const cblock = check.content.find((b) => b.type === "text");
+      const verdict = JSON.parse(cblock && cblock.type === "text" ? cblock.text : "{}") as {
+        same_card?: boolean;
+        finish?: string;
+        pattern?: string;
+        stamp?: string;
+        concern?: string;
+      };
+      const finishWord = (f?: string) =>
+        f === "holofoil" ? "holo" : f === "reverse_holofoil" ? "reverse holo" : "no foil";
+      const disagreements: string[] = [];
+      if (verdict.same_card === false) disagreements.push("doubts it is that card");
+      if ((verdict.finish ?? "normal") !== (parsed.finish ?? "normal")) {
+        disagreements.push(
+          `saw ${finishWord(verdict.finish)} where the first look saw ${finishWord(parsed.finish)}`
+        );
+      }
+      if (
+        (parsed.finish === "reverse_holofoil" || verdict.finish === "reverse_holofoil") &&
+        (verdict.pattern ?? "none") !== (parsed.pattern ?? "none")
+      ) {
+        disagreements.push("the looks differ on the reverse-holo pattern");
+      }
+      if ((verdict.stamp ?? "none") !== (parsed.stamp ?? "none")) {
+        disagreements.push("the looks differ on the stamp");
+      }
+      if (disagreements.length === 0) return { ...matched, checked: true, checkNote: null };
+      const concern = (verdict.concern ?? "").trim();
+      return {
+        ...matched,
+        checked: false,
+        checkNote: `second look ${disagreements.join("; ")}${concern ? ` — ${concern}` : ""}`.slice(0, 300),
+      };
+    } catch (err) {
+      return {
+        ...matched,
+        checked: false,
+        checkNote: `second look failed: ${err instanceof Error ? err.message.slice(0, 150) : "unknown error"}`,
+      };
+    }
   } catch (err) {
     return { error: err instanceof Error ? err.message.slice(0, 200) : "read failed" };
   }
@@ -417,7 +567,13 @@ function alignPasses(
   return { pairs, score: at(n, m) };
 }
 
-/** Pair pass 2 onto pass 1 and set each row's confidence.
+/** Set each row's confidence — and, if a second pass was fed, pair it
+ *  onto pass 1 first.
+ *
+ *  Single pass is the normal flow: a row verifies when its read's second
+ *  look (identifyPhoto's check) confirmed the card and the finish. A
+ *  second pass remains supported for rigs that want photo-vs-photo
+ *  agreement instead:
  *
  *  Pairing is by CONTENT, not position. Positional pairing meant one
  *  missed card shifted every later pair by one and the whole job drowned
@@ -502,11 +658,18 @@ export async function finalizeJob(admin: SupabaseClient, jobId: string): Promise
     const p1 = row.pass1_read;
     const partner = partnerOf.get(ai) ?? null;
     const p2 = partner?.read ?? null;
-    const agree =
+    // Two ways to earn "verified": a pass-2 photo whose read agrees, or —
+    // the single-pass flow — the read's own second look confirmed both the
+    // card and the finish. A partner that DISAGREES is never overridden by
+    // the second look: disagreement between photos is exactly the evidence
+    // review exists for.
+    const pairAgree =
       p1?.cardId != null &&
       p2?.cardId != null &&
       p1.cardId === p2.cardId &&
       (p1.variant ?? p1.finish ?? "normal") === (p2.variant ?? p2.finish ?? "normal");
+    const soloVerified = !partner && p1?.cardId != null && p1.checked === true;
+    const agree = pairAgree || soloVerified;
     const base = {
       pass2_path: partner?.path ?? null,
       pass2_read: p2,
@@ -525,20 +688,23 @@ export async function finalizeJob(admin: SupabaseClient, jobId: string): Promise
           confidence: "review",
           card_id: p1?.cardId ?? p2?.cardId ?? null,
           variant: p1?.variant ?? p1?.finish ?? p2?.variant ?? p2?.finish ?? "normal",
-          review_note:
-            pass2Count === 0
-              ? "single pass — no verification photo"
-              : !partner
-                ? "no pass-2 photo pairs with this card — missed during pass 2?"
-                : (row.pass1_path && !p1) || (partner && !p2)
-                  ? "a read is still running — re-run Finalize in a minute"
-                  : p1?.error || p2?.error
-                    ? `read failed: ${p1?.error ?? p2?.error}`
-                    : p1?.cardId == null || p2?.cardId == null
-                      ? "no exact catalogue match"
-                      : p1.cardId !== p2.cardId
-                        ? "passes disagree on the card"
-                        : "passes disagree on the finish",
+          review_note: ((): string => {
+            if ((row.pass1_path && !p1) || (partner && !p2)) {
+              return "a read is still running — re-run Finalize in a minute";
+            }
+            if (p1?.error || p2?.error) return `read failed: ${p1?.error ?? p2?.error}`;
+            if (partner) {
+              if (p1?.cardId == null || p2?.cardId == null) return "no exact catalogue match";
+              return p1.cardId !== p2.cardId
+                ? "passes disagree on the card"
+                : "passes disagree on the finish";
+            }
+            if (p1?.cardId == null) return "no exact catalogue match";
+            if (p1.checked === false) return p1.checkNote ?? "the second look couldn't confirm the match";
+            if (pass2Count > 0) return "no pass-2 photo pairs with this card — missed during pass 2?";
+            // A read from before single-look verification existed.
+            return "no second look on file — review by hand or re-scan";
+          })(),
         };
     await admin.from("bulk_cards").update(patch).eq("id", row.id);
     if (agree) verified++;
