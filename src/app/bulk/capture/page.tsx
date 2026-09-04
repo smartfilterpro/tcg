@@ -92,18 +92,12 @@ export default function BulkCapturePage() {
   const jobRef = useRef("");
   const keyRef = useRef("");
   const passRef = useRef<1 | 2>(1);
-  const orderRef = useRef<"same" | "reverse">("same");
   const seqRef = useRef(1);
 
   const [phase, setPhase] = useState<Phase>("setup");
   const [job, setJob] = useState("");
   const [key, setKey] = useState("");
   const [pass, setPass] = useState<1 | 2>(1);
-  /** How pass 2 is fed relative to pass 1. This rig re-feeds in the SAME
-   *  order (chute into a bucket, re-fed from the same end), so that's the
-   *  default; "reverse" matches the Pi rig's flip-the-stack contract and
-   *  stays the server-side default for clients that don't say. */
-  const [order2, setOrder2] = useState<"same" | "reverse">("same");
   const [startSeq, setStartSeq] = useState(1);
   const [showKey, setShowKey] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
@@ -134,7 +128,6 @@ export default function BulkCapturePage() {
     if (j) setJob(j);
     if (k) setKey(k);
     if (p === "2") setPass(2);
-    if (params.get("order") === "reverse") setOrder2("reverse");
     if (Number.isFinite(s) && s >= 1) setStartSeq(s);
   }, []);
 
@@ -206,7 +199,6 @@ export default function BulkCapturePage() {
     const form = new FormData();
     form.append("job", jobRef.current);
     form.append("pass", String(passRef.current));
-    form.append("order", orderRef.current);
     form.append("seq", String(seq));
     form.append("photo", blob, `frame_${String(seq).padStart(5, "0")}.jpg`);
 
@@ -225,9 +217,9 @@ export default function BulkCapturePage() {
           const body = await res.json();
           // body.ordinal echoes the position WITHIN this pass (what we
           // sent) — that's the drift check. body.seq is deliberately
-          // something else on pass 2: the paired PASS-1 row (N+1-ordinal),
-          // by design, per the contract. Comparing seq here would false-
-          // positive-halt on almost every pass-2 upload.
+          // something else on pass 2 (a holding row; Finalize pairs the
+          // passes by content), so comparing seq here would false-
+          // positive-halt on every pass-2 upload.
           if (body.ordinal !== seq) {
             throw new HaltError(
               `sent seq=${seq} but server assigned ordinal=${body.ordinal} within this pass — pairing is drifting, stop and check the job`
@@ -388,7 +380,6 @@ export default function BulkCapturePage() {
     jobRef.current = job.trim();
     keyRef.current = key.trim();
     passRef.current = pass;
-    orderRef.current = order2;
     seqRef.current = startSeq;
     prevFrameRef.current = null;
     armedRef.current = false;
@@ -522,22 +513,9 @@ export default function BulkCapturePage() {
                   onChange={(e) => setPass(Number(e.target.value) as 1 | 2)}
                 >
                   <option value={1}>1 (feed order)</option>
-                  <option value={2}>2 (verification)</option>
+                  <option value={2}>2 (verification — any order)</option>
                 </select>
               </label>
-              {pass === 2 && (
-                <label className="flex-1 text-sm">
-                  Feed order
-                  <select
-                    className="mt-1 w-full rounded bg-neutral-900 border border-neutral-700 px-3 py-2"
-                    value={order2}
-                    onChange={(e) => setOrder2(e.target.value === "reverse" ? "reverse" : "same")}
-                  >
-                    <option value="same">same as pass 1</option>
-                    <option value="reverse">reversed stack</option>
-                  </select>
-                </label>
-              )}
               <label className="flex-1 text-sm">
                 Start seq
                 <input

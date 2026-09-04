@@ -13,11 +13,12 @@ export const maxDuration = 120;
 //     -H "x-bulk-key: <device_key>" \
 //     -F job=<job_id> -F pass=1 -F seq=17 -F photo=@card.jpg
 //
-// seq is optional (defaults to next); pass 2 pairs with pass 1 by feed
-// order — REVERSE by default (pass-2 card s pairs with pass-1 card
-// N+1−s), or 1:1 when the client sends order=same. Identification starts
-// immediately, detached, so by the time the stack finishes most reads are
-// already done.
+// seq is optional (defaults to next). Pass-2 photos are NOT paired here:
+// each lands on its own holding row and Finalize lines the two passes up
+// by content (sequence alignment, both feed directions tried), so a
+// missed or doubled card costs one review row instead of shifting every
+// later pairing. Identification starts immediately, detached, so by the
+// time the stack finishes most reads are already done.
 
 /** DELETE ?job=<id>&pass=1|2 — erase one pass and start it over.
  *
@@ -94,12 +95,6 @@ export async function POST(req: Request) {
     if (!form) return NextResponse.json({ error: "Send multipart/form-data." }, { status: 400 });
     const jobId = String(form.get("job") ?? "");
     const pass = String(form.get("pass") ?? "1") === "2" ? 2 : 1;
-    // How pass 2 was fed. "reverse" (the default, and the Pi rig's
-    // contract) is the natural result of picking a stack up and feeding it
-    // again; "same" is for rigs whose second run preserves order — the
-    // phone chute, per its operator. Decided per photo by the client that
-    // knows how the cards actually moved.
-    const order = String(form.get("order") ?? "reverse") === "same" ? "same" : "reverse";
     const seqRaw = form.get("seq");
     const photo = form.get("photo");
     if (!jobId) return NextResponse.json({ error: "Missing job field." }, { status: 400 });
@@ -142,9 +137,9 @@ export async function POST(req: Request) {
 
     const given = seqRaw != null ? parseInt(String(seqRaw), 10) : NaN;
     const ordinal = Number.isFinite(given) && given > 0 ? given : (pass === 1 ? (pass1Count ?? 0) : (pass2Count ?? 0)) + 1;
-    // Reverse: pass 2's s-th card is pass 1's (N+1−s)-th. Same: it's just s.
-    const targetSeq =
-      pass === 1 ? ordinal : order === "same" ? ordinal : (pass1Count ?? 0) + 1 - ordinal;
+    // Pass-1 photos ARE their seq; pass-2 photos park on a holding row —
+    // Finalize pairs them by content, so intake never guesses positions.
+    const targetSeq = pass === 1 ? ordinal : 10000 + ordinal;
 
     const buffer = Buffer.from(await photo.arrayBuffer());
     const contentType = photo.type || "image/jpeg";
@@ -160,46 +155,18 @@ export async function POST(req: Request) {
       );
     }
 
-    let rowId: string;
-    if (pass === 1) {
-      const { data: row, error } = await admin
-        .from("bulk_cards")
-        .upsert(
-          { job_id: jobId, seq: targetSeq, pass1_path: path, updated_at: new Date().toISOString() },
-          { onConflict: "job_id,seq" }
-        )
-        .select("id")
-        .single();
-      if (error || !row) throw new Error(error?.message ?? "row write failed");
-      rowId = row.id as string;
-    } else {
-      // Attach to the paired pass-1 row; a misfeed that broke the count
-      // lands on an offset seq and finalize routes the whole mess to review.
-      const { data: existing } = await admin
-        .from("bulk_cards")
-        .select("id")
-        .eq("job_id", jobId)
-        .eq("seq", targetSeq)
-        .maybeSingle();
-      if (existing && targetSeq >= 1) {
-        await admin
-          .from("bulk_cards")
-          .update({ pass2_path: path, updated_at: new Date().toISOString() })
-          .eq("id", existing.id);
-        rowId = existing.id as string;
-      } else {
-        const { data: row, error } = await admin
-          .from("bulk_cards")
-          .upsert(
-            { job_id: jobId, seq: 10000 + ordinal, pass2_path: path, updated_at: new Date().toISOString() },
-            { onConflict: "job_id,seq" }
-          )
-          .select("id")
-          .single();
-        if (error || !row) throw new Error(error?.message ?? "row write failed");
-        rowId = row.id as string;
-      }
-    }
+    const { data: row, error } = await admin
+      .from("bulk_cards")
+      .upsert(
+        pass === 1
+          ? { job_id: jobId, seq: targetSeq, pass1_path: path, updated_at: new Date().toISOString() }
+          : { job_id: jobId, seq: targetSeq, pass2_path: path, updated_at: new Date().toISOString() },
+        { onConflict: "job_id,seq" }
+      )
+      .select("id")
+      .single();
+    if (error || !row) throw new Error(error?.message ?? "row write failed");
+    const rowId = row.id as string;
 
     // Identify in the background; the rig gets its 200 and keeps feeding.
     const adminUserId = (job.created_by as string | null) ?? "";
