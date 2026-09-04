@@ -219,7 +219,10 @@ export function scryToSummary(c: ScryCard): CardSummary {
     setPrintedTotal: null,
     releaseDate: c.released_at ?? null,
     imageSmall: images.small ?? images.normal ?? null,
-    imageLarge: images.normal ?? images.large ?? images.small ?? null,
+    // large (672px) over normal (488px): this is what the zoom shows on a
+    // desktop, where 488 source pixels behind a ~480px card reads soft on
+    // any HiDPI screen.
+    imageLarge: images.large ?? images.normal ?? images.small ?? null,
     marketPrice: usd ?? usdFoil ?? usdEtched ?? null,
     prices: Object.keys(prices).length > 0 ? prices : null,
     tcgplayerId: c.tcgplayer_id ?? null,
