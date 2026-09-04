@@ -27,6 +27,17 @@ function biggerSrc(src: string): string {
   // pokemontcg.io: .../sv1/25.png has a _hires.png sibling.
   const m = src.match(/^(https:\/\/images\.pokemontcg\.io\/[^/]+\/[^_./]+)\.png$/);
   if (m) return `${m[1]}_hires.png`;
+  // Our own art proxy (deck lists and card sheets route through it): it
+  // takes size=large and serves the card's large rendition, mirroring it
+  // in passing. This was the gap that kept MTG deck zooms blurry — those
+  // URLs never touch scryfall.io, so the swaps above never fired.
+  const art = src.match(/^(\/api\/cards\/[^/?]+\/art)(?:\?.*)?$/);
+  if (art) return `${art[1]}?size=large`;
+  // Already-mirrored copies in our storage sit at <id>/small.<ext> with a
+  // large sibling beside them; onError falls back if it was never made.
+  if (src.includes("/card-art/") && /\/small\.(jpe?g|png|webp)(\?|$)/.test(src)) {
+    return src.replace(/\/small\.(?=[a-z]+)/, "/large.");
+  }
   return src;
 }
 
