@@ -2710,8 +2710,8 @@ interface BulkRow {
   seq: number;
   photo1: string | null;
   photo2: string | null;
-  read1: { name?: string; number?: string; cardName?: string | null; error?: string } | null;
-  read2: { name?: string; number?: string; cardName?: string | null; error?: string } | null;
+  read1: { name?: string; number?: string; game?: string; cardName?: string | null; error?: string } | null;
+  read2: { name?: string; number?: string; game?: string; cardName?: string | null; error?: string } | null;
   card: { id: string; name: string; number: string; set_name: string | null } | null;
   variant: string;
   confidence: string | null;
@@ -2730,7 +2730,13 @@ function BulkScanPanel() {
   const [rows, setRows] = useState<BulkRow[]>([]);
   const [rowCount, setRowCount] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [pick, setPick] = useState<Record<string, string>>({}); // row id → card id text
+  const [pick, setPick] = useState<Record<string, string>>({}); // row id → search text / card id
+  // row id → catalogue search results, so a reviewer can pick the card by
+  // eye instead of hunting down an id in another tab.
+  const [hits, setHits] = useState<
+    Record<string, Array<{ id: string; name: string; number: string; setName: string; imageSmall: string | null }>>
+  >({});
+  const [searchingRow, setSearchingRow] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -2831,6 +2837,26 @@ function BulkScanPanel() {
     a.download = `bulk-${jobLabel.replace(/[^a-zA-Z0-9-]/g, "_")}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function searchCatalogue(row: BulkRow) {
+    // The typed text wins; empty box searches what the read saw, so one tap
+    // usually gets the shortlist.
+    const q =
+      (pick[row.id] ?? "").trim() ||
+      `${row.read1?.name ?? ""} ${(row.read1?.number ?? "").split("/")[0]}`.trim();
+    if (!q) return;
+    setSearchingRow(row.id);
+    try {
+      const game = row.read1?.game === "mtg" ? "&game=mtg" : "";
+      const res = await fetch(`/api/cards/search?q=${encodeURIComponent(q)}${game}`);
+      const json = await res.json();
+      setHits((h) => ({ ...h, [row.id]: (json.cards ?? []).slice(0, 8) }));
+    } catch {
+      setError("Search failed — try again.");
+    } finally {
+      setSearchingRow(null);
+    }
   }
 
   async function saveRow(row: BulkRow, cardId: string | null) {
@@ -3042,9 +3068,10 @@ function BulkScanPanel() {
             👀 Review queue ({rowCount} left)
           </h2>
           <p className="m-0 mb-3 text-xs leading-[1.6] text-brand-ink3">
-            Both photos, both reads, and what the system picked. Accept the pick, or paste the
-            right catalogue card id (find it with card search) and save. Saving marks the card
-            human-reviewed — the upload button refuses to run while anything here is unreviewed.
+            Both photos, both reads, and what the system picked. Accept the pick, or search the
+            catalogue right here (an empty search uses what the read saw) and tap the right card.
+            Saving marks the card human-reviewed — the upload button refuses to run while
+            anything here is unreviewed.
           </p>
           {rows.length === 0 ? (
             <p className="text-sm text-brand-ink4">Queue clear. 🎉</p>
@@ -3086,18 +3113,57 @@ function BulkScanPanel() {
                         )}
                         <input
                           className="input w-56 py-1 text-[11.5px]"
-                          placeholder="…or correct card id (e.g. sv8pt5-50)"
+                          placeholder="…or search name / number / card id"
                           value={pick[r.id] ?? ""}
                           onChange={(e) => setPick((p) => ({ ...p, [r.id]: e.target.value }))}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") searchCatalogue(r);
+                          }}
                         />
                         <button
                           className="btn-secondary text-xs"
+                          disabled={searchingRow === r.id}
+                          onClick={() => searchCatalogue(r)}
+                        >
+                          {searchingRow === r.id ? "Searching…" : "Search catalogue"}
+                        </button>
+                        <button
+                          className="btn-secondary text-xs"
                           disabled={!(pick[r.id] ?? "").trim()}
+                          title="Use the typed text directly as a card id"
                           onClick={() => saveRow(r, (pick[r.id] ?? "").trim())}
                         >
-                          Save correction
+                          Save as id
                         </button>
                       </div>
+                      {(hits[r.id]?.length ?? 0) > 0 && (
+                        <div className="mt-2 flex flex-col gap-1">
+                          {hits[r.id].map((c) => (
+                            <button
+                              key={c.id}
+                              className="btn flex items-center gap-2 px-2 py-1 text-left text-[11.5px] hover:bg-slate-100"
+                              onClick={() => {
+                                setHits((h) => ({ ...h, [r.id]: [] }));
+                                saveRow(r, c.id);
+                              }}
+                            >
+                              {c.imageSmall && (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={c.imageSmall} alt="" className="h-10 rounded-sm" />
+                              )}
+                              <span>
+                                <b>{c.name}</b> #{c.number} · {c.setName}
+                                <span className="text-brand-ink4"> · {c.id}</span>
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {hits[r.id] && hits[r.id].length === 0 && searchingRow !== r.id && (
+                        <p className="m-0 mt-1 text-[11px] text-brand-ink4">
+                          Nothing found — this printing may not be in the catalogue yet.
+                        </p>
+                      )}
                     </div>
                   </div>
                 </li>
