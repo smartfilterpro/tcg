@@ -99,7 +99,7 @@ const READ_SCHEMA = {
       type: "string",
       enum: ["normal", "holofoil", "reverse_holofoil"],
       description:
-        "Where the shine is. 'holofoil': the ARTWORK window is foil and the rest is matte (or the whole card is foil, as on full arts, ex cards, and Magic foils — a foil Magic card is 'holofoil'). 'reverse_holofoil': Pokémon only — matte artwork, shiny card body, usually with an etched repeating pattern. 'normal': no foil. Require positive evidence — rainbow colour shift or an etched pattern — before answering either foil value; glare from the rig's lights is not foil.",
+        "Where the shine is. The machine's own lamp puts a bright band or wash on EVERY card — that is GLARE, not foil: it is white or the lamp's own colour, crosses artwork, border and text alike, and has no repeating motif. 'holofoil': the ARTWORK window shows rainbow/prismatic colour (or the whole card does, as on full arts, ex cards, and foil Magic cards). 'reverse_holofoil': Pokémon only — the CARD BODY (not the artwork) carries etched foil with a visible REPEATING pattern and rainbow colour shift; the artwork window stays matte. 'normal': no foil — including when the only shine is the lamp's band or wash. Answer a foil value only on positive evidence: rainbow colour that varies across the surface, or a visible etched pattern. Brightness alone is 'normal'.",
     },
     pattern: {
       type: "string",
@@ -151,7 +151,14 @@ repeating across the foil marks a different and far more valuable printing
 than the same card with the set's ordinary star pattern, and the whole point
 of this machine is that nobody has to check its work afterwards. Look at the
 foil area specifically, not the artwork. If you genuinely cannot tell, say
-'unknown' — that is a useful answer and a wrong ball is not.`;
+'unknown' — that is a useful answer and a wrong ball is not.
+
+One warning about the machine itself: its lamp sits close to the card, so
+EVERY photo has some shine. A bright band or an overall wash that crosses
+artwork and border alike, in white or the lamp's colour, is LIGHTING. Foil
+announces itself differently — rainbow colours that change across the
+surface, or an etched repeating motif in the card body. When the only
+evidence is brightness, the finish is 'normal'.`;
 
 const CHECK_SCHEMA = {
   type: "object",
@@ -172,11 +179,15 @@ const CHECK_SCHEMA = {
       type: "string",
       enum: ["normal", "holofoil", "reverse_holofoil"],
       description:
-        "Your OWN finish call, examined from scratch. 'holofoil': the artwork window " +
-        "is foil (or the whole card is, as on full arts, ex cards, and foil Magic cards). " +
-        "'reverse_holofoil': Pokémon only — matte artwork, shiny card body. 'normal': no " +
-        "foil. Require positive evidence — rainbow colour shift or an etched pattern; " +
-        "glare from the rig's lights is not foil.",
+        "Your OWN finish call, examined from scratch. The single most common mistake " +
+        "you are checking for: the rig's lamp puts a bright band or wash on EVERY " +
+        "card, and the first look calls that a reverse holo. A uniform sheen that " +
+        "crosses artwork, border and text alike, with no repeating motif and no " +
+        "rainbow colour shift, is GLARE — answer 'normal'. 'holofoil': rainbow/" +
+        "prismatic colour in the artwork window (or the whole card, on full arts, ex " +
+        "cards, and foil Magic cards). 'reverse_holofoil': Pokémon only — an etched " +
+        "REPEATING pattern with rainbow shift in the card body, matte artwork. " +
+        "Foil needs positive evidence; brightness alone is 'normal'.",
     },
     pattern: {
       type: "string",
@@ -206,7 +217,11 @@ machine. A first read identified the photographed card; your job is to
 catch its mistakes before the card is filed with no human ever checking.
 Judge INDEPENDENTLY from the photograph: does it truly show the named
 printing, and — examined from scratch, foil area specifically — what is
-the finish, the reverse-holo pattern, and any gold stamp?
+the finish, the reverse-holo pattern, and any gold stamp? On finish,
+be especially sceptical of the first look: the rig's lamp shines on
+every card, and a bright band is not foil — reverse holo needs a
+visible etched repeating pattern, holo needs rainbow colour, and shine
+that is merely bright means 'normal'.
 
 Disagreeing when you SEE a real discrepancy is exactly what you are for:
 a name or number that reads differently, a finish the first look got

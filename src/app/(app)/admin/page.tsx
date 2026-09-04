@@ -2956,7 +2956,7 @@ function BulkScanPanel() {
                       <button
                         className="btn text-xs text-brand-ink4 hover:bg-slate-100"
                         disabled={busy}
-                        title="Run the AI again on every photo still in review — no re-feeding needed"
+                        title="Run the AI again on every machine-decided row (verified included; human verdicts kept) — no re-feeding needed"
                         onClick={() => jobAction(j.id, "reread")}
                       >
                         Re-read
