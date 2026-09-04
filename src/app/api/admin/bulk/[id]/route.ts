@@ -29,6 +29,7 @@ export async function GET(req: Request, { params }: Params) {
       .select("id, seq, pass1_path, pass2_path, pass1_read, pass2_read, card_id, variant, confidence, reviewed, review_note", { count: "exact" })
       .eq("job_id", id);
     if (which === "review") q = q.eq("confidence", "review").eq("reviewed", false);
+    else if (which === "verified") q = q.eq("confidence", "verified");
     const { data: rows, count } = await q.order("seq").range(page * PAGE, page * PAGE + PAGE - 1);
 
     const signed = await Promise.all(

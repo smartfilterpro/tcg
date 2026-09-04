@@ -2752,14 +2752,22 @@ function BulkScanPanel() {
     load();
   }, [load]);
 
-  const loadRows = useCallback(async (jobId: string) => {
-    const res = await fetch(`/api/admin/bulk/${jobId}?rows=review`);
-    const json = await res.json();
-    if (res.ok) {
-      setRows(json.rows ?? []);
-      setRowCount(json.rowCount ?? 0);
-    }
-  }, []);
+  const [rowFilter, setRowFilter] = useState<"review" | "verified" | "all">("review");
+  const [rowPage, setRowPage] = useState(0);
+
+  const loadRows = useCallback(
+    async (jobId: string, which: "review" | "verified" | "all" = rowFilter, page = 0) => {
+      const res = await fetch(`/api/admin/bulk/${jobId}?rows=${which}&page=${page}`);
+      const json = await res.json();
+      if (res.ok) {
+        setRows((prev) => (page > 0 ? [...prev, ...(json.rows ?? [])] : (json.rows ?? [])));
+        setRowCount(json.rowCount ?? 0);
+        setRowFilter(which);
+        setRowPage(page);
+      }
+    },
+    [rowFilter]
+  );
 
   async function createJob() {
     if (!label.trim()) return;
@@ -3065,8 +3073,25 @@ function BulkScanPanel() {
       {open && (
         <div className="card-panel p-4">
           <h2 className="mb-2 font-display text-[17px] font-bold">
-            👀 Review queue ({rowCount} left)
+            👀 {rowFilter === "review" ? `Review queue (${rowCount} left)` : rowFilter === "verified" ? `Verified with no human (${rowCount})` : `All cards (${rowCount})`}
           </h2>
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {(
+              [
+                ["review", "Needs review"],
+                ["verified", "Verified"],
+                ["all", "All"],
+              ] as const
+            ).map(([w, label2]) => (
+              <button
+                key={w}
+                className={`btn text-xs ${rowFilter === w ? "bg-slate-200 font-semibold" : "text-brand-ink4 hover:bg-slate-100"}`}
+                onClick={() => open && loadRows(open, w, 0)}
+              >
+                {label2}
+              </button>
+            ))}
+          </div>
           <p className="m-0 mb-3 text-xs leading-[1.6] text-brand-ink3">
             Both photos, both reads, and what the system picked. Accept the pick, or search the
             catalogue right here (an empty search uses what the read saw) and tap the right card.
@@ -3074,13 +3099,21 @@ function BulkScanPanel() {
             anything here is unreviewed.
           </p>
           {rows.length === 0 ? (
-            <p className="text-sm text-brand-ink4">Queue clear. 🎉</p>
+            <p className="text-sm text-brand-ink4">
+              {rowFilter === "review" ? "Queue clear. 🎉" : "Nothing here."}
+            </p>
           ) : (
             <ul className="flex list-none flex-col gap-3 p-0">
               {rows.map((r) => (
                 <li key={r.id} className="rounded-[14px] border border-brand-line p-3">
                   <div className="mb-1.5 flex items-center gap-2 text-xs text-brand-ink3">
                     <b>Card #{r.seq}</b>
+                    {r.confidence === "verified" && (
+                      <span className="text-brand-positive">verified</span>
+                    )}
+                    {r.confidence === "corrected" && (
+                      <span className="text-brand-ink4">human-corrected</span>
+                    )}
                     <span className="text-brand-warning">{r.note}</span>
                   </div>
                   <div className="flex flex-wrap items-start gap-3">
@@ -3171,7 +3204,10 @@ function BulkScanPanel() {
             </ul>
           )}
           {rowCount > rows.length && rows.length > 0 && (
-            <button className="btn-secondary mt-3 text-sm" onClick={() => open && loadRows(open)}>
+            <button
+              className="btn-secondary mt-3 text-sm"
+              onClick={() => open && loadRows(open, rowFilter, rowPage + 1)}
+            >
               Load next batch
             </button>
           )}
