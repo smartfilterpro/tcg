@@ -14,15 +14,24 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // CORS is needed — this page must stay served from this app, not a
 // separate static host.
 
-const MOTION_THRESHOLD = 18; // 0-255 avg luma diff; tune against real cards/lighting
+// Motion is measured as the FRACTION OF PIXELS that changed meaningfully,
+// not the average brightness change of the whole frame. The average was the
+// original sin: a card dropping into a bucket that fills 15% of the view is
+// a big change in a small area, and averaged over the frame it vanished —
+// close-up tests worked, the real rig never triggered. A pixel counts as
+// changed past PIXEL_DELTA luma; the thresholds below are fractions of the
+// frame. The live meter on the watching screen shows the exact number the
+// detector sees, so aiming and tuning stop being guesswork.
+const PIXEL_DELTA = 26; // 0-255 per-pixel luma difference that counts as change
+const MOTION_FRAC = 0.03; // ≥3% of pixels changing = motion
 const STABLE_TICKS_NEEDED = 4; // consecutive quiet ticks before a capture fires
 // After the motion settles, the scene must actually DIFFER from what it was
 // before the motion began, or nothing is captured. A hand reaching over the
 // table (usually for the Stop button) is motion followed by the exact same
 // scene — which used to earn every session a phantom duplicate photo of the
-// last card. A genuinely new card, even another copy of the same Mountain,
-// lands at a different angle and offset and clears this easily.
-const SCENE_CHANGE_MIN = 6;
+// last card. A landed card, even in a far corner of the frame, moves well
+// over this fraction of pixels.
+const SCENE_CHANGE_FRAC = 0.012;
 const TICK_MS = 120;
 const DETECT_W = 160;
 const DETECT_H = 120;
@@ -39,16 +48,18 @@ interface LogEntry {
 
 class HaltError extends Error {}
 
-function frameDiff(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
-  let sum = 0;
+/** Fraction of pixels whose luma moved more than PIXEL_DELTA — localized
+ *  change at full strength instead of diluted into a frame-wide average. */
+function changedFraction(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
+  let changed = 0;
   let n = 0;
   for (let i = 0; i < a.length; i += 4) {
     const la = 0.299 * a[i] + 0.587 * a[i + 1] + 0.114 * a[i + 2];
     const lb = 0.299 * b[i] + 0.587 * b[i + 1] + 0.114 * b[i + 2];
-    sum += Math.abs(la - lb);
+    if (Math.abs(la - lb) > PIXEL_DELTA) changed++;
     n++;
   }
-  return n ? sum / n : 0;
+  return n ? changed / n : 0;
 }
 
 export default function BulkCapturePage() {
@@ -64,6 +75,11 @@ export default function BulkCapturePage() {
   const armedRef = useRef(false);
   const stableTicksRef = useRef(0);
   const capturingRef = useRef(false);
+  /** True only while actually capturing (not preview): the tick loop and
+   *  meter run in both modes, the shutter only in this one. */
+  const detectionActiveRef = useRef(false);
+  /** The live motion readout; written imperatively from the tick loop. */
+  const meterRef = useRef<HTMLSpanElement>(null);
 
   // Locked in at "Start" so an in-flight upload never races a form edit.
   const jobRef = useRef("");
@@ -78,6 +94,17 @@ export default function BulkCapturePage() {
   const [startSeq, setStartSeq] = useState(1);
   const [showKey, setShowKey] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  /** Camera running for aiming, before capture starts. */
+  const [previewing, setPreviewing] = useState(false);
+  /** Digital zoom: the CENTER CROP of the frame, applied identically to the
+   *  on-screen preview, the motion detector, and the uploaded photo — what
+   *  you see is exactly what gets captured. Digital rather than the track's
+   *  native zoom because native support is patchy across phones and the
+   *  crop behaves the same everywhere; 1600px source at 2× still uploads
+   *  800px, plenty for the reader. */
+  const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
   const [haltMessage, setHaltMessage] = useState<string | null>(null);
   const [cardsCaptured, setCardsCaptured] = useState(0);
   const [log, setLog] = useState<LogEntry[]>([]);
@@ -104,7 +131,40 @@ export default function BulkCapturePage() {
     }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    setPreviewing(false);
   }, []);
+
+  /** The zoomed source rectangle: the center 1/zoom of the frame. */
+  function cropOf(video: HTMLVideoElement) {
+    const z = Math.max(1, zoomRef.current);
+    const sw = video.videoWidth / z;
+    const sh = video.videoHeight / z;
+    return { sx: (video.videoWidth - sw) / 2, sy: (video.videoHeight - sh) / 2, sw, sh };
+  }
+
+  /** Turn the camera on without starting detection — for aiming and zooming
+   *  before the first card, with the motion meter live. */
+  async function openPreview() {
+    if (streamRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1600 }, height: { ideal: 1200 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setPreviewing(true);
+      prevFrameRef.current = null;
+      if (tickHandleRef.current === null) {
+        tickHandleRef.current = window.setInterval(tick, TICK_MS);
+      }
+    } catch (e) {
+      setSetupError(`Could not access the camera: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 
   useEffect(() => stopEverything, [stopEverything]);
 
@@ -182,14 +242,15 @@ export default function BulkCapturePage() {
     if (!video || !canvas || video.videoWidth === 0) return;
     capturingRef.current = true;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const { sx, sy, sw, sh } = cropOf(video);
+    canvas.width = Math.round(sw);
+    canvas.height = Math.round(sh);
     const ctx = canvas.getContext("2d");
     if (!ctx) {
       capturingRef.current = false;
       return;
     }
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     const thumbnail = canvas.toDataURL("image/jpeg", 0.4);
 
     canvas.toBlob(
@@ -238,15 +299,31 @@ export default function BulkCapturePage() {
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
 
-    ctx.drawImage(video, 0, 0, DETECT_W, DETECT_H);
+    const { sx, sy, sw, sh } = cropOf(video);
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, DETECT_W, DETECT_H);
     const frame = ctx.getImageData(0, 0, DETECT_W, DETECT_H).data;
     const prev = prevFrameRef.current;
     prevFrameRef.current = new Uint8ClampedArray(frame);
     if (!prev) return;
 
-    const diff = frameDiff(prev, frame);
+    const diff = changedFraction(prev, frame);
 
-    if (diff > MOTION_THRESHOLD) {
+    // The live meter: what the detector sees, updated imperatively so 8
+    // ticks a second never re-render the page.
+    if (meterRef.current) {
+      meterRef.current.textContent = `motion ${(diff * 100).toFixed(1)}% · ${
+        !detectionActiveRef.current
+          ? "preview — not capturing"
+          : capturingRef.current
+            ? "uploading"
+            : armedRef.current
+              ? "armed, waiting to settle"
+              : "watching"
+      }`;
+    }
+    if (!detectionActiveRef.current) return;
+
+    if (diff > MOTION_FRAC) {
       if (!armedRef.current) preMotionFrameRef.current = prev;
       armedRef.current = true;
       stableTicksRef.current = 0;
@@ -263,8 +340,8 @@ export default function BulkCapturePage() {
     const before = preMotionFrameRef.current;
     preMotionFrameRef.current = null;
     // Settled back to the same scene: a hand passed over, nothing changed —
-    // not a card. See SCENE_CHANGE_MIN.
-    if (before && frameDiff(before, frame) < SCENE_CHANGE_MIN) return;
+    // not a card. See SCENE_CHANGE_FRAC.
+    if (before && changedFraction(before, frame) < SCENE_CHANGE_FRAC) return;
     captureAndUpload();
   }, [captureAndUpload]);
 
@@ -285,28 +362,70 @@ export default function BulkCapturePage() {
     setLog([]);
     setCardsCaptured(0);
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1600 }, height: { ideal: 1200 } },
-        audio: false,
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+    // A preview already opened the camera; reuse its stream.
+    if (!streamRef.current) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment", width: { ideal: 1600 }, height: { ideal: 1200 } },
+          audio: false,
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+      } catch (e) {
+        setSetupError(`Could not access the camera: ${e instanceof Error ? e.message : String(e)}`);
+        return;
       }
-    } catch (e) {
-      setSetupError(`Could not access the camera: ${e instanceof Error ? e.message : String(e)}`);
-      return;
     }
 
+    setPreviewing(false);
+    detectionActiveRef.current = true;
     setPhase("watching");
-    tickHandleRef.current = window.setInterval(tick, TICK_MS);
+    if (tickHandleRef.current === null) {
+      tickHandleRef.current = window.setInterval(tick, TICK_MS);
+    }
   }
 
   function stopCapture() {
+    detectionActiveRef.current = false;
     stopEverything();
     setPhase("setup");
+  }
+
+  /** Wipe this pass server-side and reset to seq 1 — the start-over button.
+   *  Device-key authed, so it lives here with the person feeding cards. */
+  async function eraseThisPass() {
+    if (!job.trim() || !key.trim()) {
+      setSetupError("Job ID and device key are both required.");
+      return;
+    }
+    if (
+      !confirm(
+        `Erase every pass ${pass} photo in this job and start the pass over? The other pass is untouched.`
+      )
+    ) {
+      return;
+    }
+    setSetupError(null);
+    setInfo(null);
+    try {
+      const res = await fetch(
+        `/api/bulk/photo?job=${encodeURIComponent(job.trim())}&pass=${pass}`,
+        { method: "DELETE", headers: { "x-bulk-key": key.trim() } }
+      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSetupError(json.error ?? `Erase failed (HTTP ${res.status})`);
+        return;
+      }
+      setStartSeq(1);
+      seqRef.current = 1;
+      setInfo(`Pass ${pass} erased (${json.cleared ?? 0} photos). Start seq reset to 1.`);
+    } catch (e) {
+      setSetupError(e instanceof Error ? e.message : "Erase failed");
+    }
   }
 
   function resumeAfterHalt() {
@@ -383,12 +502,29 @@ export default function BulkCapturePage() {
               </label>
             </div>
             {setupError && <p className="text-sm text-red-400">{setupError}</p>}
+            {info && <p className="text-sm text-emerald-400">{info}</p>}
             <button
               type="button"
               onClick={startCapture}
               className="w-full rounded bg-emerald-600 hover:bg-emerald-500 py-3 font-medium"
             >
-              Start camera
+              {previewing ? "Start capturing" : "Start camera"}
+            </button>
+            {!previewing && (
+              <button
+                type="button"
+                onClick={openPreview}
+                className="w-full rounded border border-neutral-700 py-2.5 text-sm hover:bg-neutral-900"
+              >
+                Preview camera — aim &amp; zoom first
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={eraseThisPass}
+              className="w-full rounded border border-red-900 py-2.5 text-sm text-red-400 hover:bg-red-950/40"
+            >
+              Erase pass {pass} &amp; start it over
             </button>
           </div>
         )}
@@ -399,22 +535,63 @@ export default function BulkCapturePage() {
             that point (videoRef.current would be null, the attach would
             silently no-op, and the element that mounts afterward would never
             get the stream — permission granted, black screen). */}
-        <video
-          ref={videoRef}
-          playsInline
-          muted
+        {/* The preview shows the same center crop the capture uses: the
+            wrapper clips, the scale is the zoom. */}
+        <div
           className={
-            phase === "watching"
-              ? "w-full rounded border border-neutral-800 bg-black"
+            phase === "watching" || previewing
+              ? "w-full overflow-hidden rounded border border-neutral-800 bg-black"
               : "hidden"
           }
-        />
+        >
+          <video
+            ref={videoRef}
+            playsInline
+            muted
+            className="w-full origin-center"
+            style={{ transform: `scale(${zoom})` }}
+          />
+        </div>
+
+        {(phase === "watching" || previewing) && (
+          <label className="block text-sm text-neutral-400">
+            Zoom {zoom.toFixed(1)}×
+            <input
+              type="range"
+              min={1}
+              max={3}
+              step={0.1}
+              value={zoom}
+              onChange={(e) => {
+                const z = Number(e.target.value);
+                setZoom(z);
+                zoomRef.current = z;
+              }}
+              className="mt-1 w-full"
+            />
+          </label>
+        )}
+
+        {previewing && phase === "setup" && (
+          <div className="flex items-center justify-between text-sm text-neutral-400">
+            <span ref={meterRef} className="font-mono text-xs text-neutral-500" />
+            <button
+              type="button"
+              onClick={stopCapture}
+              className="rounded border border-neutral-700 px-3 py-1"
+            >
+              Close preview
+            </button>
+          </div>
+        )}
 
         {phase === "watching" && (
           <div className="space-y-3">
             <div className="flex items-center justify-between text-sm text-neutral-400">
               <span>
                 pass {passRef.current} · seq {seqRef.current} · {cardsCaptured} uploaded
+                <br />
+                <span ref={meterRef} className="font-mono text-xs text-neutral-500" />
               </span>
               <button
                 type="button"

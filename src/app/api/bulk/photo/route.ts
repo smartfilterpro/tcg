@@ -18,6 +18,72 @@ export const maxDuration = 120;
 // pass-1 card (N+1−s). Identification starts immediately, detached, so by
 // the time the stack finishes most reads are already done.
 
+/** DELETE ?job=<id>&pass=1|2 — erase one pass and start it over.
+ *
+ *  Same auth as POST (the device key), because it serves the same person:
+ *  whoever is feeding cards and realizes the pass went wrong. Clears the
+ *  pass's photos from storage and its half of every row; rows left with
+ *  neither pass are removed. The job must still be open. */
+export async function DELETE(req: Request) {
+  try {
+    const key = req.headers.get("x-bulk-key") ?? "";
+    if (!key) return NextResponse.json({ error: "Missing x-bulk-key header." }, { status: 401 });
+    const url = new URL(req.url);
+    const jobId = url.searchParams.get("job") ?? "";
+    const pass = url.searchParams.get("pass") === "2" ? 2 : 1;
+    if (!jobId) return NextResponse.json({ error: "Missing job parameter." }, { status: 400 });
+
+    const admin = createAdminClient();
+    const { data: job } = await admin
+      .from("bulk_jobs")
+      .select("id, status, device_key")
+      .eq("id", jobId)
+      .maybeSingle();
+    if (!job || !secretMatches(key, job.device_key as string | null)) {
+      return NextResponse.json({ error: "Unknown job or wrong device key." }, { status: 403 });
+    }
+    if (job.status !== "open") {
+      return NextResponse.json(
+        { error: `This job is ${job.status} — reopen it before erasing a pass.` },
+        { status: 409 }
+      );
+    }
+
+    // Storage: everything under this pass's folder, paged.
+    const folder = `${jobId}/pass${pass}`;
+    let cleared = 0;
+    for (;;) {
+      const { data: files } = await admin.storage.from(BULK_BUCKET).list(folder, { limit: 100 });
+      const paths = (files ?? [])
+        .filter((f) => f.name && (f as { id?: string | null }).id != null)
+        .map((f) => `${folder}/${f.name}`);
+      if (paths.length === 0) break;
+      const { error: rmErr } = await admin.storage.from(BULK_BUCKET).remove(paths);
+      if (rmErr) throw rmErr;
+      cleared += paths.length;
+    }
+
+    // Rows: this pass's half cleared everywhere; rows with nothing left go.
+    const clear =
+      pass === 1
+        ? { pass1_path: null, pass1_read: null, updated_at: new Date().toISOString() }
+        : { pass2_path: null, pass2_read: null, updated_at: new Date().toISOString() };
+    const { error: upErr } = await admin.from("bulk_cards").update(clear).eq("job_id", jobId);
+    if (upErr) throw upErr;
+    const { error: delErr } = await admin
+      .from("bulk_cards")
+      .delete()
+      .eq("job_id", jobId)
+      .is("pass1_path", null)
+      .is("pass2_path", null);
+    if (delErr) throw delErr;
+
+    return NextResponse.json({ ok: true, pass, cleared });
+  } catch (err) {
+    return errorJson(err, "Couldn't erase the pass");
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const key = req.headers.get("x-bulk-key") ?? "";
