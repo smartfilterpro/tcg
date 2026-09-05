@@ -1214,6 +1214,32 @@ export async function POST(req: Request) {
               `${dropped.join(", ")}. The deck is short — rebuild to fill the gap.`;
             console.warn(`deck build (mtg): unresolvable names dropped — ${dropped.join(" | ")}`);
           }
+
+          // LEGALITY, ENFORCED — not merely flagged. The revision pass ran
+          // BEFORE full-buy names resolved, so a banned card the player
+          // doesn't own carried a null legality and sailed through (a
+          // Selvala deck shipped Rofellos with only a warning under it).
+          // Now the facts are in hand: anything banned or not legal in the
+          // format is cut, said out loud, and the basics top-up below
+          // fills the hole.
+          {
+            const illegal: string[] = [];
+            deck.cards = (deck.cards ?? []).filter((c) => {
+              if (isBasicLand(c.name)) return true;
+              const leg = factsByName.get(normalizeForSearch(c.name))?.legalities?.[legalityKey];
+              if (leg === "banned" || leg === "not_legal") {
+                illegal.push(`${c.name} (${leg === "banned" ? "banned" : "not legal"} in ${mtgFormat})`);
+                return false;
+              }
+              return true;
+            });
+            if (illegal.length > 0) {
+              deck.strategy =
+                `${deck.strategy}\n\n⚠️ Removed for legality: ${illegal.join(", ")}. ` +
+                `Rebuild to fill ${illegal.length === 1 ? "its slot" : "their slots"} with something on-strategy.`;
+              console.warn(`deck build (mtg): illegal cards cut — ${illegal.join(" | ")}`);
+            }
+          }
           // Fill the deck to size with basics rather than shipping short.
           //
           // The copy repair can only CUT: a mana base the model planned

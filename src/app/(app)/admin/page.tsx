@@ -1409,6 +1409,9 @@ export default function AdminPage() {
           <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🎱 Ball-pattern copies</h2>
             <PatternConsolidatePanel />
+          </div>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🔢 Same card, two rows</h2>
             <DedupePrintingsPanel />
           </div>
           <div className="card-panel p-4">
@@ -4574,7 +4577,7 @@ function DedupePrintingsPanel() {
   }
 
   return (
-    <div className="mt-4 space-y-2 border-t border-brand-line pt-3">
+    <div className="space-y-2">
       <p className="m-0 text-xs text-brand-ink4">
         The same printing can hold two catalogue rows when sources pad numbers differently
         (&ldquo;#15&rdquo; vs &ldquo;#015&rdquo;), splitting one card across two collection
