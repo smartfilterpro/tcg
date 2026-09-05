@@ -2924,6 +2924,13 @@ function BulkScanPanel() {
               photo=@card.jpg
             </div>
             <div className="mt-2 text-brand-ink3">
+              Document scanner (fi-8170 etc.) — scan to a folder (or FTP into one), then run the
+              bridge on that machine; it posts each file in name order:
+            </div>
+            <div className="select-all break-all">
+              node scripts/bulk-bridge.mjs --dir ~/scans --job {newKey.id} --key {newKey.key}
+            </div>
+            <div className="mt-2 text-brand-ink3">
               Phone capture link — open on the phone, or turn into a QR code:
             </div>
             <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 1)}</div>
