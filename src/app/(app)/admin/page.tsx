@@ -2851,6 +2851,26 @@ function BulkScanPanel() {
     URL.revokeObjectURL(url);
   }
 
+  // The rig key: shown once, like a job's device key. It lets the Pi
+  // bridge create jobs from the scanning bench without this panel.
+  const [rigKey, setRigKey] = useState<string | null>(null);
+  const [rigKeyAt, setRigKeyAt] = useState<string | null>(null);
+  useEffect(() => {
+    void fetch("/api/admin/rig-key")
+      .then((r) => r.json())
+      .then((j) => setRigKeyAt(j.exists ? (j.created_at as string | null) ?? "unknown" : null))
+      .catch(() => {});
+  }, []);
+  async function mintRigKey() {
+    const res = await fetch("/api/admin/rig-key", { method: "POST" });
+    const json = await res.json();
+    if (!res.ok) setError(json.error ?? "Couldn't generate a rig key");
+    else {
+      setRigKey(json.rig_key as string);
+      setRigKeyAt(new Date().toISOString());
+    }
+  }
+
   async function searchCatalogue(row: BulkRow) {
     // The typed text wins; empty box searches what the read saw, so one tap
     // usually gets the shortlist.
@@ -2924,6 +2944,13 @@ function BulkScanPanel() {
               photo=@card.jpg
             </div>
             <div className="mt-2 text-brand-ink3">
+              Document scanner (fi-8170 etc.) — scan to a folder (or FTP into one), then run the
+              bridge on that machine; it posts each file in name order:
+            </div>
+            <div className="select-all break-all">
+              node scripts/bulk-bridge.mjs --dir ~/scans --job {newKey.id} --key {newKey.key}
+            </div>
+            <div className="mt-2 text-brand-ink3">
               Phone capture link — open on the phone, or turn into a QR code:
             </div>
             <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 1)}</div>
@@ -2934,6 +2961,24 @@ function BulkScanPanel() {
             <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 2)}</div>
           </div>
         )}
+
+        <div className="mt-3 rounded-lg border border-brand-line p-2.5 text-xs">
+          <div className="text-brand-ink3">
+            🥧 Pi bridge rig key — lets the scanning bench create its own jobs (run{" "}
+            <code>node scripts/pi-bridge.mjs --dir ~/scans</code> on the Pi, open port 8321, paste
+            this key once).{" "}
+            {rigKeyAt ? "One exists; generating again replaces it immediately." : "None yet."}
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <button className="btn text-xs text-brand-ink4 hover:bg-slate-100" onClick={() => void mintRigKey()}>
+              {rigKeyAt ? "Rotate rig key" : "Generate rig key"}
+            </button>
+            {rigKey && <code className="select-all break-all font-mono text-[11px]">{rigKey}</code>}
+          </div>
+          {rigKey && (
+            <div className="mt-1 text-brand-ink4">Shown once — paste it into the Pi&apos;s page now.</div>
+          )}
+        </div>
 
         {jobs == null ? (
           <p className="mt-3 text-xs text-brand-ink4">Loading…</p>
