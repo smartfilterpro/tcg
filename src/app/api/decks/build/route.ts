@@ -14,7 +14,7 @@ import { normalizeForSearch } from "@/lib/text";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { rowToSummary, CARD_SUMMARY_COLUMNS } from "@/lib/types";
 import { buyLinkFor } from "@/lib/buyLink";
-import { ensureMtgBattleData, matchMtgCard, type MtgBattleData } from "@/lib/scryfall";
+import { ensureMtgBattleData, matchMtgCard, resolveMtgNames, type MtgBattleData } from "@/lib/scryfall";
 import { mtgAnalysis, repairMtgCopies, isBasicLand, type MtgDeckEntry } from "@/lib/mtgDeckLegality";
 import type { CardSummary, CardSummaryRow, DeckCardEntry } from "@/lib/types";
 import { errorJson, safeMessage } from "@/lib/apiError";
@@ -1127,6 +1127,41 @@ export async function POST(req: Request) {
             // Pre-066/072 — the Scryfall rescue below carries it.
           }
 
+          // Whatever the catalogue didn't hold resolves at Scryfall in ONE
+          // OR TWO batch calls, not a per-name crawl. A full-buy deck is
+          // mostly cards this app has never held — the old 25-name budget
+          // meant a Commander list could lose SEVENTY real staples and
+          // ship as 82 lands. Resolved rows are stashed, so the next build
+          // finds them locally.
+          const missingNames = [
+            ...new Set(
+              (deck.cards ?? [])
+                .filter(
+                  (c) =>
+                    !isBasicLand(c.name) &&
+                    !resolvedByKey.has(normalizeForSearch(c.name)) &&
+                    !(c.card_id && mtgById.has(c.card_id))
+                )
+                .map((c) => c.name)
+            ),
+          ];
+          if (missingNames.length > 0) {
+            try {
+              const fetched = await resolveMtgNames(admin, missingNames);
+              for (const [k, s] of fetched) {
+                if (resolvedByKey.has(k)) continue;
+                resolvedByKey.set(k, s);
+                if (s.battleData && (s.battleData as { game?: string }).game === "mtg") {
+                  factsByName.set(k, s.battleData as MtgBattleData);
+                }
+              }
+            } catch {
+              // The per-name fuzzy fallback below still gets its budget.
+            }
+          }
+
+          // The fuzzy per-name path is now only for stragglers the exact
+          // batch couldn't place (misspellings, partial split-card names).
           let externalBudget = 25;
           const dropped: string[] = [];
           const keep: typeof deck.cards = [];
