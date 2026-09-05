@@ -1409,6 +1409,7 @@ export default function AdminPage() {
           <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🎱 Ball-pattern copies</h2>
             <PatternConsolidatePanel />
+            <DedupePrintingsPanel />
           </div>
           <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">⏱️ Recent scans</h2>
@@ -4544,6 +4545,74 @@ function SearchProbePanel() {
  *  Ball pattern" finish, or the printing's own row. Saving prefers the row
  *  now, so nothing new splits — this is for everything recorded before that,
  *  which is otherwise valued as the plain card it isn't. */
+/** Merge collection copies split across duplicate catalogue rows — the
+ *  "#15" vs "#015" Wailmer, one row per source that padded differently. */
+function DedupePrintingsPanel() {
+  const [out, setOut] = useState<{
+    dryRun?: boolean;
+    duplicateRows?: number;
+    moved?: number;
+    moves?: Array<{ card: string; toCard: string; to: string; quantity: number; merged: boolean }>;
+    error?: string;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function run(dryRun: boolean) {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/dedupe-printings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dryRun }),
+      });
+      const json = await res.json();
+      setOut(res.ok ? json : { error: json.error || "Failed" });
+    } catch (e) {
+      setOut({ error: e instanceof Error ? e.message : "Failed" });
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="mt-4 space-y-2 border-t border-brand-line pt-3">
+      <p className="m-0 text-xs text-brand-ink4">
+        The same printing can hold two catalogue rows when sources pad numbers differently
+        (&ldquo;#15&rdquo; vs &ldquo;#015&rdquo;), splitting one card across two collection
+        entries. This merges copies onto the best row — priced and pictured first. Only cards
+        whose name, number AND set agree are touched; reprints that share a number stay apart.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button className="btn-secondary text-xs" disabled={busy} onClick={() => void run(true)}>
+          {busy ? "Checking…" : "Preview"}
+        </button>
+        <button
+          className="btn-secondary text-xs"
+          disabled={busy || !out || (out.moved ?? 0) === 0}
+          onClick={() => void run(false)}
+        >
+          Merge them
+        </button>
+      </div>
+      {out?.error && <p className="m-0 text-xs text-brand-negative">{out.error}</p>}
+      {out && !out.error && (
+        <p className="m-0 text-xs text-brand-ink3">
+          {out.dryRun ? "Would move" : "Moved"} {out.moved} cop{(out.moved ?? 0) === 1 ? "y" : "ies"} off{" "}
+          {out.duplicateRows} duplicate row{(out.duplicateRows ?? 0) === 1 ? "" : "s"}.
+        </p>
+      )}
+      {(out?.moves?.length ?? 0) > 0 && (
+        <div className="max-h-56 space-y-0.5 overflow-y-auto text-[11px] text-brand-ink4">
+          {out!.moves!.map((m, i) => (
+            <div key={i} className="font-mono">
+              {m.quantity}× {m.card} → {m.toCard} ({m.to}){m.merged ? " · merged" : ""}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PatternConsolidatePanel() {
   const [out, setOut] = useState<{
     dryRun?: boolean;
