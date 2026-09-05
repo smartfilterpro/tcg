@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 // TrainerDeck Pi bridge: the scanning bench's appliance.
 //
-// Lives on a Raspberry Pi next to the document scanner. The scanner
-// delivers images into a folder on the Pi (PaperStream scan-to-folder to
-// a network share, or scan-to-FTP into a local FTP server's drop dir —
-// `sudo apt install vsftpd`, point its landing directory at --dir). This
-// app watches the folder and posts each file to the TrainerDeck bulk
-// intake in filename order, and serves a WEB PAGE for the whole
-// workflow: enter the rig key once, then per customer stack — type a
-// label, tap "New job", feed the scanner, watch the counter climb.
+// Lives on a Raspberry Pi next to the document scanner and is the whole
+// intake: it RUNS ITS OWN FTP SERVER (receive-only, port 2121 by
+// default), so the scanner's "scan to FTP" points straight at the Pi —
+// nothing else to install. Uploads land in the watch folder and post to
+// the TrainerDeck bulk intake in filename order. A WEB PAGE (port 8321)
+// runs the whole workflow: enter the rig key once, then per customer
+// stack — type a label, tap "New job", feed the scanner, watch the
+// counter climb. Scan-to-folder onto a share that maps to --dir works
+// just as well; the FTP server is a convenience, not a requirement
+// (--ftp-port 0 disables it, --ftp-port 21 needs root).
 //
-//   node scripts/pi-bridge.mjs --dir /home/pi/scans [--port 8321]
+//   node scripts/pi-bridge.mjs --dir /home/pi/scans [--port 8321] [--ftp-port 2121]
 //
 // Config (server URL, rig key, current job) persists in
 // pi-bridge-config.json next to the working directory, so a reboot picks
@@ -34,6 +36,9 @@
 import { readdir, stat, rename, mkdir, readFile, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { createServer } from "node:http";
+import { createWriteStream } from "node:fs";
+import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 
 const args = {};
@@ -45,12 +50,18 @@ const args = {};
 }
 const dir = args.dir;
 const port = Math.max(1, parseInt(args.port ?? "8321", 10) || 8321);
+// Embedded FTP intake (receive-only) — the scanner's scan-to-FTP points
+// straight at the Pi, no vsftpd to install. 0 disables it. Port 21 needs
+// root; most scanners (PaperStream included) let you set a port, so the
+// default stays unprivileged.
+const ftpPort = parseInt(args["ftp-port"] ?? "2121", 10) || 0;
 if (!dir) {
-  console.error("Usage: node scripts/pi-bridge.mjs --dir <scan folder> [--port 8321]");
+  console.error("Usage: node scripts/pi-bridge.mjs --dir <scan folder> [--port 8321] [--ftp-port 2121]");
   process.exit(2);
 }
 const CONFIG_FILE = path.resolve("pi-bridge-config.json");
 const doneDir = path.join(dir, "sent");
+const ftpTmpDir = path.join(dir, ".ftptmp");
 
 // ---------------------------------------------------------------- state
 const cfg = {
@@ -59,6 +70,8 @@ const cfg = {
   job: null, // { id, key, label }
   nextSeq: 1,
   pass: 1,
+  ftpUser: "scan",
+  ftpPass: "scan",
 };
 try {
   Object.assign(cfg, JSON.parse(await readFile(CONFIG_FILE, "utf8")));
@@ -186,6 +199,215 @@ async function sweepFolder() {
   void pump();
 }
 
+/** A NEW job must start from an empty folder: files a previous job left
+ *  behind (a halt, a mid-stack stop) would otherwise post as the new
+ *  customer's first cards. They're set aside, never deleted. */
+async function archiveLeftovers() {
+  const names = (await readdir(dir)).filter((n) => EXTS.has(path.extname(n).toLowerCase()));
+  if (names.length === 0) return 0;
+  const dest = path.join(dir, `leftover-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+  await mkdir(dest, { recursive: true });
+  for (const n of names) await rename(path.join(dir, n), path.join(dest, n)).catch(() => {});
+  queued.length = 0;
+  seen.clear();
+  say(`⚠ ${names.length} leftover scan${names.length === 1 ? "" : "s"} set aside in ${path.basename(dest)}/`);
+  return names.length;
+}
+
+// ------------------------------------------------------------------ ftp
+// A deliberately tiny, receive-only FTP server: enough of RFC 959 for a
+// scanner's "scan to FTP" client — login, binary mode, passive or active
+// data connections, STOR. Files stream into a hidden temp dir and are
+// renamed into the watch folder only when complete, so the pump never
+// sees a half-written upload. Anything destructive (DELE, RETR) is
+// refused; this door only opens inward.
+
+function lanAddresses() {
+  const out = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const i of list ?? []) {
+      if (i.family === "IPv4" && !i.internal) out.push(i.address);
+    }
+  }
+  return out;
+}
+
+function safeName(raw) {
+  const base = path.basename(raw.replace(/\\/g, "/")).trim();
+  return base.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || `scan_${Date.now()}.jpg`;
+}
+
+function startFtp() {
+  const server = net.createServer((ctrl) => {
+    ctrl.setNoDelay(true);
+    let user = "";
+    let authed = false;
+    let renameFrom = null;
+    /** How the next data connection is made: {mode:"pasv",server} or
+     *  {mode:"port",host,port}. */
+    let data = null;
+    const send = (line) => ctrl.write(`${line}\r\n`);
+    send("220 TrainerDeck bridge FTP ready");
+
+    const openData = () =>
+      new Promise((resolve, reject) => {
+        if (!data) return reject(new Error("no data setup"));
+        if (data.mode === "port") {
+          const s = net.connect(data.port, data.host, () => resolve(s));
+          s.on("error", reject);
+        } else {
+          const srv = data.server;
+          const waiting = srv.__pending;
+          if (waiting) resolve(waiting);
+          else {
+            srv.once("connection", (s) => resolve(s));
+            setTimeout(() => reject(new Error("data connection timeout")), 15000);
+          }
+        }
+      });
+
+    let buffer = "";
+    ctrl.on("data", (chunk) => {
+      buffer += chunk.toString("latin1");
+      let idx;
+      while ((idx = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, idx).replace(/\r$/, "");
+        buffer = buffer.slice(idx + 1);
+        void handle(line);
+      }
+    });
+    ctrl.on("error", () => {});
+    ctrl.on("close", () => {
+      if (data?.mode === "pasv") data.server.close();
+    });
+
+    async function handle(line) {
+      const [cmdRaw, ...rest] = line.split(" ");
+      const cmd = cmdRaw.toUpperCase();
+      const arg = rest.join(" ");
+      try {
+        switch (cmd) {
+          case "USER":
+            user = arg;
+            return send("331 Password required");
+          case "PASS":
+            authed = user === cfg.ftpUser && arg === cfg.ftpPass;
+            return send(authed ? "230 Logged in" : "530 Login incorrect");
+          case "SYST":
+            return send("215 UNIX Type: L8");
+          case "FEAT":
+            return ctrl.write("211-Features\r\n UTF8\r\n PASV\r\n EPSV\r\n211 End\r\n");
+          case "OPTS":
+            return send("200 OK");
+          case "TYPE":
+            return send("200 Type set");
+          case "NOOP":
+            return send("200 OK");
+          case "PWD":
+          case "XPWD":
+            return send('257 "/" is current directory');
+          case "CWD":
+          case "CDUP":
+            return send("250 Directory changed");
+          case "MKD":
+          case "XMKD":
+            return send(`257 "${arg || "/"}" created`);
+          case "QUIT":
+            send("221 Bye");
+            return ctrl.end();
+        }
+        if (!authed) return send("530 Log in first");
+        switch (cmd) {
+          case "PASV": {
+            if (data?.mode === "pasv") data.server.close();
+            const srv = net.createServer((s) => {
+              srv.__pending = s;
+            });
+            await new Promise((r) => srv.listen(0, r));
+            data = { mode: "pasv", server: srv };
+            const p = srv.address().port;
+            const host = (ctrl.localAddress ?? "127.0.0.1").replace(/^::ffff:/, "");
+            const h = host.includes(".") ? host.split(".").join(",") : "127,0,0,1";
+            return send(`227 Entering Passive Mode (${h},${Math.floor(p / 256)},${p % 256})`);
+          }
+          case "EPSV": {
+            if (data?.mode === "pasv") data.server.close();
+            const srv = net.createServer((s) => {
+              srv.__pending = s;
+            });
+            await new Promise((r) => srv.listen(0, r));
+            data = { mode: "pasv", server: srv };
+            return send(`229 Entering Extended Passive Mode (|||${srv.address().port}|)`);
+          }
+          case "PORT": {
+            const n = arg.split(",").map((x) => parseInt(x, 10));
+            if (n.length !== 6 || n.some((x) => !Number.isFinite(x))) return send("501 Bad PORT");
+            data = { mode: "port", host: n.slice(0, 4).join("."), port: n[4] * 256 + n[5] };
+            return send("200 PORT OK");
+          }
+          case "EPRT": {
+            const m = /^\|(1|2)\|([^|]+)\|(\d+)\|$/.exec(arg);
+            if (!m) return send("501 Bad EPRT");
+            data = { mode: "port", host: m[2], port: parseInt(m[3], 10) };
+            return send("200 EPRT OK");
+          }
+          case "LIST":
+          case "NLST": {
+            send("150 Here it comes");
+            const s = await openData();
+            s.end("");
+            return send("226 Done");
+          }
+          case "RNFR":
+            renameFrom = safeName(arg);
+            return send("350 Ready for RNTO");
+          case "RNTO": {
+            // Some clients upload to a temp name and rename; honor it.
+            if (!renameFrom) return send("503 RNFR first");
+            const to = safeName(arg);
+            await rename(path.join(dir, renameFrom), path.join(dir, to)).catch(() => {});
+            renameFrom = null;
+            return send("250 Renamed");
+          }
+          case "STOR": {
+            const name = safeName(arg);
+            send("150 Send it");
+            const s = await openData();
+            const tmp = path.join(ftpTmpDir, `${Date.now()}_${name}`);
+            const out = createWriteStream(tmp);
+            s.pipe(out);
+            await new Promise((resolve, reject) => {
+              s.on("end", resolve);
+              s.on("error", reject);
+              out.on("error", reject);
+            });
+            await new Promise((r) => out.end(r));
+            await rename(tmp, path.join(dir, name));
+            say(`ftp ← ${name}`);
+            enqueue(name);
+            void pump();
+            return send("226 Stored");
+          }
+          case "DELE":
+          case "RETR":
+          case "RMD":
+            return send("550 This server only accepts uploads");
+          default:
+            return send("502 Not implemented");
+        }
+      } catch (e) {
+        return send(`451 ${e instanceof Error ? e.message : "failed"}`);
+      }
+    }
+  });
+  server.on("error", (e) => {
+    say(`✗ FTP server failed: ${e.message} (is port ${ftpPort} free?)`);
+  });
+  server.listen(ftpPort, () => {
+    say(`FTP intake on port ${ftpPort} (user "${cfg.ftpUser}") — point the scanner here`);
+  });
+}
+
 // -------------------------------------------------------------- web ui
 const PAGE = `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -210,6 +432,10 @@ small{color:#888}</style></head><body>
 <h2>Server &amp; rig key</h2>
 <input id="base" placeholder="https://trainerdeck.io">
 <input id="rigKey" placeholder="rig key (rk_…) — from Admin → Bulk scan" type="password">
+<h2>Scanner login (FTP)</h2>
+<div id="ftpinfo"><small>FTP disabled (--ftp-port 0)</small></div>
+<input id="ftpUser" placeholder="FTP user (default: scan)">
+<input id="ftpPass" placeholder="FTP password (default: scan)">
 <button class="gray" onclick="saveCfg()">Save settings</button>
 <h2>Use an existing job instead</h2>
 <input id="mjob" placeholder="job id">
@@ -217,9 +443,12 @@ small{color:#888}</style></head><body>
 <input id="mseq" placeholder="start seq (default 1)">
 <button class="gray" onclick="manual()">Use this job</button>
 <h2>Log</h2><div id="log"></div>
-<p><small>No login — anyone on this network can reach this page. Scanner
-delivers files to the watched folder; files post in name order and move
-to sent/ when delivered.</small></p>
+<p><small>No login — anyone on this network can reach this page. The FTP
+address never changes: set the scanner once, and every scan goes to
+whichever job is active here. Files post in name order and move to
+sent/ when delivered; when a new job starts, anything still sitting in
+the folder is set aside into a leftover-… folder, never posted or
+deleted.</small></p>
 <script>
 async function j(url,opts){const r=await fetch(url,opts);const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||r.status);return b}
 async function refresh(){try{const s=await j('/api/state');
@@ -231,9 +460,14 @@ document.getElementById('status').innerHTML=
 +jb+'<br>next seq <b>'+s.nextSeq+'</b> · sent this session <b>'+s.sent+'</b>'+remote
 +(s.lastError?'<br><span class="err">'+s.lastError+'</span>':'');
 document.getElementById('log').textContent=s.log.join('\\n');
+if(s.ftp){document.getElementById('ftpinfo').innerHTML='Point the scanner at: '+
+s.ftp.hosts.map(h=>'<b>ftp://'+h+':'+s.ftp.port+'</b>').join(' or ')+
+' · user <b>'+s.ftp.user+'</b> · password <b>'+s.ftp.pass+'</b> · any folder path works'}
 }catch(e){document.getElementById('status').innerHTML='<span class="err">'+e.message+'</span>'}}
 async function saveCfg(){const base=document.getElementById('base').value.trim();const rigKey=document.getElementById('rigKey').value.trim();
-await j('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base,rigKey})});document.getElementById('rigKey').value='';refresh()}
+const ftpUser=document.getElementById('ftpUser').value.trim();const ftpPass=document.getElementById('ftpPass').value.trim();
+await j('/api/config',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({base,rigKey,ftpUser,ftpPass})});
+document.getElementById('rigKey').value='';document.getElementById('ftpPass').value='';refresh()}
 async function newJob(){const label=document.getElementById('label').value.trim();if(!label)return alert('Give the job a label');
 try{await j('/api/job',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label})});document.getElementById('label').value=''}catch(e){alert(e.message)}refresh()}
 async function act(a){await j('/api/'+a,{method:'POST'});refresh()}
@@ -288,12 +522,18 @@ createServer(async (req, res) => {
         lastError,
         log: log.slice(-40),
         remote: await remoteStatus(),
+        ftp:
+          ftpPort > 0
+            ? { port: ftpPort, user: cfg.ftpUser, pass: cfg.ftpPass, hosts: lanAddresses() }
+            : null,
       });
     }
     if (req.method === "POST" && url.pathname === "/api/config") {
       const b = await body(req);
       if (typeof b.base === "string" && b.base.trim()) cfg.base = b.base.trim().replace(/\/+$/, "");
       if (typeof b.rigKey === "string" && b.rigKey.trim()) cfg.rigKey = b.rigKey.trim();
+      if (typeof b.ftpUser === "string" && b.ftpUser.trim()) cfg.ftpUser = b.ftpUser.trim();
+      if (typeof b.ftpPass === "string" && b.ftpPass.trim()) cfg.ftpPass = b.ftpPass.trim();
       await saveCfg();
       say("settings saved");
       return json(res, 200, { ok: true });
@@ -308,6 +548,7 @@ createServer(async (req, res) => {
       });
       const out = await r.json().catch(() => ({}));
       if (!r.ok) return json(res, r.status, { error: out.error ?? "Job creation failed" });
+      await archiveLeftovers();
       cfg.job = { id: out.job.id, key: out.job.device_key, label: out.job.label };
       cfg.nextSeq = 1;
       running = true;
@@ -351,6 +592,8 @@ createServer(async (req, res) => {
 });
 
 await mkdir(doneDir, { recursive: true });
+await mkdir(ftpTmpDir, { recursive: true });
+if (ftpPort > 0) startFtp();
 watch(dir, (_event, name) => {
   if (!name) return;
   enqueue(name);
