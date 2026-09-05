@@ -429,6 +429,46 @@ export async function matchMtgCard(
   return { match: sorted[0] ?? null, candidates: sorted };
 }
 
+/** Resolve many card names at once — Scryfall's collection endpoint takes
+ *  75 identifiers per request, so a whole decklist is one or two calls
+ *  instead of a rate-limited crawl. Resolved cards are stashed into the
+ *  catalogue (insert-only; the price loop owns them from there) and come
+ *  back keyed by normalizeForSearch of the full name AND the front face,
+ *  so "Fable of the Mirror-Breaker" finds its // card. */
+export async function resolveMtgNames(
+  admin: SupabaseClient,
+  names: string[]
+): Promise<Map<string, CardSummary>> {
+  const out = new Map<string, CardSummary>();
+  const uniq = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+  for (let i = 0; i < uniq.length; i += 75) {
+    const res = await scryPost("/cards/collection", {
+      identifiers: uniq.slice(i, i + 75).map((name) => ({ name })),
+    });
+    const found = ((res?.data as ScryCard[] | undefined) ?? []).filter((c) => !c.digital);
+    for (const c of found) {
+      const s = scryToSummary(c);
+      const keys = new Set([
+        normalizeForSearch(s.name),
+        normalizeForSearch(s.name.split("//")[0].trim()),
+      ]);
+      for (const k of keys) if (k && !out.has(k)) out.set(k, s);
+    }
+    if (found.length > 0) {
+      try {
+        await admin.from("cards").upsert(
+          found.map((c) => summaryToRow(scryToSummary(c))),
+          { onConflict: "id", ignoreDuplicates: true }
+        );
+      } catch {
+        // Pre-072, or a transient write failure — the resolution itself
+        // still answers; the stash is a bonus for next time.
+      }
+    }
+  }
+  return out;
+}
+
 /** A collector number read out of a picker query, when there is one.
  *
  *  People type numbers the way the card prints them — "489", "#489",
