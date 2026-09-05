@@ -199,6 +199,21 @@ async function sweepFolder() {
   void pump();
 }
 
+/** A NEW job must start from an empty folder: files a previous job left
+ *  behind (a halt, a mid-stack stop) would otherwise post as the new
+ *  customer's first cards. They're set aside, never deleted. */
+async function archiveLeftovers() {
+  const names = (await readdir(dir)).filter((n) => EXTS.has(path.extname(n).toLowerCase()));
+  if (names.length === 0) return 0;
+  const dest = path.join(dir, `leftover-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+  await mkdir(dest, { recursive: true });
+  for (const n of names) await rename(path.join(dir, n), path.join(dest, n)).catch(() => {});
+  queued.length = 0;
+  seen.clear();
+  say(`⚠ ${names.length} leftover scan${names.length === 1 ? "" : "s"} set aside in ${path.basename(dest)}/`);
+  return names.length;
+}
+
 // ------------------------------------------------------------------ ftp
 // A deliberately tiny, receive-only FTP server: enough of RFC 959 for a
 // scanner's "scan to FTP" client — login, binary mode, passive or active
@@ -428,9 +443,12 @@ small{color:#888}</style></head><body>
 <input id="mseq" placeholder="start seq (default 1)">
 <button class="gray" onclick="manual()">Use this job</button>
 <h2>Log</h2><div id="log"></div>
-<p><small>No login — anyone on this network can reach this page. Scanner
-delivers files to the watched folder; files post in name order and move
-to sent/ when delivered.</small></p>
+<p><small>No login — anyone on this network can reach this page. The FTP
+address never changes: set the scanner once, and every scan goes to
+whichever job is active here. Files post in name order and move to
+sent/ when delivered; when a new job starts, anything still sitting in
+the folder is set aside into a leftover-… folder, never posted or
+deleted.</small></p>
 <script>
 async function j(url,opts){const r=await fetch(url,opts);const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||r.status);return b}
 async function refresh(){try{const s=await j('/api/state');
@@ -530,6 +548,7 @@ createServer(async (req, res) => {
       });
       const out = await r.json().catch(() => ({}));
       if (!r.ok) return json(res, r.status, { error: out.error ?? "Job creation failed" });
+      await archiveLeftovers();
       cfg.job = { id: out.job.id, key: out.job.device_key, label: out.job.label };
       cfg.nextSeq = 1;
       running = true;
