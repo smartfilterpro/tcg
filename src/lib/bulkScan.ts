@@ -17,7 +17,8 @@ import { estimateCostUsd, logAiUsage, tokensFrom } from "@/lib/usage";
 import { numberKey } from "@/lib/pokemontcg";
 import { normalizeForSearch } from "@/lib/text";
 import { pickPrinting } from "@/lib/cardPrinting";
-import { defaultVariantFor, isSpecificPrinting } from "@/lib/types";
+import { defaultVariantFor, isSpecificPrinting, summaryToRow } from "@/lib/types";
+import { matchMtgCard } from "@/lib/scryfall";
 
 export const BULK_BUCKET = "bulk-scans";
 export const MAX_JOB_CARDS = 8000;
@@ -342,6 +343,45 @@ export async function identifyPhoto(
     };
     const { candidates, ...matchResult } = await matchCatalogue(admin, read, hint);
     let matched: BulkRead = { ...read, ...matchResult };
+
+    // The catalogue only holds what this app has seen; Scryfall holds all
+    // of Magic. A Magic read that matches nothing locally asks Scryfall by
+    // name and number — free and keyless, the same road the picker's
+    // search takes — and the row is stashed so the next copy is local.
+    // (Pokémon stays local-first: its catalogue is synced wholesale.)
+    if (!matched.cardId && read.game === "mtg" && (read.name ?? "").trim()) {
+      try {
+        const { match } = await matchMtgCard({
+          game: "mtg",
+          name: (read.name ?? "").trim(),
+          collectorNumber: (read.number ?? "").split("/")[0].trim() || null,
+          setTotal: null,
+          setNameHint: (read.set_name ?? "").trim() || null,
+          rarityHint: null,
+          confidence: "high",
+        });
+        if (match) {
+          try {
+            await admin
+              .from("cards")
+              .upsert([summaryToRow(match)], { onConflict: "id", ignoreDuplicates: true });
+          } catch {
+            // The stash is a bonus; the match itself still answers.
+          }
+          matched = {
+            ...matched,
+            cardId: match.id,
+            cardName: match.name,
+            cardNumber: match.number,
+            cardSet: match.setName,
+            variant: /holo/i.test(hint) ? "foil" : "normal",
+            matchNote: null,
+          };
+        }
+      } catch {
+        // Scryfall down — the local verdict (and its note) stands.
+      }
+    }
     if (!opts?.check) return matched;
 
     // Arbitration: the deterministic matcher refused but had a shortlist.
