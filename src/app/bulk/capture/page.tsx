@@ -417,6 +417,17 @@ export default function BulkCapturePage() {
   function stopCapture() {
     detectionActiveRef.current = false;
     stopEverything();
+    // Resume where this run left off: seqRef points at the next unclaimed
+    // position (or the first failed one, after a halt). Without this, a
+    // stop-and-restart quietly re-posted seq 1 and OVERWROTE the cards
+    // already shot — same-seq posts are the re-shoot mechanism, so the
+    // server obliged. Editing the field back down is still how you
+    // deliberately re-shoot.
+    setStartSeq(seqRef.current);
+    setInfo(
+      `Stopped after card ${seqRef.current - 1}. Start seq is set to ${seqRef.current} — ` +
+        `press Start to continue this pass where you left off.`
+    );
     setPhase("setup");
   }
 
