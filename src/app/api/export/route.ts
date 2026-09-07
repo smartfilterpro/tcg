@@ -59,7 +59,7 @@ export async function GET(req: Request) {
     ),
     admin
       .from("play_profiles")
-      .select("style_notes")
+      .select("*")
       .eq("user_id", tokenRow.user_id)
       .maybeSingle(),
   ]);
@@ -93,6 +93,7 @@ export async function GET(req: Request) {
       owner: profile?.display_name || "unknown",
       exported_at: new Date().toISOString(),
       play_style: playProfile?.style_notes ?? null,
+      play_style_mtg: (playProfile as { mtg_style_notes?: string } | null)?.mtg_style_notes ?? null,
       total_cards: collection.reduce((s, c) => s + (c.quantity as number), 0),
       unique_cards: collection.length,
       collection,

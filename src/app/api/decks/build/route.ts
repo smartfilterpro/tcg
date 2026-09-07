@@ -715,12 +715,16 @@ export async function POST(req: Request) {
         );
       }
 
+      // The MAGIC profile only (078). No fallback to the Pokémon notes:
+      // "Fire types are my favorite" steering a Commander build is the
+      // bug this column exists to end. select("*") so a pre-078 row
+      // simply reads empty.
       const { data: mtgPlayProfile } = await supabase
         .from("play_profiles")
-        .select("style_notes")
+        .select("*")
         .eq("user_id", user.id)
         .maybeSingle();
-      const mtgStyleNotes = mtgPlayProfile?.style_notes?.trim();
+      const mtgStyleNotes = (mtgPlayProfile as { mtg_style_notes?: string } | null)?.mtg_style_notes?.trim();
 
       cleanupJobs();
       const mtgJobId = crypto.randomUUID();

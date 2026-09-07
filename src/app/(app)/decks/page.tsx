@@ -1115,7 +1115,9 @@ export default function DecksPage() {
   // to remember that in a dozen places.
   const [familyDecks, setFamilyDecks] = useState<Deck[]>(decksCache?.family ?? []);
   const [styleNotes, setStyleNotes] = useState("");
+  const [mtgStyleNotes, setMtgStyleNotes] = useState("");
   const [styleSaved, setStyleSaved] = useState(false);
+  const [styleError, setStyleError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   // Grows with what's typed, same as the chat composer: a deck request is
   // often a paragraph ("beat Dragapult, lean on my Vampires, budget $30"),
@@ -1275,7 +1277,10 @@ export default function DecksPage() {
       });
     fetch("/api/profile")
       .then((r) => r.json())
-      .then((j) => setStyleNotes(j.styleNotes ?? ""));
+      .then((j) => {
+        setStyleNotes(j.styleNotes ?? "");
+        setMtgStyleNotes(j.mtgStyleNotes ?? "");
+      });
 
     // Resume watching an in-flight build after a refresh / tab reload.
     try {
@@ -1293,11 +1298,17 @@ export default function DecksPage() {
   }, []);
 
   async function saveStyle() {
-    await fetch("/api/profile", {
+    setStyleError(null);
+    const res = await fetch("/api/profile", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ styleNotes }),
+      body: JSON.stringify({ styleNotes, mtgStyleNotes }),
     });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setStyleError((j as { error?: string }).error ?? "Couldn't save — try again.");
+      return;
+    }
     setStyleSaved(true);
     setTimeout(() => setStyleSaved(false), 2000);
   }
@@ -1547,21 +1558,30 @@ export default function DecksPage() {
       <div className="card-panel p-4">
         <h2 className="font-semibold">🎮 Your play style</h2>
         <p className="mb-2 mt-0.5 text-xs text-slate-500">
-          Tell {AI_NAME} how you like to play — aggressive, defensive, favorite Pokémon or
-          commanders, combos you love, your experience level. It uses this to tailor every deck
-          it builds for you.
+          Tell {AI_NAME} how you like to play — one profile per game, because &ldquo;fast Fire
+          decks&rdquo; and &ldquo;group-hug Commander&rdquo; are different players. Each build
+          uses its own game&apos;s profile.
         </p>
+        <label className="mb-0.5 block text-xs font-semibold text-amber-700">⚡ Pokémon</label>
         <textarea
-          className="input min-h-24"
+          className="input min-h-20"
           placeholder="e.g. I like fast aggressive decks that hit hard early. Fire types are my favorite. I'm still learning, so keep combos simple."
           value={styleNotes}
           onChange={(e) => setStyleNotes(e.target.value)}
         />
+        <label className="mb-0.5 mt-2 block text-xs font-semibold text-purple-700">🪄 Magic</label>
+        <textarea
+          className="input min-h-20"
+          placeholder="e.g. Green ramp into big creatures. I play casual Commander with friends — flavor over power, no infinite combos."
+          value={mtgStyleNotes}
+          onChange={(e) => setMtgStyleNotes(e.target.value)}
+        />
         <div className="mt-2 flex items-center gap-3">
           <button className="btn-secondary text-sm" onClick={saveStyle}>
-            Save profile
+            Save profiles
           </button>
           {styleSaved && <span className="text-sm text-green-600">Saved ✓</span>}
+          {styleError && <span className="text-sm text-red-600">{styleError}</span>}
         </div>
       </div>
 
