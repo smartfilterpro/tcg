@@ -24,7 +24,10 @@ function normalizeRulesText(text: string): string {
   return text
     .replace(/^\uFEFF/, "")
     .replace(/[\u00A0\u2007\u202F\u2009]/g, " ")
-    .replace(/\r\n?/g, "\n");
+    .replace(/\r\n?/g, "\n")
+    // NUL bytes ride along in some PDF copies, and Postgres refuses any
+    // string containing one - the whole insert batch would fail.
+    .replace(/\u0000/g, "");
 }
 
 /** Is this text the MTG Comprehensive Rules? It announces itself with
@@ -55,7 +58,13 @@ function parseCompRules(text: string): RulesChunk[] {
 
   for (const raw of lines) {
     const line = raw.trim();
-    if (!inGlossary && /^Glossary$/i.test(line)) {
+    // The document opens with a table of contents that lists "Glossary"
+    // and "Credits" as bare lines — identical to the real section starts
+    // hundreds of pages later. Before any rule has been parsed we are in
+    // the TOC, and taking its "Glossary" line at face value ends the
+    // parse at "Credits" with nothing read (the entire import came out
+    // as "0 sections" this way). The real glossary can only follow rules.
+    if (!inGlossary && /^Glossary$/i.test(line) && (out.length > 0 || current)) {
       flush();
       inGlossary = true;
       heading = "Glossary";
@@ -161,9 +170,14 @@ function parseGenericRules(text: string): RulesChunk[] {
 
 export function parseRulesDocument(raw: string): { chunks: RulesChunk[]; shape: string } {
   const text = normalizeRulesText(raw);
-  return looksLikeCompRules(text)
-    ? { chunks: parseCompRules(text), shape: "comprehensive rules" }
-    : { chunks: parseGenericRules(text), shape: "rulebook text" };
+  if (looksLikeCompRules(text)) {
+    const chunks = parseCompRules(text);
+    // A document that announces itself as the comp rules but parses to
+    // almost nothing means the structure surprised us — window it rather
+    // than import nothing.
+    if (chunks.length >= 10) return { chunks, shape: "comprehensive rules" };
+  }
+  return { chunks: parseGenericRules(text), shape: "rulebook text" };
 }
 
 /** Replace one game's library with a freshly parsed document. */
