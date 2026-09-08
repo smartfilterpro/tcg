@@ -1,0 +1,217 @@
+// The rules library's brain: turn an official rules document into
+// searchable sections, and answer the assistant's lookups from them.
+//
+// Two document shapes. MTG's Comprehensive Rules is a plain-text file
+// Wizards publishes with every set — numbered to the sub-rule (100.1a),
+// which makes natural chunks and citable sections. Pokémon has no such
+// file, so its rulebook arrives as pasted text and is chunked by heading.
+// Either way the answer the model gets carries section numbers/titles so
+// replies can cite instead of gesture.
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+export interface RulesChunk {
+  section: string;
+  title: string;
+  body: string;
+}
+
+/** Is this text the MTG Comprehensive Rules? It announces itself with
+ *  hundreds of NNN.N-numbered lines; a rulebook paste has none. */
+function looksLikeCompRules(text: string): boolean {
+  const hits = text.match(/^\d{3}\.\d+[a-z]?\.? /gm)?.length ?? 0;
+  return hits > 200;
+}
+
+/** Comp-rules parser: one chunk per rule number (100.1 plus its lettered
+ *  sub-rules), plus glossary entries. Major headings ("100. General")
+ *  become the running title. */
+function parseCompRules(text: string): RulesChunk[] {
+  const out: RulesChunk[] = [];
+  const lines = text.split(/\r?\n/);
+  let heading = "";
+  let current: RulesChunk | null = null;
+  let inGlossary = false;
+  const flush = () => {
+    if (current && current.body.trim()) out.push({ ...current, body: current.body.trim().slice(0, 4000) });
+    current = null;
+  };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!inGlossary && /^Glossary$/i.test(line)) {
+      flush();
+      inGlossary = true;
+      heading = "Glossary";
+      continue;
+    }
+    if (inGlossary) {
+      // Entries are "Term" on its own line, definition lines after, blank
+      // line between entries.
+      if (!line) {
+        flush();
+        continue;
+      }
+      if (/^Credits$/i.test(line)) {
+        flush();
+        break;
+      }
+      if (!current) current = { section: "", title: line.slice(0, 120), body: "" };
+      else current.body += (current.body ? "\n" : "") + line;
+      continue;
+    }
+    const major = /^(\d{3})\. (.+)$/.exec(line);
+    if (major) {
+      flush();
+      heading = `${major[1]}. ${major[2]}`;
+      continue;
+    }
+    const rule = /^(\d{3}\.\d+)\.? (.*)$/.exec(line);
+    if (rule) {
+      flush();
+      current = { section: rule[1], title: heading, body: `${rule[1]}. ${rule[2]}` };
+      continue;
+    }
+    const sub = /^(\d{3}\.\d+[a-z]) (.*)$/.exec(line);
+    if (sub && current && sub[1].startsWith(current.section)) {
+      current.body += `\n${sub[1]} ${sub[2]}`;
+      continue;
+    }
+    if (current && line) current.body += `\n${line}`;
+  }
+  flush();
+  return out;
+}
+
+/** Generic parser for a pasted rulebook: short line without ending
+ *  punctuation reads as a heading; paragraphs pack into ~1400-char chunks
+ *  under the latest heading. */
+function parseGenericRules(text: string): RulesChunk[] {
+  const out: RulesChunk[] = [];
+  const paras = text
+    .split(/\r?\n\s*\r?\n/)
+    .map((p) => p.replace(/\s+\n/g, "\n").trim())
+    .filter(Boolean);
+  let heading = "";
+  let body = "";
+  const flush = () => {
+    if (body.trim()) out.push({ section: "", title: heading.slice(0, 120), body: body.trim().slice(0, 4000) });
+    body = "";
+  };
+  for (const p of paras) {
+    const oneLine = !p.includes("\n");
+    if (oneLine && p.length < 80 && !/[.:;,]$/.test(p)) {
+      flush();
+      heading = p;
+      continue;
+    }
+    if (body.length + p.length > 1400) flush();
+    body += (body ? "\n\n" : "") + p;
+  }
+  flush();
+  return out;
+}
+
+export function parseRulesDocument(text: string): { chunks: RulesChunk[]; shape: string } {
+  return looksLikeCompRules(text)
+    ? { chunks: parseCompRules(text), shape: "comprehensive rules" }
+    : { chunks: parseGenericRules(text), shape: "rulebook text" };
+}
+
+/** Replace one game's library with a freshly parsed document. */
+export async function importRules(
+  admin: SupabaseClient,
+  game: "pokemon" | "mtg",
+  text: string
+): Promise<{ sections: number; shape: string }> {
+  const { chunks, shape } = parseRulesDocument(text);
+  if (chunks.length < 10) {
+    throw new Error(
+      `Only ${chunks.length} sections came out of that document — it doesn't look like a rules text.`
+    );
+  }
+  const { error: delErr } = await admin.from("rules_sections").delete().eq("game", game);
+  if (delErr) throw missingTable(delErr);
+  for (let i = 0; i < chunks.length; i += 200) {
+    const { error } = await admin
+      .from("rules_sections")
+      .insert(chunks.slice(i, i + 200).map((c) => ({ game, ...c })));
+    if (error) throw missingTable(error);
+  }
+  return { sections: chunks.length, shape };
+}
+
+function missingTable(err: { message: string }): Error {
+  return new Error(
+    /rules_sections/.test(err.message)
+      ? "The rules library needs a database update — run supabase/migrations/079_rules_library.sql."
+      : err.message
+  );
+}
+
+/** The assistant's lookup: rule numbers hit directly, words go through
+ *  full-text search, and the result is formatted for citation. */
+export async function runRulesLookup(
+  admin: SupabaseClient,
+  args: { query?: string; game?: string }
+): Promise<string> {
+  const game = args.game === "mtg" ? "mtg" : "pokemon";
+  const query = (args.query ?? "").trim();
+  if (!query) return "Give the lookup a phrase or a rule number.";
+  try {
+    type Row = { section: string; title: string; body: string };
+    let rows: Row[] = [];
+
+    const num = /^(\d{3}(?:\.\d+[a-z]?)?)/.exec(query);
+    if (num) {
+      const { data } = await admin
+        .from("rules_sections")
+        .select("section, title, body")
+        .eq("game", game)
+        .like("section", `${num[1]}%`)
+        .order("section")
+        .limit(6);
+      rows = (data ?? []) as Row[];
+    }
+    if (rows.length === 0) {
+      const { data, error } = await admin
+        .from("rules_sections")
+        .select("section, title, body")
+        .eq("game", game)
+        .textSearch("tsv", query, { type: "websearch" })
+        .limit(6);
+      if (error && /rules_sections/.test(error.message)) {
+        return "The rules library isn't set up yet (migration 079). Answer from general knowledge and say the official text wasn't available to check.";
+      }
+      rows = (data ?? []) as Row[];
+    }
+    if (rows.length === 0) {
+      // Words too common or too rare for websearch — a loose ilike pass.
+      const { data } = await admin
+        .from("rules_sections")
+        .select("section, title, body")
+        .eq("game", game)
+        .ilike("body", `%${query.replace(/[%_]/g, " ").slice(0, 60)}%`)
+        .limit(4);
+      rows = (data ?? []) as Row[];
+    }
+    if (rows.length === 0) {
+      const { count } = await admin
+        .from("rules_sections")
+        .select("id", { count: "exact", head: true })
+        .eq("game", game);
+      return (count ?? 0) === 0
+        ? `The ${game === "mtg" ? "Magic" : "Pokémon"} rules library is empty — nothing has been imported. Answer from general knowledge and SAY the official text wasn't available to check.`
+        : "No rules section matched that query — try different words or a rule number.";
+    }
+    return rows
+      .map((r) => {
+        const head = [r.section, r.title].filter(Boolean).join(" — ");
+        return `${head ? `[${head}]\n` : ""}${r.body.slice(0, 1500)}`;
+      })
+      .join("\n\n")
+      .slice(0, 7000);
+  } catch (err) {
+    return `Rules lookup failed: ${err instanceof Error ? err.message.slice(0, 120) : "unknown error"}. Answer from general knowledge and say so.`;
+  }
+}
