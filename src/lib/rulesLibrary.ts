@@ -9,6 +9,7 @@
 // replies can cite instead of gesture.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { PublicError } from "@/lib/apiError";
 
 export interface RulesChunk {
   section: string;
@@ -126,26 +127,35 @@ export async function importRules(
 ): Promise<{ sections: number; shape: string }> {
   const { chunks, shape } = parseRulesDocument(text);
   if (chunks.length < 10) {
-    throw new Error(
+    throw new PublicError(
       `Only ${chunks.length} sections came out of that document — it doesn't look like a rules text.`
     );
   }
   const { error: delErr } = await admin.from("rules_sections").delete().eq("game", game);
-  if (delErr) throw missingTable(delErr);
-  for (let i = 0; i < chunks.length; i += 200) {
+  if (delErr) throw asImportError(delErr);
+  // Batches of 100 — big enough to be quick, small enough that a batch
+  // stays well under any request-payload cap between here and Postgres.
+  for (let i = 0; i < chunks.length; i += 100) {
     const { error } = await admin
       .from("rules_sections")
-      .insert(chunks.slice(i, i + 200).map((c) => ({ game, ...c })));
-    if (error) throw missingTable(error);
+      .insert(chunks.slice(i, i + 100).map((c) => ({ game, ...c })));
+    if (error) throw asImportError(error, i);
   }
   return { sections: chunks.length, shape };
 }
 
-function missingTable(err: { message: string }): Error {
-  return new Error(
-    /rules_sections/.test(err.message)
-      ? "The rules library needs a database update — run supabase/migrations/079_rules_library.sql."
-      : err.message
+/** Import failures a person can act on say so; everything else is logged
+ *  by the route and reported as a write failure with its position. */
+function asImportError(err: { message: string }, at?: number): Error {
+  if (/rules_sections/.test(err.message)) {
+    return new PublicError(
+      "The rules library needs a database update — run supabase/migrations/079_rules_library.sql."
+    );
+  }
+  console.error("rules import failed:", err.message);
+  return new PublicError(
+    `The import failed while writing${at != null ? ` around section ${at}` : ""} — the server log has the database's reason.`,
+    500
   );
 }
 
