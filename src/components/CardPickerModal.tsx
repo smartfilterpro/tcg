@@ -194,6 +194,11 @@ export default function CardPickerModal({
   const [deep, setDeep] = useState(false);
   const [deepDone, setDeepDone] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Monotonic search counter: the guard against a slow old answer
+   *  overwriting a fast new one, and the key the local fast lane checks
+   *  before painting under the full answer. */
+  const searchSeq = useRef(0);
+  const fullAnswerAt = useRef(0);
   /** Has a search actually run? "No results" is a claim about a search, and
    *  before this is true no search has happened — see the mount effect. */
   const [searched, setSearched] = useState(candidates.length > 0);
@@ -202,17 +207,35 @@ export default function CardPickerModal({
   async function runSearch(text: string, everySource = false) {
     const term = text.trim();
     if (!term) return;
+    const seq = ++searchSeq.current;
     if (everySource) {
       setDeep(true);
       setDeepDone(false);
     }
     setLoading(true);
+    const base = `/api/cards/search?q=${encodeURIComponent(term)}${game === "mtg" ? "&game=mtg" : ""}`;
+    // The fast lane: our own rows, painted the moment they arrive. The
+    // full answer (external sources folded in) replaces them when it
+    // lands; the spinner stays up until then so a short local answer
+    // doesn't read as final.
+    if (!everySource) {
+      void fetch(`${base}&local=1`)
+        .then((r) => r.json())
+        .then((j) => {
+          if (seq !== searchSeq.current || fullAnswerAt.current >= seq) return;
+          if (Array.isArray(j.cards) && j.cards.length > 0) {
+            setResults(j.cards);
+            setSearched(true);
+          }
+        })
+        .catch(() => {});
+    }
     try {
-      const res = await fetch(
-        `/api/cards/search?q=${encodeURIComponent(term)}${everySource ? "&deep=1" : ""}${
-          game === "mtg" ? "&game=mtg" : ""
-        }`
-      );
+      const res = await fetch(`${base}${everySource ? "&deep=1" : ""}`);
+      // A newer keystroke owns the box now — a slow old answer must not
+      // overwrite a fast new one.
+      if (seq !== searchSeq.current) return;
+      fullAnswerAt.current = seq;
       const json = await res.json();
       if (res.ok) {
         setResults(json.cards);
@@ -220,8 +243,10 @@ export default function CardPickerModal({
       }
       if (everySource) setDeepDone(true);
     } finally {
-      setSearched(true);
-      setLoading(false);
+      if (seq === searchSeq.current) {
+        setSearched(true);
+        setLoading(false);
+      }
     }
   }
 
