@@ -17,11 +17,26 @@ export interface RulesChunk {
   body: string;
 }
 
+/** Every shape a paste arrives in, folded to one: BOM stripped, exotic
+ *  spaces made ordinary, CR line endings made LF. A PDF copy and the
+ *  official TXT should parse the same. */
+function normalizeRulesText(text: string): string {
+  return text
+    .replace(/^\uFEFF/, "")
+    .replace(/[\u00A0\u2007\u202F\u2009]/g, " ")
+    .replace(/\r\n?/g, "\n");
+}
+
 /** Is this text the MTG Comprehensive Rules? It announces itself with
- *  hundreds of NNN.N-numbered lines; a rulebook paste has none. */
+ *  hundreds of NNN.N-numbered lines; a rulebook paste has none. Counted
+ *  on trimmed lines so a PDF copy's stray indentation doesn't hide it. */
 function looksLikeCompRules(text: string): boolean {
-  const hits = text.match(/^\d{3}\.\d+[a-z]?\.? /gm)?.length ?? 0;
-  return hits > 200;
+  let hits = 0;
+  for (const line of text.split("\n")) {
+    if (/^\d{3}\.\d+[a-z]?\b/.test(line.trim())) hits++;
+    if (hits > 150) return true;
+  }
+  return false;
 }
 
 /** Comp-rules parser: one chunk per rule number (100.1 plus its lettered
@@ -67,15 +82,23 @@ function parseCompRules(text: string): RulesChunk[] {
       heading = `${major[1]}. ${major[2]}`;
       continue;
     }
-    const rule = /^(\d{3}\.\d+)\.? (.*)$/.exec(line);
+    // Sub-rules (100.1a) join their parent's chunk when it's current; a
+    // stray one (the parent lost to formatting) starts its own rather
+    // than vanishing.
+    const sub = /^(\d{3}\.\d+[a-z])\.?\s*(.*)$/.exec(line);
+    if (sub) {
+      if (current && sub[1].startsWith(current.section) && current.section) {
+        current.body += `\n${sub[1]} ${sub[2]}`;
+      } else {
+        flush();
+        current = { section: sub[1], title: heading, body: `${sub[1]} ${sub[2]}` };
+      }
+      continue;
+    }
+    const rule = /^(\d{3}\.\d+)\.?\s*(.*)$/.exec(line);
     if (rule) {
       flush();
       current = { section: rule[1], title: heading, body: `${rule[1]}. ${rule[2]}` };
-      continue;
-    }
-    const sub = /^(\d{3}\.\d+[a-z]) (.*)$/.exec(line);
-    if (sub && current && sub[1].startsWith(current.section)) {
-      current.body += `\n${sub[1]} ${sub[2]}`;
       continue;
     }
     if (current && line) current.body += `\n${line}`;
@@ -84,14 +107,19 @@ function parseCompRules(text: string): RulesChunk[] {
   return out;
 }
 
-/** Generic parser for a pasted rulebook: short line without ending
- *  punctuation reads as a heading; paragraphs pack into ~1400-char chunks
- *  under the latest heading. */
+/** Generic parser for a pasted rulebook. A heading is a SHORT line that
+ *  doesn't read as prose — few words, no sentence punctuation, not
+ *  starting lowercase. Everything else packs into ~1400-char chunks under
+ *  the latest heading. A PDF copy that arrives as hundreds of short
+ *  wrapped lines (which defeated the first version of this — every line
+ *  read as a "heading" and NOTHING as body) is caught by the fallback:
+ *  zero chunks parsed means the text gets windowed instead, because an
+ *  unlabeled chunk beats a silent nothing. */
 function parseGenericRules(text: string): RulesChunk[] {
   const out: RulesChunk[] = [];
   const paras = text
-    .split(/\r?\n\s*\r?\n/)
-    .map((p) => p.replace(/\s+\n/g, "\n").trim())
+    .split(/\n\s*\n/)
+    .map((p) => p.replace(/[ \t]+\n/g, "\n").trim())
     .filter(Boolean);
   let heading = "";
   let body = "";
@@ -99,9 +127,14 @@ function parseGenericRules(text: string): RulesChunk[] {
     if (body.trim()) out.push({ section: "", title: heading.slice(0, 120), body: body.trim().slice(0, 4000) });
     body = "";
   };
+  const isHeading = (p: string) =>
+    !p.includes("\n") &&
+    p.length < 60 &&
+    p.split(/\s+/).length <= 7 &&
+    !/[.:;,!?]$/.test(p) &&
+    !/^[a-z]/.test(p);
   for (const p of paras) {
-    const oneLine = !p.includes("\n");
-    if (oneLine && p.length < 80 && !/[.:;,]$/.test(p)) {
+    if (isHeading(p)) {
       flush();
       heading = p;
       continue;
@@ -110,10 +143,24 @@ function parseGenericRules(text: string): RulesChunk[] {
     body += (body ? "\n\n" : "") + p;
   }
   flush();
-  return out;
+  if (out.length >= 10) return out;
+
+  // Fallback: fixed windows on whitespace boundaries. Loses headings,
+  // keeps every word searchable.
+  const flat = text.replace(/\s+/g, " ").trim();
+  const windows: RulesChunk[] = [];
+  for (let i = 0; i < flat.length; ) {
+    let end = Math.min(i + 1400, flat.length);
+    const space = flat.lastIndexOf(" ", end);
+    if (space > i + 600) end = space;
+    windows.push({ section: "", title: "", body: flat.slice(i, end).trim() });
+    i = end;
+  }
+  return windows.length > out.length ? windows : out;
 }
 
-export function parseRulesDocument(text: string): { chunks: RulesChunk[]; shape: string } {
+export function parseRulesDocument(raw: string): { chunks: RulesChunk[]; shape: string } {
+  const text = normalizeRulesText(raw);
   return looksLikeCompRules(text)
     ? { chunks: parseCompRules(text), shape: "comprehensive rules" }
     : { chunks: parseGenericRules(text), shape: "rulebook text" };
