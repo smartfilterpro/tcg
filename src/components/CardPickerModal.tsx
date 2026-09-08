@@ -273,7 +273,7 @@ export default function CardPickerModal({
             className="input w-full sm:w-auto sm:flex-1"
             placeholder={
               game === "mtg"
-                ? '🔍 Card name — e.g. "Lightning Bolt", or Scryfall syntax like "t:goblin set:mh3"'
+                ? '🔍 Name or set — e.g. "Lightning Bolt", "set:The Hobbit", or Scryfall syntax "t:goblin"'
                 : '🔍 Name, number, or set: — e.g. "Charizard", "101/190", "set:Trick or Trade"'
             }
             value={query}

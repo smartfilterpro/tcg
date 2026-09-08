@@ -22,6 +22,7 @@ import {
   type DetectedCard,
 } from "@/lib/types";
 import { normalizeForSearch } from "@/lib/text";
+import { setKey, setsAgree } from "@/lib/setName";
 
 const BASE = "https://api.scryfall.com";
 const TIMEOUT_MS = 8_000;
@@ -532,12 +533,88 @@ export async function searchMtgCards(query: string, limit = 30): Promise<CardSum
 /** Picker search for MTG: our own rows first (instant, and they carry the
  *  member-visible prices), then Scryfall for everything we've never held,
  *  deduped by id. */
+/** Scryfall's set directory, cached — the bridge from a set's NAME (what a
+ *  person types) to its CODE (what the search API takes). */
+interface ScrySet {
+  code: string;
+  name: string;
+  digital?: boolean;
+  card_count?: number;
+  set_type?: string;
+}
+let setDirCache: { at: number; sets: ScrySet[] } = { at: 0, sets: [] };
+async function mtgSetDirectory(): Promise<ScrySet[]> {
+  if (Date.now() - setDirCache.at < 6 * 3_600_000 && setDirCache.sets.length > 0) {
+    return setDirCache.sets;
+  }
+  const res = await scryGet("/sets");
+  const sets = ((res?.data as ScrySet[] | undefined) ?? []).filter(
+    (s) => !s.digital && (s.card_count ?? 0) > 0
+  );
+  if (sets.length > 0) setDirCache = { at: Date.now(), sets };
+  return sets;
+}
+
+/** The set a typed term names, or null. Bare terms match strictly (the
+ *  exact name, punctuation-blind, or setsAgree with exactly one set) so a
+ *  card-name search is never hijacked; an explicit "set:" prefix also
+ *  accepts the raw code and a unique substring. Ties prefer the biggest
+ *  printing — "The Hobbit" over its promos and tokens. */
+function matchMtgSetName(term: string, sets: ScrySet[], explicit: boolean): ScrySet | null {
+  const key = setKey(term);
+  if (!key) return null;
+  const biggest = (list: ScrySet[]) =>
+    [...list].sort((a, b) => (b.card_count ?? 0) - (a.card_count ?? 0))[0] ?? null;
+  const exact = sets.filter((s) => setKey(s.name) === key);
+  if (exact.length > 0) return biggest(exact);
+  const agree = sets.filter((s) => setsAgree(s.name, term));
+  if (agree.length === 1) return agree[0];
+  if (explicit) {
+    const code = sets.find((s) => s.code.toLowerCase() === term.toLowerCase());
+    if (code) return code;
+    if (key.length >= 4) {
+      const contains = sets.filter((s) => setKey(s.name).includes(key));
+      if (contains.length >= 1 && contains.length <= 3) return biggest(contains);
+    }
+  }
+  return null;
+}
+
+/** Every card in one set, collector order — the Magic side of the Pokémon
+ *  picker's "set:Trick or Trade" listing. Two pages covers any real set. */
+async function mtgSetCards(code: string): Promise<CardSummary[]> {
+  const out: CardSummary[] = [];
+  let path = `/cards/search?q=${encodeURIComponent(`e:${code}`)}&order=set&unique=prints`;
+  for (let page = 0; page < 2 && path; page++) {
+    const res = await scryGet(path);
+    const cards = (res?.data as ScryCard[] | undefined) ?? [];
+    out.push(...cards.filter((c) => !c.digital).map(scryToSummary));
+    const next = res?.next_page as string | undefined;
+    path = next && next.startsWith("https://api.scryfall.com") ? next.slice("https://api.scryfall.com".length) : "";
+  }
+  return out;
+}
+
 export async function runMtgSearch(
   supabase: SupabaseClient,
   query: string
 ): Promise<CardSummary[]> {
   const term = query.trim();
   if (!term) return [];
+
+  // "set:The Hobbit" — or a bare term that IS a set's name — lists the
+  // set in collector order, the same contract the Pokémon picker keeps.
+  // Scryfall's own set: filter only takes CODES, so the directory does
+  // the name-to-code step people shouldn't have to know about.
+  const explicitSet = /^set:\s*(.+)$/i.exec(term);
+  try {
+    const dir = await mtgSetDirectory();
+    const hit = matchMtgSetName((explicitSet?.[1] ?? term).trim(), dir, !!explicitSet);
+    if (hit) return await mtgSetCards(hit.code);
+  } catch {
+    // The directory is a bonus; the name search below still answers.
+  }
+
   let local: CardSummary[] = [];
   try {
     const wanted = normalizeForSearch(term);
