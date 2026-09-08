@@ -90,7 +90,7 @@ export async function buildContext(
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(12),
-    supabase.from("play_profiles").select("style_notes").eq("user_id", userId).maybeSingle(),
+    supabase.from("play_profiles").select("*").eq("user_id", userId).maybeSingle(),
     supabase
       .from("grade_reports")
       .select("card_name, estimated_grade, created_at")
@@ -264,8 +264,16 @@ export async function buildContext(
     );
   }
 
-  const style = (profileRes.data?.style_notes ?? "").trim();
-  if (style) parts.push(`HOW THEY LIKE TO PLAY (their own words): ${style.slice(0, 800)}`);
+  // One profile per game (078); the chat sees both, labeled, and applies
+  // whichever fits the question's game.
+  const profileRow = (profileRes.data ?? null) as {
+    style_notes?: string;
+    mtg_style_notes?: string;
+  } | null;
+  const style = (profileRow?.style_notes ?? "").trim();
+  if (style) parts.push(`HOW THEY LIKE TO PLAY POKÉMON (their own words): ${style.slice(0, 800)}`);
+  const mtgStyle = (profileRow?.mtg_style_notes ?? "").trim();
+  if (mtgStyle) parts.push(`HOW THEY LIKE TO PLAY MAGIC (their own words): ${mtgStyle.slice(0, 800)}`);
 
   return {
     text: parts.join("\n\n"),
