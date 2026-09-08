@@ -597,7 +597,11 @@ async function mtgSetCards(code: string): Promise<CardSummary[]> {
 
 export async function runMtgSearch(
   supabase: SupabaseClient,
-  query: string
+  query: string,
+  opts?: {
+    /** Our own rows only, immediately — the picker's fast lane. */
+    localOnly?: boolean;
+  }
 ): Promise<CardSummary[]> {
   const term = query.trim();
   if (!term) return [];
@@ -607,12 +611,14 @@ export async function runMtgSearch(
   // Scryfall's own set: filter only takes CODES, so the directory does
   // the name-to-code step people shouldn't have to know about.
   const explicitSet = /^set:\s*(.+)$/i.exec(term);
-  try {
-    const dir = await mtgSetDirectory();
-    const hit = matchMtgSetName((explicitSet?.[1] ?? term).trim(), dir, !!explicitSet);
-    if (hit) return await mtgSetCards(hit.code);
-  } catch {
-    // The directory is a bonus; the name search below still answers.
+  if (!opts?.localOnly) {
+    try {
+      const dir = await mtgSetDirectory();
+      const hit = matchMtgSetName((explicitSet?.[1] ?? term).trim(), dir, !!explicitSet);
+      if (hit) return await mtgSetCards(hit.code);
+    } catch {
+      // The directory is a bonus; the name search below still answers.
+    }
   }
 
   let local: CardSummary[] = [];
@@ -651,6 +657,7 @@ export async function runMtgSearch(
   } catch {
     // pre-072 database — Scryfall alone still answers
   }
+  if (opts?.localOnly) return local.slice(0, 40);
   const remote = await searchMtgCards(term);
   const seen = new Set(local.map((c) => c.id));
   return [...local, ...remote.filter((c) => !seen.has(c.id))].slice(0, 40);

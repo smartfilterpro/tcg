@@ -1415,6 +1415,10 @@ export default function AdminPage() {
             <DedupePrintingsPanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">📖 Rules library</h2>
+            <RulesLibraryPanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">⏱️ Recent scans</h2>
             <ScanLogPanel />
           </div>
@@ -4593,6 +4597,101 @@ function SearchProbePanel() {
  *  Ball pattern" finish, or the printing's own row. Saving prefers the row
  *  now, so nothing new splits — this is for everything recorded before that,
  *  which is otherwise valued as the plain card it isn't. */
+/** The official game rules, imported so DeckAI cites the text instead of
+ *  paraphrasing from memory. MTG: the Comprehensive Rules TXT by URL.
+ *  Pokémon: the rulebook pasted as text. */
+function RulesLibraryPanel() {
+  const [status, setStatus] = useState<Record<
+    string,
+    { sections: number; updated: string | null }
+  > | null>(null);
+  const [game, setGame] = useState<"mtg" | "pokemon">("mtg");
+  const [url, setUrl] = useState("");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const res = await fetch("/api/admin/rules");
+    const json = await res.json();
+    if (res.ok && !json.missing) setStatus(json);
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function doImport() {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/admin/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game, url: url.trim() || undefined, text: text.trim() || undefined }),
+      });
+      const json = await res.json();
+      if (!res.ok) setErr(json.error ?? "Import failed");
+      else {
+        setMsg(`Imported ${json.sections} sections (${json.shape}).`);
+        setUrl("");
+        setText("");
+        void load();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 text-xs">
+      <p className="m-0 text-brand-ink4">
+        DeckAI answers rules questions from this library, citing section numbers — empty means
+        it falls back to memory and says so. Magic: paste the URL of the official Comprehensive
+        Rules TXT (magic.wizards.com/en/rules; it changes each set). Pokémon: paste the
+        rulebook&apos;s text. Importing replaces that game&apos;s library.
+      </p>
+      <div className="text-brand-ink3">
+        {status
+          ? (["mtg", "pokemon"] as const).map((g) => (
+              <span key={g} className="mr-4">
+                {g === "mtg" ? "🪄 Magic" : "⚡ Pokémon"}:{" "}
+                <b>{status[g]?.sections ?? 0}</b> sections
+                {status[g]?.updated ? ` · ${new Date(status[g]!.updated!).toLocaleDateString()}` : ""}
+              </span>
+            ))
+          : "Run migration 079 to enable."}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select className="input w-auto py-1" value={game} onChange={(e) => setGame(e.target.value as "mtg" | "pokemon")}>
+          <option value="mtg">Magic</option>
+          <option value="pokemon">Pokémon</option>
+        </select>
+        <input
+          className="input min-w-64 flex-1 py-1"
+          placeholder="https://media.wizards.com/…/MagicCompRules….txt"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+        />
+      </div>
+      <textarea
+        className="input min-h-20 w-full font-mono text-[11px]"
+        placeholder="…or paste the rules text here (used instead of the URL when filled)"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <div className="flex items-center gap-2">
+        <button className="btn-secondary text-xs" disabled={busy || (!url.trim() && !text.trim())} onClick={() => void doImport()}>
+          {busy ? "Importing…" : "Import"}
+        </button>
+        {msg && <span className="text-brand-positive">{msg}</span>}
+        {err && <span className="text-brand-negative">{err}</span>}
+      </div>
+    </div>
+  );
+}
+
 /** Merge collection copies split across duplicate catalogue rows — the
  *  "#15" vs "#015" Wailmer, one row per source that padded differently. */
 function DedupePrintingsPanel() {

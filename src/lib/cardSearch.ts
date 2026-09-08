@@ -18,7 +18,7 @@ import { searchCards, numberKey, cleanCardName, numberVariants } from "@/lib/pok
 import { searchTcgdex, tcgdexSetCards } from "@/lib/tcgdex";
 import { parseCardQuery, type ParsedCardQuery } from "@/lib/cardQuery";
 import { normalizeForSearch } from "@/lib/text";
-import { setsAgree } from "@/lib/setName";
+import { setKey, setsAgree } from "@/lib/setName";
 import { rowToSummary, type CardSummary, type CardSummaryRow } from "@/lib/types";
 import { trackerSetCards, trackerSearchCards } from "@/lib/priceTrackerSync";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -253,6 +253,9 @@ export async function runCardSearch(
      *  only the paid source knows them. This is billed, so it happens when
      *  somebody asks rather than on every keystroke. */
     deep?: boolean;
+    /** Answer from the catalogue alone and return immediately — the
+     *  picker's fast lane, painted while the full answer is in flight. */
+    localOnly?: boolean;
   }
 ): Promise<SearchOutcome> {
   const label = (c: CardSummary) => `${c.number} ${c.name} [${c.setName ?? "?"}]`;
@@ -273,6 +276,22 @@ export async function runCardSearch(
     const local = await searchCatalogue(supabase, parsed);
     note("catalogue", "Our own cards table.", local);
 
+    if (opts?.localOnly) {
+      return {
+        cards: local,
+        source: "catalogue",
+        trace: {
+          query: q,
+          parsed: parsed as unknown as Record<string, unknown>,
+          listingSet: !!parsed.setName && !parsed.name && !parsed.number,
+          needExternal: false,
+          stages,
+          foldedAway: [],
+          cutByLimit: [],
+        },
+      };
+    }
+
     // The external cascade is a supplement now, not the search. It runs only
     // when the catalogue couldn't fully answer: the requested number wasn't
     // found locally, or a name-only search came back thin (the catalogue is
@@ -288,10 +307,26 @@ export async function runCardSearch(
     // contains one. "We hold some of this set" says nothing about whether we
     // hold all of it, and the merge below folds the duplicates anyway.
     const listingSet = !!parsed.setName && !parsed.name && !parsed.number;
+    // A set our rows PROVABLY cover answers locally: exactly one set among
+    // the hits (by key, so two years' bundles or a promo subset never pass
+    // as one), a printed total on file, and at least that many distinct
+    // collector numbers held. Secret rares only push the count higher.
+    // Anything short of proof keeps today's ask-outside behavior.
+    const setComplete =
+      listingSet &&
+      local.length > 0 &&
+      (() => {
+        if (new Set(local.map((c) => setKey(c.setName ?? ""))).size !== 1) return false;
+        const totals = new Set(local.map((c) => c.setPrintedTotal ?? 0));
+        if (totals.size !== 1) return false;
+        const total = [...totals][0];
+        if (!total) return false;
+        return new Set(local.map((c) => numberKey(c.number))).size >= total;
+      })();
     const needExternal = opts?.deep
       ? true
       : listingSet
-      ? true
+      ? !setComplete
       : parsed.setName
         ? local.length === 0
         : wantedKey
@@ -309,7 +344,7 @@ export async function runCardSearch(
               ? "The catalogue has no card with that collector number."
               : `The catalogue returned ${local.length}, fewer than the 8 that counts as a full answer.`
         : listingSet
-          ? "(unreachable)"
+          ? "The catalogue holds the complete set — every collector number up to the printed total — so nothing outside can add to it."
           : wantedKey
             ? "The catalogue already has that collector number — no external call."
             : `The catalogue returned ${local.length}, enough to answer without asking outside. A card the import hasn't reached yet is invisible here.`

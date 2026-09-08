@@ -19,6 +19,7 @@ import { setsAgree } from "@/lib/setName";
 import { resolveNickname } from "@/lib/cardNicknames";
 import { buyLinkFor } from "@/lib/buyLink";
 import { errorJson, safeMessage } from "@/lib/apiError";
+import { runRulesLookup } from "@/lib/rulesLibrary";
 
 export const maxDuration = 120;
 
@@ -178,6 +179,31 @@ const SET_COMPLETION_TOOL = {
       },
     },
     required: ["set_name"],
+  },
+};
+
+/** The official rules, on file. Answers to "how does the game work" come
+ *  from the imported Comprehensive Rules / rulebook text instead of the
+ *  model's memory — memory paraphrases, and a rules answer that's almost
+ *  right is wrong. */
+const RULES_TOOL = {
+  name: "rules_lookup",
+  description:
+    "Search the OFFICIAL game rules on file (the MTG Comprehensive Rules; " +
+    "the Pokémon TCG rulebook) for the exact text governing a situation. " +
+    "Use it whenever an answer turns on how the game itself works — timing, " +
+    "priority, keyword abilities, zones, state-based actions, evolution, " +
+    "retreat, prizes, mulligans — and cite the section numbers it returns. " +
+    "Query with a specific phrase ('deathtouch trample damage assignment') " +
+    "or a rule number ('702.19'). If it reports the library empty, answer " +
+    "from general knowledge and say the official text wasn't available.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      query: { type: "string", description: "Words or a rule number to search for." },
+      game: { type: "string", enum: ["pokemon", "mtg"], description: "Which game's rules." },
+    },
+    required: ["query", "game"],
   },
 };
 
@@ -648,7 +674,7 @@ async function runChat(opts: {
         // return no text at all. The cap is a ceiling, not a charge.
         max_tokens: 12000,
         system,
-        tools: [CARD_LOOKUP_TOOL, SET_COMPLETION_TOOL, DECK_EDIT_TOOL],
+        tools: [CARD_LOOKUP_TOOL, SET_COMPLETION_TOOL, RULES_TOOL, DECK_EDIT_TOOL],
         output_config: { effort },
         // The last permitted round forbids another lookup, so the model
         // answers with what it has instead of ending mid-thought on a tool
@@ -698,7 +724,12 @@ async function runChat(opts: {
           ? await runCardLookup(supabase, args, userId)
           : b.name === "set_completion"
             ? await runSetCompletion(supabase, userId, args)
-            : `Unknown tool: ${b.name}`;
+            : b.name === "rules_lookup"
+              ? await runRulesLookup(
+                  createAdminClient(),
+                  args as { query?: string; game?: string }
+                )
+              : `Unknown tool: ${b.name}`;
       results.push({ type: "tool_result", tool_use_id: b.id, content: lookup });
     }
     messages.push({ role: "user", content: results });
