@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
+import CardLookup from "@/components/CardLookup";
 import CardText, { useCardText } from "@/components/CardText";
 import CardZoom from "@/components/CardZoom";
 import { askDeckAI } from "@/components/TrainerChat";
@@ -866,20 +867,23 @@ export default function CollectionPage({
         </div>
         {/* Adding, scanning and refreshing all act on YOUR collection, so
             they'd be lying about what they'd do while someone else's is on
-            screen. */}
-        {!readOnly && (
-          <div className="flex flex-wrap gap-2">
-            <button className="btn-secondary" onClick={refreshPrices} disabled={refreshing}>
-              {refreshing ? "Refreshing…" : "↻ Refresh prices"}
-            </button>
-            <button className="btn-secondary" onClick={() => setShowAdd(true)}>
-              + Add by search
-            </button>
-            <Link href="/scan" className="btn-primary">
-              📷 Scan
-            </Link>
-          </div>
-        )}
+            screen. Look up writes nothing, so it stays even then. */}
+        <div className="flex flex-wrap gap-2">
+          <CardLookup game={activeGame} />
+          {!readOnly && (
+            <>
+              <button className="btn-secondary" onClick={refreshPrices} disabled={refreshing}>
+                {refreshing ? "Refreshing…" : "↻ Refresh prices"}
+              </button>
+              <button className="btn-secondary" onClick={() => setShowAdd(true)}>
+                + Add by search
+              </button>
+              <Link href="/scan" className="btn-primary">
+                📷 Scan
+              </Link>
+            </>
+          )}
+        </div>
       </div>
 
       {householdSwitcher}
