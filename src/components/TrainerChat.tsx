@@ -462,6 +462,7 @@ export default function TrainerChat() {
           >
             <textarea
               ref={inputRef}
+              name="deckai-message"
               rows={1}
               maxLength={2000}
               className="max-h-28 min-h-[38px] flex-1 resize-none overflow-y-auto rounded-[14px] border border-brand-line-strong bg-white px-3 py-2 text-[13.5px] outline-none focus:border-brand-accent"
