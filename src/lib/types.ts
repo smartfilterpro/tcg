@@ -548,6 +548,11 @@ export interface DeckSuggestion {
   /** Where "buy it" points — a TCGplayer product/search URL, affiliate-
    *  wrapped when the program link is configured (see lib/buyLink). */
   buyUrl?: string;
+  /** The priciest printing's market price, when it exceeds the shown one.
+   *  `card` and its price are the CHEAPEST priced printing — a buy list is
+   *  a shopping list — and this carries the top of the range so collector
+   *  versions are visible without being quoted as the cost. */
+  priceHigh?: number | null;
 }
 
 export interface Deck {

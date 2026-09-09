@@ -954,6 +954,7 @@ export async function POST(req: Request) {
               reason: string;
               card?: CardSummary | null;
               buyUrl?: string;
+              priceHigh?: number | null;
             }>;
           };
           try {
@@ -1098,6 +1099,10 @@ export async function POST(req: Request) {
           // budget than the Pokémon path can afford). A name that resolves
           // nowhere is removed and said out loud.
           const resolvedByKey = new Map<string, CardSummary>();
+          // Priciest printing seen per name — the top of the buy list's
+          // range. The resolved row itself is the CHEAPEST priced printing:
+          // a reprinted staple costs its reprint price, not its original's.
+          const priceHighByKey = new Map<string, number>();
           const keys = [
             ...new Set(
               (deck.cards ?? [])
@@ -1117,14 +1122,22 @@ export async function POST(req: Request) {
                 CardSummaryRow & { tcgplayer_id?: string | null; battle_data?: MtgBattleData | null }
               >) {
                 const k = normalizeForSearch(raw.name);
-                if (!resolvedByKey.has(k) || raw.market_price != null) {
-                  const summary = rowToSummary(raw);
-                  if (raw.tcgplayer_id != null) summary.tcgplayerId = Number(raw.tcgplayer_id) || null;
-                  resolvedByKey.set(k, summary);
-                  if (raw.battle_data && (raw.battle_data as { game?: string }).game === "mtg") {
-                    factsByName.set(k, raw.battle_data as MtgBattleData);
-                  }
+                const summary = rowToSummary(raw);
+                if (raw.tcgplayer_id != null) summary.tcgplayerId = Number(raw.tcgplayer_id) || null;
+                if (summary.marketPrice != null) {
+                  priceHighByKey.set(k, Math.max(priceHighByKey.get(k) ?? 0, summary.marketPrice));
                 }
+                // Oracle facts read the same off any printing — take them
+                // wherever they appear, winner or not.
+                if (raw.battle_data && (raw.battle_data as { game?: string }).game === "mtg") {
+                  factsByName.set(k, raw.battle_data as MtgBattleData);
+                }
+                const prev = resolvedByKey.get(k);
+                const wins =
+                  !prev ||
+                  (summary.marketPrice != null &&
+                    (prev.marketPrice == null || summary.marketPrice < prev.marketPrice));
+                if (wins) resolvedByKey.set(k, summary);
               }
             }
           } catch {
@@ -1357,6 +1370,8 @@ export async function POST(req: Request) {
               const owned = ownedQtyByName.get(k) ?? 0;
               const toBuy = Math.max(0, inDeck - owned);
               if (toBuy === 0) continue;
+              const row = resolvedByKey.get(k) ?? null;
+              const high = priceHighByKey.get(k);
               buy.push({
                 name: c.name,
                 quantity: toBuy,
@@ -1364,7 +1379,9 @@ export async function POST(req: Request) {
                   owned > 0
                     ? `You own ${owned} — this completes the ${inDeck} the deck runs.`
                     : `The deck runs ${inDeck}.`,
-                card: resolvedByKey.get(k) ?? null,
+                card: row,
+                priceHigh:
+                  row?.marketPrice != null && high != null && high > row.marketPrice ? high : null,
               });
             }
             buy.sort(
@@ -1979,6 +1996,7 @@ export async function POST(req: Request) {
             card?: CardSummary | null;
             owners?: Array<{ userId: string; name: string; qty: number }>;
             buyUrl?: string;
+            priceHigh?: number | null;
           }>;
         };
         try {
@@ -2092,6 +2110,8 @@ export async function POST(req: Request) {
         // it turns a buy link into the exact product page instead of a
         // search. Empty in collection mode; those fall back to search links.
         const tcgpIdByKey = new Map<string, string>();
+        // Priciest printing seen per name — the top of the buy list's range.
+        const priceHighByKey = new Map<string, number>();
         if (poolMode === "all") {
           const keys = [
             ...new Set(
@@ -2104,9 +2124,17 @@ export async function POST(req: Request) {
             const schemeRank = (id: string) =>
               id.startsWith("tcgp-") ? 2 : id.startsWith("tcgdex-") ? 1 : 0;
             // Prefer the row that can actually serve the buy list: priced
-            // and pictured first, then the canonical id scheme.
-            const score = (s: CardSummary) =>
-              (s.marketPrice != null ? 0 : 4) + (s.imageSmall ? 0 : 2) + schemeRank(s.id) * 0.1;
+            // first, and among priced printings the CHEAPEST — the buy list
+            // is a shopping list, and quoting a card at its collector-art
+            // printing made a $3 deck slot read as a $500 one. Picture and
+            // canonical id scheme only break ties.
+            const better = (a: CardSummary, b: CardSummary) => {
+              if ((a.marketPrice != null) !== (b.marketPrice != null)) return a.marketPrice != null;
+              if (a.marketPrice != null && b.marketPrice != null && a.marketPrice !== b.marketPrice)
+                return a.marketPrice < b.marketPrice;
+              if (!a.imageSmall !== !b.imageSmall) return !!a.imageSmall;
+              return schemeRank(a.id) < schemeRank(b.id);
+            };
             for (let i = 0; i < keys.length; i += 100) {
               const { data, error: qErr } = await admin
                 .from("cards")
@@ -2119,10 +2147,16 @@ export async function POST(req: Request) {
               >) {
                 const k = normalizeForSearch(raw.name);
                 const summary = rowToSummary(raw);
+                if (summary.marketPrice != null) {
+                  priceHighByKey.set(k, Math.max(priceHighByKey.get(k) ?? 0, summary.marketPrice));
+                }
                 const prev = resolvedByKey.get(k);
-                if (!prev || score(summary) < score(prev)) {
+                if (!prev || better(summary, prev)) {
                   resolvedByKey.set(k, summary);
+                  // Set or clear together with the winner: a stale id from
+                  // a losing row would buy-link a different printing.
                   if (raw.tcgplayer_id != null) tcgpIdByKey.set(k, String(raw.tcgplayer_id));
+                  else tcgpIdByKey.delete(k);
                 }
               }
             }
@@ -2302,6 +2336,8 @@ export async function POST(req: Request) {
             const owned = ownedQtyByName.get(k) ?? 0;
             const toBuy = Math.max(0, inDeck - owned);
             if (toBuy === 0) continue;
+            const row = resolvedByKey.get(k) ?? null;
+            const high = priceHighByKey.get(k);
             buy.push({
               name: c.name,
               quantity: toBuy,
@@ -2309,7 +2345,9 @@ export async function POST(req: Request) {
                 owned > 0
                   ? `You own ${owned} — this completes the ${inDeck} the deck runs.`
                   : `The deck runs ${inDeck}.`,
-              card: resolvedByKey.get(k) ?? null,
+              card: row,
+              priceHigh:
+                row?.marketPrice != null && high != null && high > row.marketPrice ? high : null,
             });
           }
           // Priciest gap first: that's the purchase decision worth seeing.
@@ -2341,8 +2379,21 @@ export async function POST(req: Request) {
         for (const suggestion of (deck.missing_suggestions ?? []).slice(0, 5)) {
           if (suggestion.card) continue;
           try {
-            const found = await searchCards({ name: suggestion.name, pageSize: 1 });
-            suggestion.card = found[0] ?? null;
+            // Several printings, not the first hit: quote the cheapest and
+            // carry the collector printings' price as the top of a range.
+            const found = await searchCards({ name: suggestion.name, pageSize: 12 });
+            const wanted = normalizeForSearch(suggestion.name);
+            const printings = found.filter((f) => normalizeForSearch(f.name) === wanted);
+            const pool = printings.length > 0 ? printings : found;
+            const priced = pool
+              .filter((f) => f.marketPrice != null)
+              .sort((a, b) => (a.marketPrice ?? 0) - (b.marketPrice ?? 0));
+            suggestion.card = priced[0] ?? pool[0] ?? null;
+            const high = priced.length > 0 ? priced[priced.length - 1].marketPrice : null;
+            suggestion.priceHigh =
+              suggestion.card?.marketPrice != null && high != null && high > suggestion.card.marketPrice
+                ? high
+                : null;
           } catch {
             suggestion.card = null;
           }

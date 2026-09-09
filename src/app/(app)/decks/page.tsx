@@ -1019,6 +1019,16 @@ function UpgradeList({
                   {u.quantity > 1 && (
                     <> · ${(u.card.marketPrice * u.quantity).toFixed(2)} for {u.quantity}</>
                   )}
+                  {/* The quoted price is the cheapest printing; when pricier
+                      printings of the same card exist, say so — a $3 slot
+                      shouldn't read as $500, and a collector shouldn't miss
+                      that fancier versions exist. */}
+                  {u.priceHigh != null && (
+                    <span className="text-amber-600">
+                      {" "}
+                      · cheapest printing — collector versions up to ${u.priceHigh.toFixed(2)}
+                    </span>
+                  )}
                 </div>
               )}
               {(u.owners?.length ?? 0) > 0 && (
