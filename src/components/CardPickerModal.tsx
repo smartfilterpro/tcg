@@ -160,6 +160,7 @@ export default function CardPickerModal({
   candidates,
   onPick,
   onClose,
+  onQueryChange,
   toast,
   headerExtra,
   allowPhoto = false,
@@ -169,6 +170,9 @@ export default function CardPickerModal({
   candidates: CardSummary[];
   onPick: (card: CardSummary) => void;
   onClose: () => void;
+  /** Reports what's typed, so a caller that reopens the picker (card
+   *  lookup's back button) can hand the search back via initialQuery. */
+  onQueryChange?: (q: string) => void;
   toast?: string | null;
   headerExtra?: React.ReactNode;
   /** Card photos become the card's shared artwork, so uploading them is an
@@ -302,7 +306,10 @@ export default function CardPickerModal({
                 : '🔍 Name, number, or set: — e.g. "Charizard", "101/190", "set:Trick or Trade"'
             }
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              onQueryChange?.(e.target.value);
+            }}
           />
           <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
             {headerExtra ?? <span />}

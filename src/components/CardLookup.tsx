@@ -9,7 +9,7 @@
 // prices per finish, the printed text, a buy link, and the quick-ask
 // chips into DeckAI — and writes nothing anywhere.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import CardPickerModal from "@/components/CardPickerModal";
 import CardZoom from "@/components/CardZoom";
 import CardText, { useCardText } from "@/components/CardText";
@@ -23,6 +23,9 @@ export default function CardLookup({ game }: { game: "pokemon" | "mtg" }) {
   const [picking, setPicking] = useState(false);
   const [card, setCard] = useState<CardSummary | null>(null);
   const [zoom, setZoom] = useState<string | null>(null);
+  /** What was typed in the picker, so Back reopens the same search
+   *  instead of a blank box. */
+  const lastQuery = useRef("");
   const { detail, loading, retry } = useCardText(card?.id);
 
   const art = card ? artSrc(card.id, card.imageLarge ?? card.imageSmall, "large") : null;
@@ -39,9 +42,10 @@ export default function CardLookup({ game }: { game: "pokemon" | "mtg" }) {
 
       {picking && (
         <CardPickerModal
-          initialQuery=""
+          initialQuery={lastQuery.current}
           candidates={[]}
           game={game}
+          onQueryChange={(q) => (lastQuery.current = q)}
           onClose={() => setPicking(false)}
           onPick={(c) => {
             setCard(c);
@@ -65,6 +69,15 @@ export default function CardLookup({ game }: { game: "pokemon" | "mtg" }) {
               onClick={() => setCard(null)}
             >
               ✕
+            </button>
+            <button
+              className="mb-3 flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-200"
+              onClick={() => {
+                setCard(null);
+                setPicking(true);
+              }}
+            >
+              ← Back to search
             </button>
             <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start sm:pr-6">
               {art ? (
