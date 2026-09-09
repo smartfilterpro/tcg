@@ -23,6 +23,10 @@ const mono = JetBrains_Mono({
   weight: ["400", "500"],
   variable: "--font-mono",
   display: "swap",
+  // Mono dresses small badges and numbers deep in the UI, never the first
+  // paint — preloading it just earned a "preloaded but not used" warning
+  // on every page load.
+  preload: false,
 });
 
 // generateMetadata rather than a static export for one reason: the robots
@@ -72,7 +76,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable}`}>
-      <body className="min-h-screen">{children}</body>
+      {/* font-body here, not just on the marketing layout: without it the
+          signed-in app fell through to the system font while the brand
+          faces sat preloaded and unused. */}
+      <body className="min-h-screen font-body">{children}</body>
     </html>
   );
 }

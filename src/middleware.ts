@@ -153,5 +153,15 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  // manifest.webmanifest is excluded because browsers fetch a manifest
+  // WITHOUT cookies: the auth gate saw a stranger, answered with the login
+  // page, and Chrome logged a manifest syntax error on every page for every
+  // visitor — signed in or not. robots.txt is excluded because crawlers
+  // don't sign in either, and a robots file behind a login redirect means
+  // the index/noindex switch was never actually being read. sw.js for the
+  // same class of reason: a service worker must be fetchable to register.
+  // All three serve public data by construction.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|robots.txt|sw.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
 };
