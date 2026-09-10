@@ -384,6 +384,12 @@ function startFtp() {
             await new Promise((r) => out.end(r));
             await rename(tmp, path.join(dir, name));
             say(`ftp ← ${name}`);
+            // A file the pump will never post deserves a loud answer, not
+            // silence — a scanner left on PDF once produced an evening of
+            // "none of the cards showed up".
+            if (!EXTS.has(path.extname(name).toLowerCase())) {
+              say(`⚠ ${name} ignored — only JPEG/PNG post. Set the scanner's file format to JPEG.`);
+            }
             enqueue(name);
             void pump();
             return send("226 Stored");
