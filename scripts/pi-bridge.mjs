@@ -45,6 +45,10 @@ import path from "node:path";
 
 const execFile = promisify(execFileCb);
 
+// Bumped with every change to this file. The server serves its own copy at
+// /api/bulk/bridge; the page's "check for update" compares and installs.
+const BRIDGE_VERSION = "2026-09-10.1";
+
 const args = {};
 {
   const argv = process.argv.slice(2);
@@ -504,6 +508,7 @@ small{color:#888}</style></head><body>
 <input id="mkey" placeholder="device key (bk_…)" type="password">
 <input id="mseq" placeholder="start seq (default 1)">
 <button class="gray" onclick="manual()">Use this job</button>
+<p><small>Bridge v${BRIDGE_VERSION} · <a href="#" onclick="checkUpd();return false">check for update</a> <span id="updmsg"></span></small></p>
 <h2>Log</h2><div id="log"></div>
 <p><small>No login — anyone on this network can reach this page. The FTP
 address never changes: set the scanner once, and every scan goes to
@@ -535,6 +540,15 @@ try{await j('/api/job',{method:'POST',headers:{'content-type':'application/json'
 async function act(a){await j('/api/'+a,{method:'POST'});refresh()}
 async function manual(){try{await j('/api/manual',{method:'POST',headers:{'content-type':'application/json'},
 body:JSON.stringify({job:document.getElementById('mjob').value.trim(),key:document.getElementById('mkey').value.trim(),startSeq:document.getElementById('mseq').value.trim()})})}catch(e){alert(e.message)}refresh()}
+async function checkUpd(){const m=document.getElementById('updmsg');m.textContent='checking…';
+try{const s=await j('/api/update/check',{method:'POST'});
+if(s.upToDate){m.textContent='up to date (v'+s.current+')';return}
+m.innerHTML='v'+s.server+' available — <a href="#" onclick="applyUpd();return false"><b>update &amp; restart</b></a>';
+}catch(e){m.textContent=e.message}}
+async function applyUpd(){const m=document.getElementById('updmsg');m.textContent='updating…';
+try{const s=await j('/api/update/apply',{method:'POST'});
+m.textContent='installed v'+s.version+' — restarting, this page will reconnect (restart by hand if not running as a service)';
+}catch(e){m.textContent=e.message}}
 refresh();setInterval(refresh,2500);
 </script></body></html>`;
 
@@ -574,8 +588,37 @@ createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return res.end(PAGE);
     }
+    // Self-update, from the server this bridge already trusts with every
+    // card photo. check: compare versions. apply: swap this very file and
+    // exit — systemd's Restart=always brings it back up on the new code
+    // (a hand-run bridge just exits, and the page says to restart it).
+    if (req.method === "POST" && url.pathname === "/api/update/check") {
+      const r = await fetch(`${cfg.base}/api/bulk/bridge`).catch(() => null);
+      if (!r || !r.ok) return json(res, 502, { error: "Couldn't reach the server for a version." });
+      const server = r.headers.get("x-bridge-version") ?? "unknown";
+      return json(res, 200, { current: BRIDGE_VERSION, server, upToDate: server === BRIDGE_VERSION });
+    }
+    if (req.method === "POST" && url.pathname === "/api/update/apply") {
+      const r = await fetch(`${cfg.base}/api/bulk/bridge`).catch(() => null);
+      if (!r || !r.ok) return json(res, 502, { error: "Couldn't download the update." });
+      const text = await r.text();
+      // A sanity gate, not a signature: the same server already handles
+      // every photo, but a proxy error page must never overwrite the app.
+      if (!text.includes("TrainerDeck Pi bridge") || text.length < 10_000) {
+        return json(res, 502, { error: "Downloaded file doesn't look like the bridge — not installing." });
+      }
+      const self = path.resolve(process.argv[1]);
+      await writeFile(`${self}.new`, text);
+      await rename(`${self}.new`, self);
+      const v = /const BRIDGE_VERSION = "([^"]+)"/.exec(text)?.[1] ?? "?";
+      say(`updated to v${v} — restarting (if this isn't running as a service, start it again by hand)`);
+      json(res, 200, { ok: true, version: v });
+      setTimeout(() => process.exit(0), 400);
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/state") {
       return json(res, 200, {
+        version: BRIDGE_VERSION,
         base: cfg.base,
         running,
         job: cfg.job ? { id: cfg.job.id, label: cfg.job.label } : null,

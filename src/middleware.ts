@@ -30,6 +30,9 @@ const PUBLIC_PATHS = [
   // bridge's "Create job & start" died here with a generic 401 before
   // the route's own key check ever saw the request.
   "/api/bulk/job",
+  // The bridge script itself, served to the Pi's "check for update" —
+  // no secrets in it, and the Pi fetches it before holding any session.
+  "/api/bulk/bridge",
   // Phone-camera client for the same bulk-scan contract — same auth model
   // as the rig (device key only, checked by /api/bulk/photo itself), so it
   // stays out of the session-gated app surface for the same reason.
