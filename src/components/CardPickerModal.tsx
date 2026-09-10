@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { uploadCardPhoto } from "@/lib/photos";
-import { photoSrc } from "@/lib/art";
+import { artSrc } from "@/lib/art";
 import type { CardSummary } from "@/lib/types";
 
 const ENERGY_TYPES = [
@@ -186,6 +186,9 @@ export default function CardPickerModal({
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<CardSummary[]>(candidates);
+  // Cards whose art URL turned out to 404 — swapped for a labeled tile so
+  // the grid never shows the browser's broken-photo glyph.
+  const [brokenArt, setBrokenArt] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [manualMode, setManualMode] = useState(false);
   /** Set when the search KNOWS its answer is short — see SearchOutcome.notice.
@@ -363,12 +366,21 @@ export default function CardPickerModal({
               className="rounded-lg border border-transparent p-1 text-left hover:border-poke-blue hover:bg-blue-50"
               onClick={() => onPick(card)}
             >
-              {card.imageSmall ? (
+              {card.imageSmall && !brokenArt.has(card.id) ? (
+                // artSrc, not the raw URL: external art goes through the
+                // server proxy, which dodges hosts that block hotlinks —
+                // brand-new sets were rendering as broken-photo glyphs.
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={photoSrc(card.imageSmall)!} alt={card.name} className="w-full rounded" loading="lazy" />
+                <img
+                  src={artSrc(card.id, card.imageSmall) ?? undefined}
+                  alt={card.name}
+                  className="w-full rounded"
+                  loading="lazy"
+                  onError={() => setBrokenArt((b) => new Set(b).add(card.id))}
+                />
               ) : (
-                <div className="flex aspect-[63/88] items-center justify-center rounded bg-slate-100 text-xs text-slate-400">
-                  No image
+                <div className="flex aspect-[63/88] items-center justify-center rounded bg-slate-100 p-1 text-center text-xs text-slate-400">
+                  {card.imageSmall ? "No image yet" : "No image"}
                 </div>
               )}
               <div className="mt-1 truncate text-xs font-semibold">{card.name}</div>
