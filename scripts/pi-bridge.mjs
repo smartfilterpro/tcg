@@ -37,9 +37,13 @@ import { readdir, stat, rename, mkdir, readFile, writeFile } from "node:fs/promi
 import { watch } from "node:fs";
 import { createServer } from "node:http";
 import { createWriteStream } from "node:fs";
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+
+const execFile = promisify(execFileCb);
 
 const args = {};
 {
@@ -194,8 +198,57 @@ async function pump() {
   }
 }
 
+// ---------------------------------------------------------- pdf intake
+// Scanners default to PDF, and an evening was once lost to files arriving
+// in a format the pump silently skipped. When poppler's pdftoppm is on the
+// machine (sudo apt install poppler-utils), a PDF converts to one JPEG per
+// page — so a whole stack scanned into one multi-page PDF still posts one
+// card per page, in page order. The original is kept in converted/.
+let pdftoppmOk = null;
+const pdfBusy = new Set();
+async function convertPdf(name) {
+  if (pdfBusy.has(name)) return;
+  pdfBusy.add(name);
+  try {
+    const file = path.join(dir, name);
+    for (let i = 0; i < 20 && !(await settled(file)); i++) await sleep(500);
+    if (pdftoppmOk == null) {
+      pdftoppmOk = await execFile("pdftoppm", ["-v"]).then(() => true).catch(() => false);
+    }
+    if (!pdftoppmOk) {
+      say(`⚠ ${name} is a PDF — install the converter (sudo apt install poppler-utils) or set the scanner to JPEG`);
+      return; // stays in the folder; picked up on a later sweep if the tool appears
+    }
+    const base = name.replace(/\.pdf$/i, "");
+    const tmp = path.join(dir, ".pdftmp", base);
+    await mkdir(tmp, { recursive: true });
+    await execFile("pdftoppm", ["-jpeg", "-r", "300", "-jpegopt", "quality=92", file, path.join(tmp, "p")]);
+    const pages = (await readdir(tmp))
+      .map((n) => ({ n, num: parseInt(/-(\d+)\.jpg$/.exec(n)?.[1] ?? "", 10) }))
+      .filter((p) => Number.isFinite(p.num))
+      .sort((a, b) => a.num - b.num);
+    for (const p of pages) {
+      const out = `${base}-p${String(p.num).padStart(3, "0")}.jpg`;
+      await rename(path.join(tmp, p.n), path.join(dir, out));
+      enqueue(out);
+    }
+    const keep = path.join(dir, "converted");
+    await mkdir(keep, { recursive: true });
+    await rename(file, path.join(keep, name)).catch(() => {});
+    say(`⇢ ${name} → ${pages.length} page${pages.length === 1 ? "" : "s"} as JPEG`);
+    void pump();
+  } catch (e) {
+    say(`✗ couldn't convert ${name}: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    pdfBusy.delete(name);
+  }
+}
+
 async function sweepFolder() {
-  for (const name of (await readdir(dir)).sort()) enqueue(name);
+  for (const name of (await readdir(dir)).sort()) {
+    if (/\.pdf$/i.test(name)) void convertPdf(name);
+    else enqueue(name);
+  }
   void pump();
 }
 
@@ -203,7 +256,9 @@ async function sweepFolder() {
  *  behind (a halt, a mid-stack stop) would otherwise post as the new
  *  customer's first cards. They're set aside, never deleted. */
 async function archiveLeftovers() {
-  const names = (await readdir(dir)).filter((n) => EXTS.has(path.extname(n).toLowerCase()));
+  const names = (await readdir(dir)).filter(
+    (n) => EXTS.has(path.extname(n).toLowerCase()) || /\.pdf$/i.test(n)
+  );
   if (names.length === 0) return 0;
   const dest = path.join(dir, `leftover-${new Date().toISOString().replace(/[:.]/g, "-")}`);
   await mkdir(dest, { recursive: true });
@@ -385,9 +440,10 @@ function startFtp() {
             await rename(tmp, path.join(dir, name));
             say(`ftp ← ${name}`);
             // A file the pump will never post deserves a loud answer, not
-            // silence — a scanner left on PDF once produced an evening of
-            // "none of the cards showed up".
-            if (!EXTS.has(path.extname(name).toLowerCase())) {
+            // silence. PDFs convert; anything else unpostable says why.
+            if (/\.pdf$/i.test(name)) {
+              void convertPdf(name);
+            } else if (!EXTS.has(path.extname(name).toLowerCase())) {
               say(`⚠ ${name} ignored — only JPEG/PNG post. Set the scanner's file format to JPEG.`);
             }
             enqueue(name);
@@ -602,6 +658,7 @@ await mkdir(ftpTmpDir, { recursive: true });
 if (ftpPort > 0) startFtp();
 watch(dir, (_event, name) => {
   if (!name) return;
+  if (/\.pdf$/i.test(name)) return void convertPdf(name);
   enqueue(name);
   void pump();
 });
