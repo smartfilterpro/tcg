@@ -2720,7 +2720,13 @@ interface BulkRow {
   photo2: string | null;
   read1: { name?: string; number?: string; game?: string; cardName?: string | null; error?: string } | null;
   read2: { name?: string; number?: string; game?: string; cardName?: string | null; error?: string } | null;
-  card: { id: string; name: string; number: string; set_name: string | null } | null;
+  card: {
+    id: string;
+    name: string;
+    number: string;
+    set_name: string | null;
+    image_small: string | null;
+  } | null;
   variant: string;
   confidence: string | null;
   reviewed: boolean;
@@ -3187,9 +3193,26 @@ function BulkScanPanel() {
                     {[r.photo1, r.photo2].map(
                       (p, i) =>
                         p && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img key={i} src={p} alt={`pass ${i + 1}`} className="h-40 rounded-lg border border-brand-line object-contain" />
+                          <div key={i} className="text-center">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={p} alt={`pass ${i + 1}`} className="h-40 rounded-lg border border-brand-line object-contain" />
+                            <div className="mt-0.5 text-[10px] text-brand-ink4">your scan{r.photo2 ? ` (pass ${i + 1})` : ""}</div>
+                          </div>
                         )
+                    )}
+                    {/* The pick's catalogue art beside the scan: same card,
+                        two sources — the eye settles a match in a second
+                        that the text line never could. */}
+                    {r.card?.image_small && (
+                      <div className="text-center">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={artSrc(r.card.id, r.card.image_small) ?? undefined}
+                          alt={r.card.name}
+                          className="h-40 rounded-lg border border-brand-positive object-contain"
+                        />
+                        <div className="mt-0.5 text-[10px] text-brand-positive">system pick</div>
+                      </div>
                     )}
                     <div className="min-w-56 flex-1 text-xs leading-[1.7]">
                       <div>

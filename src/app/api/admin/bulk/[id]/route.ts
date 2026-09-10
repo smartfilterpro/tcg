@@ -42,7 +42,7 @@ export async function GET(req: Request, { params }: Params) {
           if (typeof cardId !== "string" || !cardId) return null;
           const { data: c } = await admin
             .from("cards")
-            .select("id, name, number, set_name")
+            .select("id, name, number, set_name, image_small")
             .eq("id", cardId)
             .maybeSingle();
           return c ?? null;
