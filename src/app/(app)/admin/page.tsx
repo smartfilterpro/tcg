@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { resilientFetch } from "@/lib/clientLoop";
 import type { Profile } from "@/lib/types";
+import { variantLabel } from "@/lib/types";
 import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc, photoSrc } from "@/lib/art";
 
@@ -3234,16 +3235,18 @@ function BulkScanPanel() {
                           onChange={(e) => setVarPick((v) => ({ ...v, [r.id]: e.target.value }))}
                         >
                           {[
-                            ...new Set(["normal", "holofoil", "reverseHolofoil", r.variant]),
+                            ...new Set([
+                              "normal",
+                              "holofoil",
+                              "reverseHolofoil",
+                              "pokeBall",
+                              "masterBall",
+                              "energySymbol",
+                              r.variant,
+                            ]),
                           ].map((v) => (
                             <option key={v} value={v}>
-                              {v === "normal"
-                                ? "Normal"
-                                : v === "holofoil"
-                                  ? "Holo"
-                                  : v === "reverseHolofoil"
-                                    ? "Reverse Holo"
-                                    : v}
+                              {variantLabel(v)}
                             </option>
                           ))}
                         </select>

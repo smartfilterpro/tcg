@@ -69,6 +69,10 @@ const BALL_WORDS: Record<string, string> = {
   friend_ball: "Friend Ball pattern",
   love_ball: "Love Ball pattern",
   other_ball: "Ball pattern",
+  // Not a ball, but the same kind of thing: the Mega-era pattern reverse
+  // whose etched motif is repeating energy symbols, sold as its own
+  // "(Energy Symbol Pattern)" product.
+  energy_symbol: "Energy Symbol pattern",
 };
 
 const READ_SCHEMA = {
@@ -111,11 +115,12 @@ const READ_SCHEMA = {
         "friend_ball",
         "love_ball",
         "other_ball",
+        "energy_symbol",
         "none",
         "unknown",
       ],
       description:
-        "ONLY when finish is reverse_holofoil: which motif is etched into the foil, repeating across the card face. A ball motif ('poke_ball' / 'master_ball' / 'friend_ball' / 'love_ball', or 'other_ball' for one you can see but can't name) marks a separate, much rarer printing and must not be missed. 'standard' is the set's ordinary pattern — stars, set symbols, sparkle. 'none' when the card isn't reverse holo. 'unknown' when it is but the pattern can't be made out — never guess a ball.",
+        "ONLY when finish is reverse_holofoil: which motif is etched into the foil, repeating across the card face. A ball motif ('poke_ball' / 'master_ball' / 'friend_ball' / 'love_ball', or 'other_ball' for one you can see but can't name) marks a separate, much rarer printing and must not be missed; 'energy_symbol' is the same idea with repeating ENERGY TYPE SYMBOLS (grass leaves, flames, water drops…) as the motif. 'standard' is the set's ordinary pattern — stars, set symbols, sparkle. 'none' when the card isn't reverse holo. 'unknown' when it is but the pattern can't be made out — never guess.",
     },
     stamp: {
       type: "string",
@@ -192,9 +197,10 @@ const CHECK_SCHEMA = {
     },
     pattern: {
       type: "string",
-      enum: ["standard", "poke_ball", "master_ball", "friend_ball", "love_ball", "other_ball", "none", "unknown"],
+      enum: ["standard", "poke_ball", "master_ball", "friend_ball", "love_ball", "other_ball", "energy_symbol", "none", "unknown"],
       description:
-        "ONLY when finish is reverse_holofoil: the motif etched into the foil. " +
+        "ONLY when finish is reverse_holofoil: the motif etched into the foil " +
+        "(a ball, or 'energy_symbol' for repeating energy type symbols). " +
         "'none' when the card isn't reverse holo (always 'none' for Magic).",
     },
     stamp: {
