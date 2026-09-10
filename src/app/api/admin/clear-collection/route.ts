@@ -38,16 +38,18 @@ export async function POST(req: Request) {
     // the app: Magic catalogue rows are scry-…, everything else (Pokémon
     // sources and photo-backed custom cards) is not. Prefix rather than
     // the cards.game column so this works mid-migration too.
-    const scoped = <T extends { eq: (c: string, v: string) => T; like: (c: string, p: string) => T; not: (c: string, op: string, p: string) => T }>(q: T) => {
-      q = q.eq("user_id", member.id);
-      if (game === "mtg") return q.like("card_id", "scry-%");
-      if (game === "pokemon") return q.not("card_id", "like", "scry-%");
-      return q;
-    };
-    const { count } = await scoped(
-      admin.from("collection_items").select("id", { count: "exact", head: true })
-    );
-    const { error } = await scoped(admin.from("collection_items").delete());
+    let countQ = admin
+      .from("collection_items")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", member.id);
+    if (game === "mtg") countQ = countQ.like("card_id", "scry-%");
+    else if (game === "pokemon") countQ = countQ.not("card_id", "like", "scry-%");
+    const { count } = await countQ;
+
+    let delQ = admin.from("collection_items").delete().eq("user_id", member.id);
+    if (game === "mtg") delQ = delQ.like("card_id", "scry-%");
+    else if (game === "pokemon") delQ = delQ.not("card_id", "like", "scry-%");
+    const { error } = await delQ;
     if (error) throw error;
     console.warn(`admin cleared collection (${game}): ${member.email} (${count ?? 0} rows)`);
     return NextResponse.json({ ok: true, member: member.email, game, removed: count ?? 0 });
