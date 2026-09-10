@@ -598,6 +598,8 @@ async function matchCatalogue(
   };
   const name = (read.name ?? "").trim();
   if (!name) return { ...none, matchNote: "the read produced no card name" };
+  const [printedRaw, totalRaw] = (read.number ?? "").split("/");
+  const printed = (printedRaw ?? "").trim();
   // rarity and prices come along because the finish is decided here — the
   // card's own printings are what make "reverse holo" mean something.
   const { data } = await admin
@@ -605,8 +607,29 @@ async function matchCatalogue(
     .select("id, name, number, set_name, set_printed_total, rarity, prices")
     .ilike("name", `%${name.replace(/[%_]/g, " ")}%`)
     .limit(60);
+  const pool = (data ?? []) as MatchCandidate[];
+  // A name as common as "Pikachu" has hundreds of rows, and a 60-row pool
+  // is a lottery: the one printing the number points at may never be drawn,
+  // after which every filter below runs on the wrong crowd. When the read
+  // carries a number, a second, narrow query fetches the rows bearing it,
+  // so those are in the pool by construction.
+  if (printed) {
+    const forms = [
+      ...new Set([printed, printed.replace(/^0+/, "") || printed, printed.padStart(3, "0")]),
+    ];
+    const { data: numbered } = await admin
+      .from("cards")
+      .select("id, name, number, set_name, set_printed_total, rarity, prices")
+      .ilike("name", `%${name.replace(/[%_]/g, " ")}%`)
+      .in("number", forms)
+      .limit(60);
+    const have = new Set(pool.map((c) => c.id));
+    for (const c of (numbered ?? []) as MatchCandidate[]) {
+      if (!have.has(c.id)) pool.push(c);
+    }
+  }
   const wanted = normalizeForSearch(name);
-  const rows = (data ?? []) as MatchCandidate[];
+  const rows = pool;
   // Only the read's own game gets a say. The catalogue holds both games in
   // one table, and an unfiltered name match let a Magic "Mountain" court
   // whatever shared the name — id prefix rather than the game column, so
@@ -627,8 +650,6 @@ async function matchCatalogue(
     return n === wanted || (n.startsWith(wanted) && isSpecificPrinting(c.name));
   });
   const nameHits = hits;
-  const [printedRaw, totalRaw] = (read.number ?? "").split("/");
-  const printed = (printedRaw ?? "").trim();
   if (printed) {
     const key = numberKey(printed);
     const byNumber = hits.filter((c) => numberKey(c.number) === key);
@@ -642,6 +663,15 @@ async function matchCatalogue(
   if (Number.isFinite(total) && total > 0 && hits.length > 1) {
     const byTotal = hits.filter((c) => c.set_printed_total === total);
     if (byTotal.length > 0) hits = byTotal;
+    else {
+      // No printing carries this exact total — but a KNOWN different total
+      // still rules a printing out. New sets often arrive in the catalogue
+      // without their printed total, and demanding an exact match here let
+      // sets the denominator had already disqualified stay in the running
+      // against them.
+      const unknownTotal = hits.filter((c) => c.set_printed_total == null);
+      if (unknownTotal.length > 0 && unknownTotal.length < hits.length) hits = unknownTotal;
+    }
   }
   if (read.set_name && hits.length > 1) {
     const set = normalizeForSearch(read.set_name);
