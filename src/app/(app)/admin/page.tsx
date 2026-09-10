@@ -817,6 +817,10 @@ export default function AdminPage() {
         <h2 className="mb-2 font-display text-[17px] font-bold">📥 Load a CSV into a collection</h2>
         <CsvLoadPanel />
       </div>
+      <div className="card-panel p-4">
+        <h2 className="mb-2 font-display text-[17px] font-bold">🧹 Clear a collection</h2>
+        <ClearCollectionPanel />
+      </div>
       </>
       )}
 
@@ -3351,6 +3355,74 @@ function BulkScanPanel() {
  *  test account without scanning a shoebox by hand. Preview first, always:
  *  the server matches against the catalogue and refuses to guess, so the
  *  dry run shows exactly what would land and what needs a better column. */
+/** The rescan-from-scratch reset. Bulk uploads merge, so a full rescan
+ *  needs an empty collection first — and this is the only way to get one
+ *  short of tapping 1,800 delete buttons. Decks survive on purpose (they
+ *  hold names and catalogue ids, not collection rows). */
+function ClearCollectionPanel() {
+  const [email, setEmail] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/admin/clear-collection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, confirm }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't clear the collection");
+      setMsg(`Cleared ${json.removed} rows from ${json.member}'s collection.`);
+      setConfirm("");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn't clear the collection");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div>
+      <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+        Empties a member&apos;s collection so a full rescan starts from zero — bulk uploads
+        merge, so rescanning on top of the old rows would double every card. Decks are NOT
+        touched (they reference the card catalogue, not collection rows) and light back up
+        as the rescan lands. Gone for good: per-copy notes, custom values, and photo-backed
+        custom cards — <b>Export CSV from the collection page first</b> if any of that
+        matters. There is no undo.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          className="input w-64"
+          placeholder="member email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <input
+          className="input w-32"
+          placeholder='type CLEAR'
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+        />
+        <button
+          className="btn text-xs text-red-600 hover:bg-red-50"
+          disabled={busy || confirm !== "CLEAR" || !email.trim()}
+          onClick={run}
+        >
+          {busy ? "Clearing…" : "Clear collection"}
+        </button>
+      </div>
+      {msg && <p className="mt-2 text-xs text-green-700">{msg}</p>}
+      {err && <p className="mt-2 text-xs text-red-600">{err}</p>}
+    </div>
+  );
+}
+
 function CsvLoadPanel() {
   const [email, setEmail] = useState("");
   const [csv, setCsv] = useState("");
