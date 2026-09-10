@@ -2739,6 +2739,10 @@ function BulkScanPanel() {
   const [rowCount, setRowCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [pick, setPick] = useState<Record<string, string>>({}); // row id → search text / card id
+  // Row id → corrected finish. The machine reads the finish off the photo
+  // and gets glare-fooled; the human eye holding the card wins. The choice
+  // rides along with whichever save the row gets.
+  const [varPick, setVarPick] = useState<Record<string, string>>({});
   // row id → catalogue search results, so a reviewer can pick the card by
   // eye instead of hunting down an id in another tab.
   const [hits, setHits] = useState<
@@ -2900,7 +2904,13 @@ function BulkScanPanel() {
     const res = await fetch(`/api/admin/bulk/${open}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ row: row.id, cardId: cardId ?? row.card?.id ?? null }),
+      body: JSON.stringify({
+        row: row.id,
+        cardId: cardId ?? row.card?.id ?? null,
+        ...(varPick[row.id] && varPick[row.id] !== row.variant
+          ? { variant: varPick[row.id] }
+          : {}),
+      }),
     });
     const json = await res.json();
     if (!res.ok) setError(json.error);
@@ -3189,7 +3199,27 @@ function BulkScanPanel() {
                         <b>
                           {r.card ? `${r.card.name} #${r.card.number} · ${r.card.set_name ?? "?"} (${r.card.id})` : "none"}
                         </b>{" "}
-                        · {r.variant}
+                        ·{" "}
+                        <select
+                          className="input inline-block w-auto py-0.5 text-[11.5px]"
+                          title="Finish — change it, then Accept pick (or any save) to apply"
+                          value={varPick[r.id] ?? r.variant}
+                          onChange={(e) => setVarPick((v) => ({ ...v, [r.id]: e.target.value }))}
+                        >
+                          {[
+                            ...new Set(["normal", "holofoil", "reverseHolofoil", r.variant]),
+                          ].map((v) => (
+                            <option key={v} value={v}>
+                              {v === "normal"
+                                ? "Normal"
+                                : v === "holofoil"
+                                  ? "Holo"
+                                  : v === "reverseHolofoil"
+                                    ? "Reverse Holo"
+                                    : v}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {r.card && (
