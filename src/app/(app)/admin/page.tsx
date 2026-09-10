@@ -3392,7 +3392,8 @@ function ClearCollectionPanel() {
         Empties a member&apos;s collection so a full rescan starts from zero — bulk uploads
         merge, so rescanning on top of the old rows would double every card. Decks are NOT
         touched (they reference the card catalogue, not collection rows) and light back up
-        as the rescan lands. Gone for good: per-copy notes, custom values, and photo-backed
+        as the rescan lands, and sealed product is NOT touched either (it lives in its own
+        tables). Gone for good: per-copy notes, custom values, and photo-backed
         custom cards — <b>Export CSV from the collection page first</b> if any of that
         matters. There is no undo.
       </p>
