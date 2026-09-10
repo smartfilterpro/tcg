@@ -3361,6 +3361,7 @@ function BulkScanPanel() {
  *  hold names and catalogue ids, not collection rows). */
 function ClearCollectionPanel() {
   const [email, setEmail] = useState("");
+  const [game, setGame] = useState<"all" | "pokemon" | "mtg">("all");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -3374,11 +3375,15 @@ function ClearCollectionPanel() {
       const res = await fetch("/api/admin/clear-collection", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, confirm }),
+        body: JSON.stringify({ email, confirm, game }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Couldn't clear the collection");
-      setMsg(`Cleared ${json.removed} rows from ${json.member}'s collection.`);
+      setMsg(
+        `Cleared ${json.removed} ${
+          json.game === "all" ? "" : json.game === "mtg" ? "Magic " : "Pokémon "
+        }rows from ${json.member}'s collection.`
+      );
       setConfirm("");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Couldn't clear the collection");
@@ -3392,7 +3397,8 @@ function ClearCollectionPanel() {
         Empties a member&apos;s collection so a full rescan starts from zero — bulk uploads
         merge, so rescanning on top of the old rows would double every card. Decks are NOT
         touched (they reference the card catalogue, not collection rows) and light back up
-        as the rescan lands. Gone for good: per-copy notes, custom values, and photo-backed
+        as the rescan lands, and sealed product is NOT touched either (it lives in its own
+        tables). Gone for good: per-copy notes, custom values, and photo-backed
         custom cards — <b>Export CSV from the collection page first</b> if any of that
         matters. There is no undo.
       </p>
@@ -3403,6 +3409,15 @@ function ClearCollectionPanel() {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
+        <select
+          className="input w-auto"
+          value={game}
+          onChange={(e) => setGame(e.target.value as "all" | "pokemon" | "mtg")}
+        >
+          <option value="all">Both games</option>
+          <option value="pokemon">⚡ Pokémon only</option>
+          <option value="mtg">🪄 Magic only</option>
+        </select>
         <input
           className="input w-32"
           placeholder='type CLEAR'
