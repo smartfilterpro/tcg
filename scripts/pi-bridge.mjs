@@ -47,7 +47,7 @@ const execFile = promisify(execFileCb);
 
 // Bumped with every change to this file. The server serves its own copy at
 // /api/bulk/bridge; the page's "check for update" compares and installs.
-const BRIDGE_VERSION = "2026-09-10.1";
+const BRIDGE_VERSION = "2026-09-10.2";
 
 const args = {};
 {
@@ -215,7 +215,15 @@ async function convertPdf(name) {
   pdfBusy.add(name);
   try {
     const file = path.join(dir, name);
-    for (let i = 0; i < 20 && !(await settled(file)); i++) await sleep(500);
+    for (let i = 0; i < 20; i++) {
+      // Our own rename into converted/ raises a second watch event for
+      // this same name — by then the file is gone BECAUSE it was handled.
+      // Gone is done, not an error.
+      if (!(await stat(file).catch(() => null))) return;
+      if (await settled(file)) break;
+      await sleep(500);
+    }
+    if (!(await stat(file).catch(() => null))) return;
     if (pdftoppmOk == null) {
       pdftoppmOk = await execFile("pdftoppm", ["-v"]).then(() => true).catch(() => false);
     }
@@ -226,7 +234,7 @@ async function convertPdf(name) {
     const base = name.replace(/\.pdf$/i, "");
     const tmp = path.join(dir, ".pdftmp", base);
     await mkdir(tmp, { recursive: true });
-    await execFile("pdftoppm", ["-jpeg", "-r", "300", "-jpegopt", "quality=92", file, path.join(tmp, "p")]);
+    await execFile("pdftoppm", ["-jpeg", "-r", "400", "-jpegopt", "quality=92", file, path.join(tmp, "p")]);
     const pages = (await readdir(tmp))
       .map((n) => ({ n, num: parseInt(/-(\d+)\.jpg$/.exec(n)?.[1] ?? "", 10) }))
       .filter((p) => Number.isFinite(p.num))
