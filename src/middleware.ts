@@ -25,6 +25,11 @@ const PUBLIC_PATHS = [
   // The bulk-scan feeder rig posts photos with a per-job device key, no
   // session — the route itself refuses anything without a matching key.
   "/api/bulk/photo",
+  // The rig's job endpoint is self-authenticated the same way (x-rig-key
+  // to mint a job, x-bulk-key to read one). Without this entry the Pi
+  // bridge's "Create job & start" died here with a generic 401 before
+  // the route's own key check ever saw the request.
+  "/api/bulk/job",
   // Phone-camera client for the same bulk-scan contract — same auth model
   // as the rig (device key only, checked by /api/bulk/photo itself), so it
   // stays out of the session-gated app surface for the same reason.
