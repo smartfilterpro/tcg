@@ -2948,6 +2948,10 @@ function BulkScanPanel() {
         {newKey && (
           <div className="mt-2 rounded-lg border border-brand-line p-2.5 font-mono text-[11px]">
             <div className="mb-1 text-brand-ink3">
+              Job id — what the Pi bridge&apos;s &quot;Use an existing job&quot; asks for:
+            </div>
+            <div className="select-all break-all">{newKey.id}</div>
+            <div className="mb-1 mt-2 text-brand-ink3">
               Device key for the rig — shown once; use &quot;Rotate key&quot; on the job row below if
               you lose it:
             </div>
