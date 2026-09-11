@@ -33,6 +33,11 @@ const PUBLIC_PATHS = [
   // The bridge script itself, served to the Pi's "check for update" —
   // no secrets in it, and the Pi fetches it before holding any session.
   "/api/bulk/bridge",
+  // The customer scan report: opened from a tokenized link by someone
+  // who may hold no account — the token, checked by the route, is the
+  // credential.
+  "/bulk/report",
+  "/api/bulk/report",
   // Phone-camera client for the same bulk-scan contract — same auth model
   // as the rig (device key only, checked by /api/bulk/photo itself), so it
   // stays out of the session-gated app surface for the same reason.

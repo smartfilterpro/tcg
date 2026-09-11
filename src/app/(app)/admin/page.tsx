@@ -2765,7 +2765,11 @@ function BulkScanPanel() {
   const [varPick, setVarPick] = useState<Record<string, string>>({});
   // Full-screen look at a scan or a pick's art — an upside-down Misdreavus
   // at thumbnail size reads as anything.
-  const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null);
+  const [zoom, setZoom] = useState<{ src: string; alt: string; rotated?: boolean } | null>(null);
+  // Manual flip per row, XORed with the read's own orientation call — the
+  // human can right a scan the reader didn't flag (or un-right a wrong
+  // call). Display only; the stored photo never changes.
+  const [flip, setFlip] = useState<Record<string, boolean>>({});
   // row id → catalogue search results, so a reviewer can pick the card by
   // eye instead of hunting down an id in another tab.
   const [hits, setHits] = useState<
@@ -3042,7 +3046,26 @@ function BulkScanPanel() {
                       <>
                         {" "}
                         · uploaded to <b>{j.uploaded_to_name ?? "a member"}</b> ·{" "}
-                        {new Date(j.uploaded_at).toLocaleString()}
+                        {new Date(j.uploaded_at).toLocaleString()} ·{" "}
+                        <button
+                          className="underline hover:text-brand-ink2"
+                          title="Copy a shareable link showing every card with its scan — send it to the person whose cards these are"
+                          onClick={async () => {
+                            const res = await fetch(`/api/admin/bulk/${j.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ action: "report_link" }),
+                            });
+                            const json = await res.json();
+                            if (!res.ok) setError(json.error ?? "Couldn't make the link");
+                            else {
+                              await navigator.clipboard.writeText(json.url).catch(() => {});
+                              setMessage(`Report link copied: ${json.url}`);
+                            }
+                          }}
+                        >
+                          report link
+                        </button>
                       </>
                     )}
                   </span>
@@ -3232,19 +3255,39 @@ function BulkScanPanel() {
                           <div key={i} className="text-center">
                             {/* Righted for human eyes when the read said the
                                 card went through the feeder flipped — the
-                                stored photo stays as scanned. */}
+                                stored photo stays as scanned. The ↻ button
+                                is the human override, XORed with the auto
+                                call. */}
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                               src={p}
                               alt={`pass ${i + 1}`}
-                              className={`h-56 cursor-zoom-in rounded-lg border border-brand-line object-contain ${
-                                i === 0 && r.read1?.orientation === "upside_down" ? "rotate-180" : ""
+                              className={`h-80 cursor-zoom-in rounded-lg border border-brand-line object-contain ${
+                                (i === 0 && r.read1?.orientation === "upside_down") !== !!flip[`${r.id}:${i}`]
+                                  ? "rotate-180"
+                                  : ""
                               }`}
-                              onClick={() => setZoom({ src: p, alt: `card #${r.seq} scan` })}
+                              onClick={() =>
+                                setZoom({
+                                  src: p,
+                                  alt: `card #${r.seq} scan`,
+                                  rotated:
+                                    (i === 0 && r.read1?.orientation === "upside_down") !==
+                                    !!flip[`${r.id}:${i}`],
+                                })
+                              }
                             />
                             <div className="mt-0.5 text-[10px] text-brand-ink4">
                               your scan{r.photo2 ? ` (pass ${i + 1})` : ""}
-                              {i === 0 && r.read1?.orientation === "upside_down" ? " · righted" : ""} · tap to zoom
+                              {i === 0 && r.read1?.orientation === "upside_down" ? " · righted" : ""} · tap to zoom ·{" "}
+                              <button
+                                className="underline hover:text-brand-ink2"
+                                onClick={() =>
+                                  setFlip((f) => ({ ...f, [`${r.id}:${i}`]: !f[`${r.id}:${i}`] }))
+                                }
+                              >
+                                ↻ flip
+                              </button>
                             </div>
                           </div>
                         )
@@ -3258,7 +3301,7 @@ function BulkScanPanel() {
                         <img
                           src={artSrc(r.card.id, r.card.image_small) ?? undefined}
                           alt={r.card.name}
-                          className="h-56 cursor-zoom-in rounded-lg border border-brand-positive object-contain"
+                          className="h-80 cursor-zoom-in rounded-lg border border-brand-positive object-contain"
                           onClick={() =>
                             setZoom({
                               src: artSrc(r.card!.id, r.card!.image_small, "large") ?? r.card!.image_small!,
@@ -3366,7 +3409,7 @@ function BulkScanPanel() {
                             >
                               {c.imageSmall && (
                                 // eslint-disable-next-line @next/next/no-img-element
-                                <img src={c.imageSmall} alt="" className="h-10 rounded-sm" />
+                                <img src={artSrc(c.id, c.imageSmall) ?? undefined} alt="" className="h-28 rounded" />
                               )}
                               <span>
                                 <b>{c.name}</b> #{c.number} · {c.setName}
@@ -3397,7 +3440,7 @@ function BulkScanPanel() {
           )}
         </div>
       )}
-      {zoom && <CardZoom src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}
+      {zoom && <CardZoom src={zoom.src} alt={zoom.alt} rotated={zoom.rotated} onClose={() => setZoom(null)} />}
     </div>
   );
 }

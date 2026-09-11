@@ -107,7 +107,7 @@ const READ_SCHEMA = {
       type: "string",
       enum: ["normal", "holofoil", "reverse_holofoil"],
       description:
-        "Where the shine is. The machine's own lamp puts a bright band or wash on EVERY card — that is GLARE, not foil: it is white or the lamp's own colour, crosses artwork, border and text alike, and has no repeating motif. 'holofoil': the ARTWORK window shows rainbow/prismatic colour (or the whole card does, as on full arts, ex cards, and foil Magic cards). 'reverse_holofoil': Pokémon only — the CARD BODY (not the artwork) carries etched foil with a visible REPEATING pattern and rainbow colour shift; the artwork window stays matte. 'normal': no foil — including when the only shine is the lamp's band or wash. Answer a foil value only on positive evidence: rainbow colour that varies across the surface, or a visible etched pattern. Brightness alone is 'normal'.",
+        "Where the shine is. The machine's own lamp puts a bright band or wash on EVERY card — that is GLARE, not foil: it is white or the lamp's own colour, crosses artwork, border and text alike, and has no repeating motif. 'holofoil': the ARTWORK window shows rainbow/prismatic colour (or the whole card does, as on full arts, ex cards, and foil Magic cards). 'reverse_holofoil': Pokémon only — the CARD BODY (not the artwork) carries etched foil with a visible REPEATING pattern and rainbow colour shift; the artwork window stays matte. 'normal': no foil — including when the only shine is the lamp's band or wash. Answer a foil value only on positive evidence: rainbow colour that varies across the surface, or a visible etched pattern. Brightness alone is 'normal'. EXCEPTION for flat document-scanner images (even light, no glare band): the rainbow is muted there and foil scans DARK instead — artwork darker than body = holofoil; body/text darker than artwork = reverse_holofoil; uniformly light = normal.",
     },
     pattern: {
       type: "string",
@@ -173,7 +173,15 @@ EVERY photo has some shine. A bright band or an overall wash that crosses
 artwork and border alike, in white or the lamp's colour, is LIGHTING. Foil
 announces itself differently — rainbow colours that change across the
 surface, or an etched repeating motif in the card body. When the only
-evidence is brightness, the finish is 'normal'.`;
+evidence is brightness, the finish is 'normal'.
+
+Some photos come from a DOCUMENT SCANNER instead of a camera: flat, even
+light, no glare band — and the rainbow shift is MUTED, so foil announces
+itself by DARKNESS instead. Foil regions scan noticeably darker and
+duller than paper. Read the darkness map: artwork window darker than the
+body → 'holofoil'; body and text areas darker than the artwork →
+'reverse_holofoil' (the etched motif is usually still visible in that
+dark body); the whole card uniformly light → 'normal'.`;
 
 const CHECK_SCHEMA = {
   type: "object",
@@ -202,7 +210,10 @@ const CHECK_SCHEMA = {
         "prismatic colour in the artwork window (or the whole card, on full arts, ex " +
         "cards, and foil Magic cards). 'reverse_holofoil': Pokémon only — an etched " +
         "REPEATING pattern with rainbow shift in the card body, matte artwork. " +
-        "Foil needs positive evidence; brightness alone is 'normal'.",
+        "Foil needs positive evidence; brightness alone is 'normal'. On a flat " +
+        "document-scanner image (even light, no glare band) the rainbow is muted " +
+        "and DARKNESS is the tell instead: artwork darker than body = holo; body/" +
+        "text darker than artwork = reverse holo; uniformly light = normal.",
     },
     pattern: {
       type: "string",
@@ -237,7 +248,10 @@ the finish, the reverse-holo pattern, and any gold stamp? On finish,
 be especially sceptical of the first look: the rig's lamp shines on
 every card, and a bright band is not foil — reverse holo needs a
 visible etched repeating pattern, holo needs rainbow colour, and shine
-that is merely bright means 'normal'.
+that is merely bright means 'normal'. On a flat document-scanner image
+(even light, no glare) judge by DARKNESS instead: foil scans dark, so a
+dark artwork window means holo, a dark body around light artwork means
+reverse holo, and a uniformly light card is normal.
 
 Disagreeing when you SEE a real discrepancy is exactly what you are for:
 a name or number that reads differently, a finish the first look got
@@ -694,6 +708,31 @@ async function matchCatalogue(
     const set = normalizeForSearch(read.set_name);
     const bySet = hits.filter((c) => normalizeForSearch(c.set_name ?? "").includes(set));
     if (bySet.length > 0) hits = bySet;
+  }
+  // The number-line fingerprint, for when the NAME is the bad read.
+  //
+  // On a dark reverse holo the name is the least legible thing on the
+  // card and the model sometimes guesses one ("Ogerpon" off a Meowstic);
+  // the number line — 037/086 — is the most legible, and the printed
+  // total names the set. So a name that matches nothing pivots to
+  // number+total: the few cards in the catalogue wearing that exact line.
+  // One survivor is the card (the second look still confirms it against
+  // the photo, by the CORRECT name now); several go to the photo
+  // arbitration as candidates, which is built for exactly this choice.
+  if (hits.length === 0 && nameHits.length === 0 && printed && Number.isFinite(total) && total > 0) {
+    const lineForms = [
+      ...new Set([printed, printed.replace(/^0+/, "") || printed, printed.padStart(3, "0")]),
+    ];
+    const { data: byLine } = await admin
+      .from("cards")
+      .select("id, name, number, set_name, set_printed_total, rarity, prices")
+      .in("number", lineForms)
+      .eq("set_printed_total", total)
+      .limit(30);
+    const lineHits = ((byLine ?? []) as MatchCandidate[]).filter(
+      (c) => c.id.startsWith("scry-") === isMtg
+    );
+    if (lineHits.length > 0) hits = lineHits;
   }
   if (hits.length === 0) {
     return nameHits.length === 0

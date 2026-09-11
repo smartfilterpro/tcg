@@ -45,10 +45,14 @@ export default function CardZoom({
   src,
   alt,
   onClose,
+  rotated = false,
 }: {
   src: string;
   alt: string;
   onClose: () => void;
+  /** Display the image turned 180° — for scans that went through a feeder
+   *  upside down. Display only; the source image is untouched. */
+  rotated?: boolean;
 }) {
   const [fellBack, setFellBack] = useState(false);
   const shown = fellBack ? src : biggerSrc(src);
@@ -87,7 +91,7 @@ export default function CardZoom({
         // phone, a readable 30rem on a desktop, and never taller than the
         // screen (65vh of width ≈ 91vh of card height at the 5:7 aspect).
         // The container scrolls, so pinch-zoom past the edges still works.
-        className="h-auto w-[min(92vw,30rem,65vh)] rounded-xl shadow-2xl"
+        className={`h-auto w-[min(92vw,30rem,65vh)] rounded-xl shadow-2xl ${rotated ? "rotate-180" : ""}`}
       />
       <button
         className="fixed right-4 top-4 rounded-full bg-white/90 px-3 py-1.5 text-sm font-semibold text-slate-700 shadow"
