@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { resilientFetch } from "@/lib/clientLoop";
 import type { Profile } from "@/lib/types";
 import { variantLabel } from "@/lib/types";
+import CardZoom from "@/components/CardZoom";
 import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc, photoSrc } from "@/lib/art";
 
@@ -2724,7 +2725,14 @@ interface BulkRow {
   seq: number;
   photo1: string | null;
   photo2: string | null;
-  read1: { name?: string; number?: string; game?: string; cardName?: string | null; error?: string } | null;
+  read1: {
+    name?: string;
+    number?: string;
+    game?: string;
+    cardName?: string | null;
+    orientation?: string;
+    error?: string;
+  } | null;
   read2: { name?: string; number?: string; game?: string; cardName?: string | null; error?: string } | null;
   card: {
     id: string;
@@ -2755,6 +2763,9 @@ function BulkScanPanel() {
   // and gets glare-fooled; the human eye holding the card wins. The choice
   // rides along with whichever save the row gets.
   const [varPick, setVarPick] = useState<Record<string, string>>({});
+  // Full-screen look at a scan or a pick's art — an upside-down Misdreavus
+  // at thumbnail size reads as anything.
+  const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null);
   // row id → catalogue search results, so a reviewer can pick the card by
   // eye instead of hunting down an id in another tab.
   const [hits, setHits] = useState<
@@ -3219,9 +3230,22 @@ function BulkScanPanel() {
                       (p, i) =>
                         p && (
                           <div key={i} className="text-center">
+                            {/* Righted for human eyes when the read said the
+                                card went through the feeder flipped — the
+                                stored photo stays as scanned. */}
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={p} alt={`pass ${i + 1}`} className="h-40 rounded-lg border border-brand-line object-contain" />
-                            <div className="mt-0.5 text-[10px] text-brand-ink4">your scan{r.photo2 ? ` (pass ${i + 1})` : ""}</div>
+                            <img
+                              src={p}
+                              alt={`pass ${i + 1}`}
+                              className={`h-56 cursor-zoom-in rounded-lg border border-brand-line object-contain ${
+                                i === 0 && r.read1?.orientation === "upside_down" ? "rotate-180" : ""
+                              }`}
+                              onClick={() => setZoom({ src: p, alt: `card #${r.seq} scan` })}
+                            />
+                            <div className="mt-0.5 text-[10px] text-brand-ink4">
+                              your scan{r.photo2 ? ` (pass ${i + 1})` : ""}
+                              {i === 0 && r.read1?.orientation === "upside_down" ? " · righted" : ""} · tap to zoom
+                            </div>
                           </div>
                         )
                     )}
@@ -3234,9 +3258,15 @@ function BulkScanPanel() {
                         <img
                           src={artSrc(r.card.id, r.card.image_small) ?? undefined}
                           alt={r.card.name}
-                          className="h-40 rounded-lg border border-brand-positive object-contain"
+                          className="h-56 cursor-zoom-in rounded-lg border border-brand-positive object-contain"
+                          onClick={() =>
+                            setZoom({
+                              src: artSrc(r.card!.id, r.card!.image_small, "large") ?? r.card!.image_small!,
+                              alt: r.card!.name,
+                            })
+                          }
                         />
-                        <div className="mt-0.5 text-[10px] text-brand-positive">system pick</div>
+                        <div className="mt-0.5 text-[10px] text-brand-positive">system pick · tap to zoom</div>
                       </div>
                     )}
                     <div className="min-w-56 flex-1 text-xs leading-[1.7]">
@@ -3367,6 +3397,7 @@ function BulkScanPanel() {
           )}
         </div>
       )}
+      {zoom && <CardZoom src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}
     </div>
   );
 }
