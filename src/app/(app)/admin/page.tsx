@@ -1405,6 +1405,10 @@ export default function AdminPage() {
             <SealedProbePanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🕳️ Scan gaps</h2>
+            <ScanGapsPanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🔎 Why is this set short?</h2>
             <SetProbePanel />
           </div>
@@ -3515,6 +3519,82 @@ function BulkScanPanel() {
  *  needs an empty collection first — and this is the only way to get one
  *  short of tapping 1,800 delete buttons. Decks survive on purpose (they
  *  hold names and catalogue ids, not collection rows). */
+/** The "are the missing cards a bug?" triage: every unresolved review
+ *  row's read, grouped and checked against the catalogue, each group
+ *  labeled import-gap vs possible-matcher-bug, ordered by how many scans
+ *  hit the same wall. */
+function ScanGapsPanel() {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [data, setData] = useState<{
+    unresolved: number;
+    groups: Array<{
+      name: string;
+      number: string;
+      total: number | null;
+      game: string;
+      count: number;
+      note: string | null;
+      verdict: string;
+    }>;
+  } | null>(null);
+
+  async function analyze() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/admin/scan-gaps");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't analyze");
+      setData(json);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn't analyze");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="text-xs">
+      <p className="m-0 mb-2 leading-[1.6] text-brand-ink3">
+        Every card the scanner read but nobody has resolved, grouped and checked against the
+        catalogue. <b>Import gap</b> means the card genuinely isn&apos;t on file yet — fill the
+        set, no bug. <b>Check the row</b> means the catalogue has it and the matcher still
+        balked — that&apos;s the one worth reporting.
+      </p>
+      <button className="btn-secondary text-xs" disabled={busy} onClick={analyze}>
+        {busy ? "Analyzing…" : "Analyze unresolved rows"}
+      </button>
+      {err && <p className="mt-2 text-brand-negative">{err}</p>}
+      {data && (
+        <div className="mt-2">
+          <p className="m-0 mb-1 text-brand-ink4">
+            {data.unresolved} unresolved row{data.unresolved === 1 ? "" : "s"} · top{" "}
+            {data.groups.length} distinct reads:
+          </p>
+          <ul className="m-0 flex list-none flex-col gap-1 p-0">
+            {data.groups.map((g, i) => (
+              <li key={i} className="rounded border border-brand-line px-2 py-1">
+                <b>
+                  {g.count}× {g.name} #{g.number}
+                  {g.total ? `/${g.total}` : ""}
+                </b>{" "}
+                <span className="text-brand-ink4">({g.game})</span>
+                <div
+                  className={
+                    /import gap/.test(g.verdict) ? "text-brand-ink3" : "text-brand-warning"
+                  }
+                >
+                  {g.verdict}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ClearCollectionPanel() {
   const [email, setEmail] = useState("");
   const [game, setGame] = useState<"all" | "pokemon" | "mtg">("all");
