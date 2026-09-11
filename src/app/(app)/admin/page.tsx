@@ -2709,6 +2709,7 @@ interface BulkJob {
   expected_cards: number | null;
   ai_cost_usd: number;
   uploaded_at: string | null;
+  uploaded_to_name?: string | null;
   created_at: string;
   pass1: number;
   pass2: number;
@@ -3024,6 +3025,16 @@ function BulkScanPanel() {
                     pass1 {j.pass1} · pass2 {j.pass2} · ✓{j.verified} · 👀{j.needsReview} · ✍️
                     {j.reviewed} · ${j.ai_cost_usd.toFixed(2)} AI
                   </span>
+                  <span className="basis-full font-mono text-[11px] text-brand-ink4">
+                    scanned {new Date(j.created_at).toLocaleString()}
+                    {j.status === "uploaded" && j.uploaded_at && (
+                      <>
+                        {" "}
+                        · uploaded to <b>{j.uploaded_to_name ?? "a member"}</b> ·{" "}
+                        {new Date(j.uploaded_at).toLocaleString()}
+                      </>
+                    )}
+                  </span>
                   <span className="ml-auto flex flex-wrap gap-1.5">
                     {j.status !== "uploaded" && j.status !== "cancelled" && (
                       <button className="btn text-xs text-brand-ink4 hover:bg-slate-100" disabled={busy} onClick={() => jobAction(j.id, "finalize")}>
@@ -3157,7 +3168,10 @@ function BulkScanPanel() {
       {open && (
         <div className="card-panel p-4">
           <h2 className="mb-2 font-display text-[17px] font-bold">
-            👀 {rowFilter === "review" ? `Review queue (${rowCount} left)` : rowFilter === "verified" ? `Verified with no human (${rowCount})` : `All cards (${rowCount})`}
+            {/* The job's name leads: with several jobs on the board, a
+                card list without a title is anyone's guess. */}
+            👀 {jobs?.find((j) => j.id === open)?.label ?? "…"} —{" "}
+            {rowFilter === "review" ? `Review queue (${rowCount} left)` : rowFilter === "verified" ? `Verified with no human (${rowCount})` : `All cards (${rowCount})`}
           </h2>
           <div className="mb-2 flex flex-wrap gap-1.5">
             {(
