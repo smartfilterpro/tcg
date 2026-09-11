@@ -616,12 +616,33 @@ export async function runMtgSearch(
   // set in collector order, the same contract the Pokémon picker keeps.
   // Scryfall's own set: filter only takes CODES, so the directory does
   // the name-to-code step people shouldn't have to know about.
+  // A result this search SHOWS can be TAPPED — in the admin review desk,
+  // in the picker — and the tap saves the card's id, which the server
+  // checks against the cards table. So everything remote gets stashed
+  // (insert-only, best-effort) before it's returned; without this, a
+  // Scryfall-only result was a button that couldn't work.
+  const stash = async (cards: CardSummary[]) => {
+    if (cards.length === 0) return;
+    try {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      await createAdminClient()
+        .from("cards")
+        .upsert(cards.slice(0, 60).map(summaryToRow), { onConflict: "id", ignoreDuplicates: true });
+    } catch {
+      // The stash is a bonus; the search result stands either way.
+    }
+  };
+
   const explicitSet = /^set:\s*(.+)$/i.exec(term);
   if (!opts?.localOnly) {
     try {
       const dir = await mtgSetDirectory();
       const hit = matchMtgSetName((explicitSet?.[1] ?? term).trim(), dir, !!explicitSet);
-      if (hit) return await mtgSetCards(hit.code);
+      if (hit) {
+        const cards = await mtgSetCards(hit.code);
+        await stash(cards);
+        return cards;
+      }
     } catch {
       // The directory is a bonus; the name search below still answers.
     }
@@ -666,7 +687,28 @@ export async function runMtgSearch(
   if (opts?.localOnly) return local.slice(0, 40);
   const remote = await searchMtgCards(term);
   const seen = new Set(local.map((c) => c.id));
-  return [...local, ...remote.filter((c) => !seen.has(c.id))].slice(0, 40);
+  const fresh = remote.filter((c) => !seen.has(c.id));
+  await stash(fresh);
+  return [...local, ...fresh].slice(0, 40);
+}
+
+/** Make sure one scry-… id exists as a catalogue row, fetching and
+ *  stashing it on demand. A picker can show results the stash hasn't
+ *  caught up with (older UI, a race) — a save naming one must not bounce
+ *  off the "is it in the catalogue" check. */
+export async function ensureScryCard(admin: SupabaseClient, cardId: string): Promise<boolean> {
+  if (!cardId.startsWith("scry-")) return false;
+  try {
+    const raw = await scryGet(`/cards/${cardId.slice("scry-".length)}`);
+    if (!raw) return false;
+    const summary = scryToSummary(raw as unknown as ScryCard);
+    await admin
+      .from("cards")
+      .upsert([summaryToRow(summary)], { onConflict: "id", ignoreDuplicates: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Refresh prices (and any missing images) for the stalest MTG rows, in

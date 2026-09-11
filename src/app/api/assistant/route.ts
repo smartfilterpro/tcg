@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import type Anthropic from "@anthropic-ai/sdk";
 import { anthropic, MODEL } from "@/lib/anthropic";
-import { getBattleDataById, type CardBattleData } from "@/lib/pokemontcg";
+import { getBattleDataById, searchCards, type CardBattleData } from "@/lib/pokemontcg";
 import { getTcgdexBattleDataById } from "@/lib/tcgdex";
-import { fetchScryBattleData } from "@/lib/scryfall";
+import { fetchScryBattleData, searchMtgCards } from "@/lib/scryfall";
+import { summaryToRow, type CardSummary } from "@/lib/types";
 import { readCardTextOnce, shareTextWithPrintings } from "@/lib/cardText";
 import { requireUser, AuthError } from "@/lib/auth";
 import { logAiUsage } from "@/lib/usage";
@@ -143,14 +144,21 @@ const CARD_LOOKUP_TOOL = {
     "link per card, and a few famous community nicknames ('moonbreon', " +
     "'bubble mew', 'goyf') are understood as-is. " +
     "NEVER describe a card's attacks from memory: " +
-    "look it up, and if the text isn't on file say so. The catalogue may be " +
-    "incompletely imported: an empty result means the database doesn't list " +
-    "the card yet, NOT that the card doesn't exist.",
+    "look it up, and if the text isn't on file say so. Cards the app has " +
+    "never held are fetched from the source databases on the fly, so an " +
+    "empty result is rare — when it happens, say the card couldn't be " +
+    "found in the databases, NOT that it doesn't exist.",
   input_schema: {
     type: "object" as const,
     properties: {
       name: { type: "string", description: "Card name, or part of one (e.g. 'Starmie')." },
       set_name: { type: "string", description: "Set name, or part of one (e.g. 'Perfect Order')." },
+      game: {
+        type: "string",
+        enum: ["pokemon", "mtg"],
+        description:
+          "Which game the card belongs to, when clear from the question — it picks the right source database for cards the app hasn't held yet.",
+      },
     },
   },
 };
@@ -343,7 +351,7 @@ async function runSetCompletion(
 
 async function runCardLookup(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  input: { name?: string; set_name?: string },
+  input: { name?: string; set_name?: string; game?: string },
   /** Whose credits a vision read is billed to. */
   userId: string | null = null
 ): Promise<string> {
@@ -368,21 +376,68 @@ async function runCardLookup(
     if (!set && nick.set) set = nick.set;
   }
 
-  let q = supabase
-    .from("cards")
-    // select("*") — battle_data only exists after migration 019, and naming
-    // it would fail the whole lookup on a database without it.
-    .select("*", { count: "exact" });
-  if (name) q = q.ilike("name", `%${name}%`);
-  if (set) q = q.ilike("set_name", `%${set}%`);
-  const { data, count, error } = await q.order("set_name").order("number").limit(50);
+  const runLocal = async () => {
+    let q = supabase
+      .from("cards")
+      // select("*") — battle_data only exists after migration 019, and naming
+      // it would fail the whole lookup on a database without it.
+      .select("*", { count: "exact" });
+    if (name) q = q.ilike("name", `%${name}%`);
+    if (set) q = q.ilike("set_name", `%${set}%`);
+    return q.order("set_name").order("number").limit(50);
+  };
+  let { data, count, error } = await runLocal();
   if (error) return `The lookup failed: ${error.message}`;
+
+  // The catalogue only holds what somebody has touched, and "we're
+  // building a complete list" is a direction of travel, not a state — a
+  // brand-new set the player asks about first is exactly the card the
+  // local table won't have. So a local miss falls through to the source
+  // databases, and whatever they answer is STASHED into the catalogue
+  // before re-running the same local query: the formatter below works
+  // unchanged, and the next question about that card is local.
+  if ((!data || data.length === 0) && name) {
+    try {
+      const admin = createAdminClient();
+      const game = (input.game ?? "").toLowerCase();
+      const found: CardSummary[] = [];
+      if (game !== "pokemon") {
+        try {
+          found.push(...(await searchMtgCards(name, 20)));
+        } catch {
+          // Scryfall down or no match — the other source still gets a turn.
+        }
+      }
+      if (found.length === 0 && game !== "mtg") {
+        try {
+          found.push(...(await searchCards({ name, setName: set || undefined, pageSize: 20 })));
+        } catch {
+          // Same: best-effort.
+        }
+      }
+      if (found.length > 0) {
+        await admin
+          .from("cards")
+          .upsert(found.slice(0, 20).map(summaryToRow), { onConflict: "id", ignoreDuplicates: true });
+        ({ data, count, error } = await runLocal());
+        // The set filter can be the reason the requery misses (the source
+        // spells the set differently) — the name alone is the answer then.
+        if (!error && (!data || data.length === 0) && set) {
+          set = "";
+          ({ data, count, error } = await runLocal());
+        }
+        if (error) return `The lookup failed: ${error.message}`;
+      }
+    } catch {
+      // External rescue failing must not break the honest empty answer.
+    }
+  }
   if (!data || data.length === 0) {
     return (
       nickNote +
-      "No matches in the app's card database. The catalogue may still be " +
-      "importing — tell the player the database doesn't list it yet, not " +
-      "that the card doesn't exist."
+      "No matches in the app's card database or the source databases it " +
+      "checks. Tell the player the card couldn't be found — and only say a " +
+      "card doesn't exist if the spelling has been double-checked."
     );
   }
 
