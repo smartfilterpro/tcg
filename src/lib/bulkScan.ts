@@ -16,8 +16,8 @@ import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { estimateCostUsd, logAiUsage, tokensFrom } from "@/lib/usage";
 import { numberKey } from "@/lib/pokemontcg";
 import { normalizeForSearch } from "@/lib/text";
-import { pickPrinting } from "@/lib/cardPrinting";
-import { defaultVariantFor, isSpecificPrinting, summaryToRow } from "@/lib/types";
+import { patternPrintingFor, pickPrinting } from "@/lib/cardPrinting";
+import { ballPatternOf, defaultVariantFor, isSpecificPrinting, summaryToRow } from "@/lib/types";
 import { matchMtgCard } from "@/lib/scryfall";
 
 export const BULK_BUCKET = "bulk-scans";
@@ -123,7 +123,7 @@ const READ_SCHEMA = {
         "unknown",
       ],
       description:
-        "ONLY when finish is reverse_holofoil: which motif is etched into the foil, repeating across the card face. A ball motif ('poke_ball' / 'master_ball' / 'friend_ball' / 'love_ball', or 'other_ball' for one you can see but can't name) marks a separate, much rarer printing and must not be missed; 'energy_symbol' is the same idea with repeating ENERGY TYPE SYMBOLS (grass leaves, flames, water drops…) as the motif. 'standard' is the set's ordinary pattern — stars, set symbols, sparkle. 'none' when the card isn't reverse holo. 'unknown' when it is but the pattern can't be made out — never guess.",
+        "The motif etched or watermarked into the CARD BODY, repeating across it. Report a motif you can SEE regardless of what you answered for finish — on scanner images the motif shows as a pale repeating watermark, and seeing one MEANS the card is a pattern reverse holo even if it read as matte. A ball motif ('poke_ball' / 'master_ball' / 'friend_ball' / 'love_ball', or 'other_ball' for one you can see but can't name) marks a separate, much rarer printing and must not be missed; 'energy_symbol' is the same idea with repeating ENERGY TYPE SYMBOLS (grass leaves, flames, water drops…) as the motif. 'standard' is the set's ordinary pattern — stars, set symbols, sparkle. 'none' when no motif is visible. 'unknown' when foil is present but the pattern can't be made out — never guess a ball.",
     },
     stamp: {
       type: "string",
@@ -219,9 +219,12 @@ const CHECK_SCHEMA = {
       type: "string",
       enum: ["standard", "poke_ball", "master_ball", "friend_ball", "love_ball", "other_ball", "energy_symbol", "none", "unknown"],
       description:
-        "ONLY when finish is reverse_holofoil: the motif etched into the foil " +
-        "(a ball, or 'energy_symbol' for repeating energy type symbols). " +
-        "'none' when the card isn't reverse holo (always 'none' for Magic).",
+        "The motif etched or watermarked into the card body, if you can SEE one " +
+        "(a ball, or 'energy_symbol' for repeating energy type symbols) — report " +
+        "it regardless of the finish answer; a visible motif means a reverse " +
+        "holo — but ONE large Poké Ball filling the body is 'standard' (the " +
+        "modern normal reverse); only SMALL REPEATING balls are a ball pattern. " +
+        "'none' when no motif is visible (always 'none' for Magic).",
     },
     stamp: {
       type: "string",
@@ -347,6 +350,13 @@ export async function identifyPhoto(
     };
     if (parsed.readable === false) {
       return { error: "no readable card in the photo (misfeed?)" };
+    }
+    // Self-consistency the schema also states: a visible pattern motif IS
+    // reverse-holo evidence. Scanner light mutes the foil, so the model
+    // sometimes reports the watermark while calling the finish matte —
+    // the motif wins.
+    if (BALL_WORDS[parsed.pattern ?? ""] && parsed.finish !== "reverse_holofoil") {
+      parsed.finish = "reverse_holofoil";
     }
     // The same hint string the phone scanner builds, so both go through one
     // set of rules for what a finish and a pattern mean.
@@ -632,19 +642,22 @@ export async function identifyPhoto(
           checkNote: "prerelease stamp read — a human must confirm the stamp before this files",
         };
       }
-      // Finish-only disagreement, with the reference render in hand: the
-      // second look literally compared the scan against the plain
-      // printing, which the first look never saw — its finish call wins,
+      // Finish and/or pattern disagreement, with the reference render in
+      // hand: the second look literally compared the scan against the
+      // plain printing, which the first look never saw — its call wins,
       // and the row verifies corrected instead of queueing a human for a
-      // question the comparison already answered.
-      if (
-        reference &&
-        verdict.same_card !== false &&
-        disagreements.length === 1 &&
-        (verdict.finish ?? "normal") !== (parsed.finish ?? "normal")
-      ) {
+      // question the comparison already answered. Card identity or stamp
+      // disputes still refuse.
+      const finishDiff = (verdict.finish ?? "normal") !== (parsed.finish ?? "normal");
+      const patternDiff =
+        (parsed.finish === "reverse_holofoil" || verdict.finish === "reverse_holofoil") &&
+        (verdict.pattern ?? "none") !== (parsed.pattern ?? "none");
+      const onlyFoilContested =
+        disagreements.length > 0 &&
+        disagreements.length === (finishDiff ? 1 : 0) + (patternDiff ? 1 : 0);
+      if (reference && verdict.same_card !== false && onlyFoilContested) {
         const f = verdict.finish ?? "normal";
-        return {
+        const adopted: BulkRead = {
           ...matched,
           variant:
             read.game === "mtg"
@@ -652,13 +665,40 @@ export async function identifyPhoto(
                 ? "normal"
                 : "foil"
               : f === "reverse_holofoil"
-                ? "reverseHolofoil"
+                ? (ballPatternOf(BALL_WORDS[verdict.pattern ?? ""] ?? "")?.variant ?? "reverseHolofoil")
                 : f === "holofoil"
                   ? "holofoil"
                   : "normal",
           checked: true,
           checkNote: null,
         };
+        // A ball/energy motif may have its own catalogue row — the named
+        // printing with its own price. Swap onto it when we hold one.
+        const ballWord = BALL_WORDS[verdict.pattern ?? ""];
+        if (read.game !== "mtg" && ballWord && adopted.cardId && adopted.cardName) {
+          try {
+            const row = await patternPrintingFor(
+              admin,
+              {
+                id: adopted.cardId,
+                name: adopted.cardName,
+                number: adopted.cardNumber ?? "",
+                setName: adopted.cardSet ?? null,
+              },
+              ballWord
+            );
+            if (row) {
+              adopted.cardId = row.id;
+              adopted.cardName = row.name;
+              adopted.cardNumber = row.number;
+              adopted.cardSet = row.setName;
+              adopted.variant = variantFor(false, row, ballWord);
+            }
+          } catch {
+            // The base row wearing the pattern finish is still right.
+          }
+        }
+        return adopted;
       }
       if (disagreements.length === 0) return { ...matched, checked: true, checkNote: null };
       const concern = (verdict.concern ?? "").trim();
