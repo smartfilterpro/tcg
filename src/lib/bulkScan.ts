@@ -575,6 +575,17 @@ export async function identifyPhoto(
       if ((verdict.stamp ?? "none") !== (parsed.stamp ?? "none")) {
         disagreements.push("the looks differ on the stamp");
       }
+      // A prerelease stamp never self-verifies, even with both looks
+      // agreeing. The stamp multiplies the card's value and a gold blob
+      // of glare can pass for one; that call belongs to a person, every
+      // time.
+      if (parsed.stamp === "prerelease" || verdict.stamp === "prerelease") {
+        return {
+          ...matched,
+          checked: false,
+          checkNote: "prerelease stamp read — a human must confirm the stamp before this files",
+        };
+      }
       if (disagreements.length === 0) return { ...matched, checked: true, checkNote: null };
       const concern = (verdict.concern ?? "").trim();
       return {
