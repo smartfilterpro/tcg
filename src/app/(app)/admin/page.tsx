@@ -2766,6 +2766,10 @@ function BulkScanPanel() {
   // Full-screen look at a scan or a pick's art — an upside-down Misdreavus
   // at thumbnail size reads as anything.
   const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null);
+  // Manual flip per row, XORed with the read's own orientation call — the
+  // human can right a scan the reader didn't flag (or un-right a wrong
+  // call). Display only; the stored photo never changes.
+  const [flip, setFlip] = useState<Record<string, boolean>>({});
   // row id → catalogue search results, so a reviewer can pick the card by
   // eye instead of hunting down an id in another tab.
   const [hits, setHits] = useState<
@@ -3232,19 +3236,31 @@ function BulkScanPanel() {
                           <div key={i} className="text-center">
                             {/* Righted for human eyes when the read said the
                                 card went through the feeder flipped — the
-                                stored photo stays as scanned. */}
+                                stored photo stays as scanned. The ↻ button
+                                is the human override, XORed with the auto
+                                call. */}
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                               src={p}
                               alt={`pass ${i + 1}`}
-                              className={`h-56 cursor-zoom-in rounded-lg border border-brand-line object-contain ${
-                                i === 0 && r.read1?.orientation === "upside_down" ? "rotate-180" : ""
+                              className={`h-80 cursor-zoom-in rounded-lg border border-brand-line object-contain ${
+                                (i === 0 && r.read1?.orientation === "upside_down") !== !!flip[`${r.id}:${i}`]
+                                  ? "rotate-180"
+                                  : ""
                               }`}
                               onClick={() => setZoom({ src: p, alt: `card #${r.seq} scan` })}
                             />
                             <div className="mt-0.5 text-[10px] text-brand-ink4">
                               your scan{r.photo2 ? ` (pass ${i + 1})` : ""}
-                              {i === 0 && r.read1?.orientation === "upside_down" ? " · righted" : ""} · tap to zoom
+                              {i === 0 && r.read1?.orientation === "upside_down" ? " · righted" : ""} · tap to zoom ·{" "}
+                              <button
+                                className="underline hover:text-brand-ink2"
+                                onClick={() =>
+                                  setFlip((f) => ({ ...f, [`${r.id}:${i}`]: !f[`${r.id}:${i}`] }))
+                                }
+                              >
+                                ↻ flip
+                              </button>
                             </div>
                           </div>
                         )
@@ -3258,7 +3274,7 @@ function BulkScanPanel() {
                         <img
                           src={artSrc(r.card.id, r.card.image_small) ?? undefined}
                           alt={r.card.name}
-                          className="h-56 cursor-zoom-in rounded-lg border border-brand-positive object-contain"
+                          className="h-80 cursor-zoom-in rounded-lg border border-brand-positive object-contain"
                           onClick={() =>
                             setZoom({
                               src: artSrc(r.card!.id, r.card!.image_small, "large") ?? r.card!.image_small!,
@@ -3366,7 +3382,7 @@ function BulkScanPanel() {
                             >
                               {c.imageSmall && (
                                 // eslint-disable-next-line @next/next/no-img-element
-                                <img src={c.imageSmall} alt="" className="h-10 rounded-sm" />
+                                <img src={artSrc(c.id, c.imageSmall) ?? undefined} alt="" className="h-28 rounded" />
                               )}
                               <span>
                                 <b>{c.name}</b> #{c.number} · {c.setName}
