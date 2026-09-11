@@ -123,7 +123,7 @@ const READ_SCHEMA = {
         "unknown",
       ],
       description:
-        "The motif etched or watermarked into the CARD BODY, repeating across it. Report a motif you can SEE regardless of what you answered for finish — on scanner images the motif shows as a pale repeating watermark, and seeing one MEANS the card is a pattern reverse holo even if it read as matte. A ball motif ('poke_ball' / 'master_ball' / 'friend_ball' / 'love_ball', or 'other_ball' for one you can see but can't name) marks a separate, much rarer printing and must not be missed; 'energy_symbol' is the same idea with repeating ENERGY TYPE SYMBOLS (grass leaves, flames, water drops…) as the motif. 'standard' is the set's ordinary pattern — stars, set symbols, sparkle. 'none' when no motif is visible. 'unknown' when foil is present but the pattern can't be made out — never guess a ball.",
+        "The motif etched or watermarked into the CARD BODY, repeating across it. Report a motif you can SEE regardless of what you answered for finish — on scanner images the motif shows as a pale repeating watermark, and seeing one MEANS the card is a pattern reverse holo even if it read as matte. A ball motif ('poke_ball' / 'master_ball' / 'friend_ball' / 'love_ball', or 'other_ball' for one you can see but can't name) marks a separate, much rarer printing and must not be missed; 'energy_symbol' is the same idea with repeating ENERGY TYPE SYMBOLS (grass leaves, flames, water drops…) as the motif. 'standard' is the set's ordinary pattern — stars, set symbols, sparkle. 'none' when no motif is visible — PLENTY of reverse holos carry no motif at all, so a missing motif is never evidence against reverse holo. 'unknown' when foil is present but the pattern can't be made out — never guess a ball.",
     },
     stamp: {
       type: "string",
@@ -224,7 +224,8 @@ const CHECK_SCHEMA = {
         "it regardless of the finish answer; a visible motif means a reverse " +
         "holo — but ONE large Poké Ball filling the body is 'standard' (the " +
         "modern normal reverse); only SMALL REPEATING balls are a ball pattern. " +
-        "'none' when no motif is visible (always 'none' for Magic).",
+        "'none' when no motif is visible — many reverse holos have no motif, " +
+        "so 'none' never argues against a reverse finish (always 'none' for Magic).",
     },
     stamp: {
       type: "string",
