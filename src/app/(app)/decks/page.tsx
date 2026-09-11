@@ -17,6 +17,7 @@ import DeckEditCard, { type DeckEditProposal } from "@/components/DeckEditCard";
 import { isBasicLand } from "@/lib/mtgDeckLegality";
 import { resilientFetch } from "@/lib/clientLoop";
 import CardText from "@/components/CardText";
+import CardPickerModal from "@/components/CardPickerModal";
 import CardZoom from "@/components/CardZoom";
 
 type UpgradeSuggestion = DeckSuggestion;
@@ -1192,6 +1193,9 @@ export default function DecksPage() {
   const [nameImages, setNameImages] = useState<Record<string, string | null>>({});
   // The card whose text is open, and the text we've fetched so far.
   const [reading, setReading] = useState<DeckCardEntry | null>(null);
+  // Manual swap: the picker is open for the card currently being read.
+  const [swapping, setSwapping] = useState(false);
+  const [swapBusy, setSwapBusy] = useState(false);
   const [details, setDetails] = useState<Record<string, CardDetail>>({});
   const [readingBusy, setReadingBusy] = useState(false);
   /** The card picture being looked at full-screen, if any. */
@@ -2211,7 +2215,88 @@ export default function DecksPage() {
                 </button>
               ));
             })()}
+            {/* Manual swap — no AI, no proposal round-trip: pick the
+                replacement, same quantity and slot, saved immediately.
+                Only on decks the viewer owns. */}
+            {viewing && !viewing.owner_name && (
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:border-brand-accent hover:text-brand-accent"
+                onClick={() => setSwapping(true)}
+              >
+                🔁 Swap this card…
+              </button>
+            )}
           </div>
+          {swapping && viewing && (
+            <CardPickerModal
+              initialQuery=""
+              candidates={[]}
+              game={viewing.game === "mtg" ? "mtg" : "pokemon"}
+              onClose={() => setSwapping(false)}
+              onPick={(picked) => {
+                setSwapping(false);
+                void (async () => {
+                  if (swapBusy) return;
+                  setSwapBusy(true);
+                  try {
+                    const idx = viewing.cards.findIndex(
+                      (e) =>
+                        e.name === reading.name &&
+                        (e.card_id ?? null) === (reading.card_id ?? null) &&
+                        e.category === reading.category
+                    );
+                    if (idx < 0) throw new Error("Couldn't find that card in the deck.");
+                    const st = (picked.supertype ?? "").toLowerCase();
+                    const category =
+                      reading.category === "commander"
+                        ? ("commander" as const)
+                        : viewing.game === "mtg"
+                          ? /land/.test(st)
+                            ? ("land" as const)
+                            : /creature/.test(st)
+                              ? ("creature" as const)
+                              : ("spell" as const)
+                          : /energy/.test(st)
+                            ? ("energy" as const)
+                            : /trainer/.test(st)
+                              ? ("trainer" as const)
+                              : ("pokemon" as const);
+                    const cards = viewing.cards.map((e, i) =>
+                      i === idx
+                        ? {
+                            name: picked.name,
+                            quantity: reading.quantity,
+                            category,
+                            card_id: picked.id,
+                            // The old reason described the old card.
+                            reason: null,
+                          }
+                        : e
+                    );
+                    const res = await fetch(`/api/decks/${viewing.id}`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ cards }),
+                    });
+                    const json = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(json.error || "Couldn't save the swap.");
+                    const updated = { ...viewing, cards };
+                    setViewing(updated);
+                    setDecks((prev) => prev.map((dk) => (dk.id === updated.id ? updated : dk)));
+                    if (picked.imageSmall) {
+                      setCardImages((m) => ({ ...m, [picked.id]: picked.imageSmall }));
+                    }
+                    setReading(null);
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Couldn't save the swap.");
+                  } finally {
+                    setSwapBusy(false);
+                  }
+                })();
+              }}
+            />
+          )}
         </div>
         {zoomed && (
           <CardZoom src={zoomed} alt={reading.name} onClose={() => setZoomed(null)} />
