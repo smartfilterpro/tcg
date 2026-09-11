@@ -202,6 +202,44 @@ export async function POST(req: Request) {
       name?: string;
     };
 
+    // { action: "reset_art", cardId } — throw away a card's stored images
+    // and refetch from its source. Exists because a catalogue row was found
+    // wearing another card's art entirely (a Pokémon row with a Magic
+    // card's picture); whatever mixed them up, the source database still
+    // has the right art under the row's own id.
+    if (body.action === "reset_art") {
+      const cardId = (body.cardId ?? "").trim();
+      if (!cardId) return NextResponse.json({ error: "Which card?" }, { status: 400 });
+      let small: string | null = null;
+      let large: string | null = null;
+      if (cardId.startsWith("tcgdex-")) {
+        const { getTcgdexImageById } = await import("@/lib/tcgdex");
+        const img = await getTcgdexImageById(cardId).catch(() => null);
+        small = img?.small ?? null;
+        large = img?.large ?? null;
+      } else if (cardId.startsWith("scry-")) {
+        const { ensureScryCard } = await import("@/lib/scryfall");
+        // Re-stash is insert-only, so refetch and update the images directly.
+        await ensureScryCard(admin, cardId).catch(() => null);
+        const res = await fetch(
+          `https://api.scryfall.com/cards/${cardId.slice("scry-".length)}`
+        ).catch(() => null);
+        const raw = res?.ok ? await res.json() : null;
+        const uris = raw?.image_uris ?? raw?.card_faces?.[0]?.image_uris ?? null;
+        small = uris?.small ?? null;
+        large = uris?.large ?? uris?.normal ?? null;
+      }
+      // No derivable source (tcgp/base ids): clear and unlock, so the gap
+      // filler and the art proxy fetch fresh instead of serving the wrong
+      // picture forever.
+      const { error } = await admin
+        .from("cards")
+        .update({ image_small: small, image_large: large, image_locked: false })
+        .eq("id", cardId);
+      if (error) throw error;
+      return NextResponse.json({ ok: true, refetched: !!small });
+    }
+
     // { action: "create", name } — make a card record for a name that has no
     // entry at all (deck entries are just names; a picture needs a record to
     // live on). Mostly used for basic energy.

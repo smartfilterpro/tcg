@@ -1405,6 +1405,10 @@ export default function AdminPage() {
             <SealedProbePanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🕳️ Scan gaps</h2>
+            <ScanGapsPanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🔎 Why is this set short?</h2>
             <SetProbePanel />
           </div>
@@ -2827,6 +2831,43 @@ function BulkScanPanel() {
     setBusy(false);
   }
 
+  /** Re-read runs under a server time budget, so a big job takes several
+   *  rounds. One click drives them all: keep calling while the server
+   *  reports a queue, narrating progress in the message line — the final
+   *  message (no "queued" clause) IS the completion notice. */
+  async function rereadAll(jobId: string) {
+    setBusy(true);
+    setError(null);
+    let done = 0;
+    try {
+      for (let round = 0; round < 30; round++) {
+        const res = await fetch(`/api/admin/bulk/${jobId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "reread" }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          setError(json.error ?? "Re-read failed");
+          break;
+        }
+        done += json.reread ?? 0;
+        if ((json.remaining ?? 0) > 0) {
+          setMessage(`Re-reading… ${done} done, ${json.remaining} to go — leave this page open.`);
+          continue;
+        }
+        setMessage(
+          `✅ Re-read complete: ${done} photo${done === 1 ? "" : "s"} — now ${json.result?.verified ?? "?"} verified, ${json.result?.review ?? "?"} for review.`
+        );
+        break;
+      }
+    } finally {
+      load();
+      if (open === jobId) loadRows(jobId);
+      setBusy(false);
+    }
+  }
+
   async function jobAction(jobId: string, action: string, extra: Record<string, unknown> = {}) {
     setBusy(true);
     setError(null);
@@ -3080,7 +3121,7 @@ function BulkScanPanel() {
                         className="btn text-xs text-brand-ink4 hover:bg-slate-100"
                         disabled={busy}
                         title="Run the AI again on every machine-decided row (verified included; human verdicts kept) — no re-feeding needed"
-                        onClick={() => jobAction(j.id, "reread")}
+                        onClick={() => rereadAll(j.id)}
                       >
                         Re-read
                       </button>
@@ -3309,7 +3350,32 @@ function BulkScanPanel() {
                             })
                           }
                         />
-                        <div className="mt-0.5 text-[10px] text-brand-positive">system pick · tap to zoom</div>
+                        <div className="mt-0.5 text-[10px] text-brand-positive">
+                          system pick · tap to zoom ·{" "}
+                          <button
+                            className="text-brand-ink4 underline hover:text-brand-ink2"
+                            title="The catalogue row is wearing the wrong picture? Refetch its art from the source database."
+                            onClick={async () => {
+                              const res = await fetch("/api/admin/card-images", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ action: "reset_art", cardId: r.card!.id }),
+                              });
+                              const json = await res.json().catch(() => ({}));
+                              if (!res.ok) setError(json.error ?? "Couldn't reset the art");
+                              else {
+                                setMessage(
+                                  json.refetched
+                                    ? "Art refetched from the source."
+                                    : "Bad art cleared — the gap filler will fetch a fresh one."
+                                );
+                                if (open) loadRows(open, rowFilter, 0);
+                              }
+                            }}
+                          >
+                            wrong art?
+                          </button>
+                        </div>
                       </div>
                     )}
                     <div className="min-w-56 flex-1 text-xs leading-[1.7]">
@@ -3453,6 +3519,82 @@ function BulkScanPanel() {
  *  needs an empty collection first — and this is the only way to get one
  *  short of tapping 1,800 delete buttons. Decks survive on purpose (they
  *  hold names and catalogue ids, not collection rows). */
+/** The "are the missing cards a bug?" triage: every unresolved review
+ *  row's read, grouped and checked against the catalogue, each group
+ *  labeled import-gap vs possible-matcher-bug, ordered by how many scans
+ *  hit the same wall. */
+function ScanGapsPanel() {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [data, setData] = useState<{
+    unresolved: number;
+    groups: Array<{
+      name: string;
+      number: string;
+      total: number | null;
+      game: string;
+      count: number;
+      note: string | null;
+      verdict: string;
+    }>;
+  } | null>(null);
+
+  async function analyze() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/admin/scan-gaps");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't analyze");
+      setData(json);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn't analyze");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="text-xs">
+      <p className="m-0 mb-2 leading-[1.6] text-brand-ink3">
+        Every card the scanner read but nobody has resolved, grouped and checked against the
+        catalogue. <b>Import gap</b> means the card genuinely isn&apos;t on file yet — fill the
+        set, no bug. <b>Check the row</b> means the catalogue has it and the matcher still
+        balked — that&apos;s the one worth reporting.
+      </p>
+      <button className="btn-secondary text-xs" disabled={busy} onClick={analyze}>
+        {busy ? "Analyzing…" : "Analyze unresolved rows"}
+      </button>
+      {err && <p className="mt-2 text-brand-negative">{err}</p>}
+      {data && (
+        <div className="mt-2">
+          <p className="m-0 mb-1 text-brand-ink4">
+            {data.unresolved} unresolved row{data.unresolved === 1 ? "" : "s"} · top{" "}
+            {data.groups.length} distinct reads:
+          </p>
+          <ul className="m-0 flex list-none flex-col gap-1 p-0">
+            {data.groups.map((g, i) => (
+              <li key={i} className="rounded border border-brand-line px-2 py-1">
+                <b>
+                  {g.count}× {g.name} #{g.number}
+                  {g.total ? `/${g.total}` : ""}
+                </b>{" "}
+                <span className="text-brand-ink4">({g.game})</span>
+                <div
+                  className={
+                    /import gap/.test(g.verdict) ? "text-brand-ink3" : "text-brand-warning"
+                  }
+                >
+                  {g.verdict}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ClearCollectionPanel() {
   const [email, setEmail] = useState("");
   const [game, setGame] = useState<"all" | "pokemon" | "mtg">("all");
