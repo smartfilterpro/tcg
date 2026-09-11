@@ -2827,6 +2827,43 @@ function BulkScanPanel() {
     setBusy(false);
   }
 
+  /** Re-read runs under a server time budget, so a big job takes several
+   *  rounds. One click drives them all: keep calling while the server
+   *  reports a queue, narrating progress in the message line — the final
+   *  message (no "queued" clause) IS the completion notice. */
+  async function rereadAll(jobId: string) {
+    setBusy(true);
+    setError(null);
+    let done = 0;
+    try {
+      for (let round = 0; round < 30; round++) {
+        const res = await fetch(`/api/admin/bulk/${jobId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "reread" }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          setError(json.error ?? "Re-read failed");
+          break;
+        }
+        done += json.reread ?? 0;
+        if ((json.remaining ?? 0) > 0) {
+          setMessage(`Re-reading… ${done} done, ${json.remaining} to go — leave this page open.`);
+          continue;
+        }
+        setMessage(
+          `✅ Re-read complete: ${done} photo${done === 1 ? "" : "s"} — now ${json.result?.verified ?? "?"} verified, ${json.result?.review ?? "?"} for review.`
+        );
+        break;
+      }
+    } finally {
+      load();
+      if (open === jobId) loadRows(jobId);
+      setBusy(false);
+    }
+  }
+
   async function jobAction(jobId: string, action: string, extra: Record<string, unknown> = {}) {
     setBusy(true);
     setError(null);
@@ -3080,7 +3117,7 @@ function BulkScanPanel() {
                         className="btn text-xs text-brand-ink4 hover:bg-slate-100"
                         disabled={busy}
                         title="Run the AI again on every machine-decided row (verified included; human verdicts kept) — no re-feeding needed"
-                        onClick={() => jobAction(j.id, "reread")}
+                        onClick={() => rereadAll(j.id)}
                       >
                         Re-read
                       </button>
