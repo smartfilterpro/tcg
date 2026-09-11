@@ -54,17 +54,28 @@ async function providerIndicator(): Promise<Indicator | null> {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 4000);
-    const res = await fetch("https://status.anthropic.com/api/v2/status.json", {
+    // The COMPONENT for the API, not the page's overall indicator: the
+    // overall one goes "minor" whenever ANY Anthropic product has an
+    // incident — claude.ai's website, the developer console — and their
+    // multi-day "monitoring" incidents kept this app's banner up for days
+    // while the API this app actually calls was fine.
+    const res = await fetch("https://status.anthropic.com/api/v2/components.json", {
       signal: ctrl.signal,
       cache: "no-store",
     });
     clearTimeout(timer);
-    const json = (await res.json()) as { status?: { indicator?: string } };
-    const raw = json.status?.indicator;
-    const indicator: Indicator | null = ["none", "minor", "major", "critical"].includes(raw ?? "")
-      ? (raw as Indicator)
-      : null;
-    statusCache = { at: Date.now(), indicator };
+    const json = (await res.json()) as {
+      components?: Array<{ name?: string; status?: string }>;
+    };
+    const api = (json.components ?? []).find((c) => /\bapi\b|api\.anthropic\.com/i.test(c.name ?? ""));
+    const map: Record<string, Indicator> = {
+      operational: "none",
+      under_maintenance: "minor",
+      degraded_performance: "minor",
+      partial_outage: "major",
+      major_outage: "critical",
+    };
+    statusCache = { at: Date.now(), indicator: api ? (map[api.status ?? ""] ?? null) : null };
   } catch {
     statusCache = { at: Date.now(), indicator: null };
   }

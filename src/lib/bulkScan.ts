@@ -32,6 +32,9 @@ export interface BulkRead {
    *  reader learned Magic; treated as Pokémon, which they all were. */
   game?: "pokemon" | "mtg";
   finish?: string;
+  /** How the card sat in the photo (upright / upside_down / sideways) —
+   *  the review screen uses it to display the scan righted. */
+  orientation?: string;
   /** The finish, pattern and stamp as one phrase — the same shape the phone
    *  scanner produces, so both feed the same finish rules. */
   hint?: string;
@@ -132,8 +135,14 @@ const READ_SCHEMA = {
       type: "boolean",
       description: "False if the photo shows no readable card (blank, sleeve, misfeed).",
     },
+    orientation: {
+      type: "string",
+      enum: ["upright", "upside_down", "sideways", "unknown"],
+      description:
+        "How the card sits in the photo. A feeder takes cards any way up — an upside-down card is still THIS card: mentally rotate and read it exactly as carefully, then report the orientation here so the review screen can right it.",
+    },
   },
-  required: ["game", "name", "number", "set_name", "finish", "pattern", "stamp", "readable"],
+  required: ["game", "name", "number", "set_name", "finish", "pattern", "stamp", "readable", "orientation"],
   // The structured-output API refuses object schemas without this — every
   // bulk read was 400ing ("'additionalProperties' must be explicitly set
   // to false"), and unlike the aiJson surfaces this path has no
@@ -320,6 +329,7 @@ export async function identifyPhoto(
       pattern?: string;
       stamp?: string;
       readable?: boolean;
+      orientation?: string;
     };
     if (parsed.readable === false) {
       return { error: "no readable card in the photo (misfeed?)" };
@@ -345,6 +355,7 @@ export async function identifyPhoto(
       set_name: parsed.set_name ?? "",
       game: parsed.game === "mtg" ? "mtg" : "pokemon",
       finish: parsed.finish ?? "normal",
+      orientation: parsed.orientation,
       hint,
     };
     const { candidates, ...matchResult } = await matchCatalogue(admin, read, hint);
