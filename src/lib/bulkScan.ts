@@ -78,6 +78,65 @@ const BALL_WORDS: Record<string, string> = {
   energy_symbol: "Energy Symbol pattern",
 };
 
+/** The machine learning from its reviewers, without a training run.
+ *
+ *  Every hand-corrected row is a labeled example: the stored read says
+ *  what the machine called the finish, the saved variant says what the
+ *  human holding the card decided. Aggregated into a short calibration
+ *  note and appended to both looks' system prompts, so the model is told
+ *  its OWN recent systematic errors — "you keep under-calling reverse
+ *  holo" — in numbers, from this rig's actual history. Cached ten
+ *  minutes; empty (and free) until corrections exist. */
+let calibCache: { at: number; text: string } = { at: 0, text: "" };
+async function correctionCalibration(admin: SupabaseClient): Promise<string> {
+  if (Date.now() - calibCache.at < 10 * 60 * 1000) return calibCache.text;
+  try {
+    const { data } = await admin
+      .from("bulk_cards")
+      .select("pass1_read, variant")
+      .eq("confidence", "corrected")
+      .not("pass1_read", "is", null)
+      .order("updated_at", { ascending: false })
+      .limit(400);
+    const clsFinish = (f?: string | null) =>
+      f === "holofoil" ? "holo" : f === "reverse_holofoil" ? "reverse holo" : f ? "normal" : null;
+    const clsVariant = (v?: string | null) =>
+      v === "holofoil" || v === "foil"
+        ? "holo"
+        : v === "reverseHolofoil" ||
+            ["pokeBall", "masterBall", "friendBall", "loveBall", "energySymbol"].includes(v ?? "")
+          ? "reverse holo"
+          : v === "normal"
+            ? "normal"
+            : null;
+    const flows = new Map<string, number>();
+    for (const r of data ?? []) {
+      const read = r.pass1_read as { finish?: string } | null;
+      const from = clsFinish(read?.finish);
+      const to = clsVariant(r.variant as string | null);
+      if (from && to && from !== to) {
+        const k = `called ${from}, human corrected to ${to}`;
+        flows.set(k, (flows.get(k) ?? 0) + 1);
+      }
+    }
+    const lines = [...flows.entries()]
+      .filter(([, n]) => n >= 3)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([k, n]) => `${n}× ${k}`);
+    calibCache = {
+      at: Date.now(),
+      text:
+        lines.length > 0
+          ? `\n\nCALIBRATION FROM HUMAN REVIEW — real corrections reviewers made to this machine's recent finish calls: ${lines.join("; ")}. These are its systematic errors on this rig's lighting; on borderline finish judgments, lean against repeating them.`
+          : "",
+    };
+  } catch {
+    calibCache = { at: Date.now(), text: "" };
+  }
+  return calibCache.text;
+}
+
 const READ_SCHEMA = {
   type: "object",
   properties: {
@@ -107,7 +166,7 @@ const READ_SCHEMA = {
       type: "string",
       enum: ["normal", "holofoil", "reverse_holofoil"],
       description:
-        "Where the shine is. The machine's own lamp puts a bright band or wash on EVERY card — that is GLARE, not foil: it is white or the lamp's own colour, crosses artwork, border and text alike, and has no repeating motif. 'holofoil': the ARTWORK window shows rainbow/prismatic colour (or the whole card does, as on full arts, ex cards, and foil Magic cards). 'reverse_holofoil': Pokémon only — the CARD BODY (not the artwork) carries etched foil with a visible REPEATING pattern and rainbow colour shift; the artwork window stays matte. 'normal': no foil — including when the only shine is the lamp's band or wash. Answer a foil value only on positive evidence: rainbow colour that varies across the surface, or a visible etched pattern. Brightness alone is 'normal'. EXCEPTION for flat document-scanner images (even light, no glare band): the rainbow is muted there and foil scans DARK instead — artwork darker than body = holofoil; body/text darker than artwork = reverse_holofoil; uniformly light = normal.",
+        "Where the shine is. The machine's own lamp puts a bright band or wash on EVERY card — that is GLARE, not foil: it is white or the lamp's own colour, crosses artwork, border and text alike, and has no repeating motif. 'holofoil': the ARTWORK window shows rainbow/prismatic colour (or the whole card does, as on full arts, ex cards, and foil Magic cards). 'reverse_holofoil': Pokémon only — the CARD BODY (not the artwork) carries etched foil with a visible REPEATING pattern and rainbow colour shift; the artwork window stays matte. 'normal': no foil — including when the only shine is the lamp's band or wash. Answer a foil value only on positive evidence: rainbow colour that varies across the surface, or a visible etched pattern. Brightness alone is 'normal'. EXCEPTION for flat document-scanner images (even light, no glare band): the rainbow is muted there and foil scans DARK instead — artwork darker than body = holofoil (the shimmer typically fills the artwork right to its edges); body/text darker than artwork = reverse_holofoil — a reverse's TEXT AREAS scan dark, and on a dark card even the printed NAME can be hard to read, which is itself reverse evidence; uniformly light = normal.",
     },
     pattern: {
       type: "string",
@@ -289,6 +348,7 @@ export async function identifyPhoto(
 ): Promise<BulkRead> {
   try {
     const client = anthropic();
+    const calibration = await correctionCalibration(admin);
     const res = await client.messages.create({
       model: SCAN_MODEL,
       max_tokens: 400,
@@ -296,7 +356,7 @@ export async function identifyPhoto(
       // model deliberates before answering, which adds seconds per photo and
       // reads nothing extra off the cardboard.
       thinking: { type: "disabled" },
-      system: READ_SYSTEM,
+      system: READ_SYSTEM + calibration,
       output_config: {
         format: { type: "json_schema", schema: READ_SCHEMA as unknown as Record<string, unknown> },
       },
@@ -553,7 +613,7 @@ export async function identifyPhoto(
         model: SCAN_MODEL,
         max_tokens: 300,
         thinking: { type: "disabled" },
-        system: CHECK_SYSTEM,
+        system: CHECK_SYSTEM + calibration,
         output_config: {
           format: { type: "json_schema", schema: CHECK_SCHEMA as unknown as Record<string, unknown> },
         },
