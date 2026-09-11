@@ -588,7 +588,9 @@ function matchMtgSetName(term: string, sets: ScrySet[], explicit: boolean): Scry
  *  picker's "set:Trick or Trade" listing. Two pages covers any real set. */
 async function mtgSetCards(code: string): Promise<CardSummary[]> {
   const out: CardSummary[] = [];
-  let path = `/cards/search?q=${encodeURIComponent(`e:${code}`)}&order=set&unique=prints`;
+  // include_extras, same reason as the picker search: a token set's own
+  // listing is nothing BUT "extras", and people collect them.
+  let path = `/cards/search?q=${encodeURIComponent(`e:${code}`)}&order=set&unique=prints&include_extras=true`;
   for (let page = 0; page < 2 && path; page++) {
     const res = await scryGet(path);
     const cards = (res?.data as ScryCard[] | undefined) ?? [];
