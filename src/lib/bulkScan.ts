@@ -507,6 +507,36 @@ export async function identifyPhoto(
     // The second look. Same photo, fresh eyes, and the first answer on the
     // table to be confirmed or torn up. A check failure must not cost the
     // match we already have — it downgrades to "review", never to "error".
+    //
+    // With a REFERENCE alongside: the catalogue's stock render of the
+    // claimed card, which is almost always its plain printing. Finish
+    // stops being an absolute judgment ("does this look foil?") and
+    // becomes a comparison ("is the scanned body darker than THIS body?")
+    // — which is the call scanner lighting actually supports, and the one
+    // prompt-tuning alone kept missing.
+    const reference = await (async (): Promise<{ data: string; mediaType: string } | null> => {
+      try {
+        const { data: cardRow } = await admin
+          .from("cards")
+          .select("image_small")
+          .eq("id", matched.cardId!)
+          .maybeSingle();
+        const url = (cardRow?.image_small as string | null) ?? null;
+        if (!url || !/^https?:\/\//.test(url)) return null;
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 5000);
+        const res = await fetch(url, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!res.ok) return null;
+        const type = (res.headers.get("content-type") ?? "").split(";")[0].trim();
+        if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(type)) return null;
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length > 2_000_000) return null;
+        return { data: buf.toString("base64"), mediaType: type };
+      } catch {
+        return null; // the check runs photo-only, as it always did
+      }
+    })();
     try {
       const check = await client.messages.create({
         model: SCAN_MODEL,
@@ -528,6 +558,18 @@ export async function identifyPhoto(
                   data: image.data,
                 },
               },
+              ...(reference
+                ? [
+                    {
+                      type: "image" as const,
+                      source: {
+                        type: "base64" as const,
+                        media_type: reference.mediaType as "image/jpeg" | "image/png" | "image/webp",
+                        data: reference.data,
+                      },
+                    },
+                  ]
+                : []),
               {
                 type: "text",
                 // The set name stays OUT of this message on purpose. The set
@@ -539,6 +581,10 @@ export async function identifyPhoto(
                 // "a Digimon-style name"). Name, number, finish — things
                 // the photo can actually answer.
                 text:
+                  `The FIRST image is the scanned photo. ` +
+                  (reference
+                    ? `The SECOND image is the catalogue's stock render of the claimed card — almost always its PLAIN (non-foil) printing, so use it two ways: confirm the artwork, name and number match, and judge the FINISH BY COMPARISON — if the scan's card body (borders, text areas) is clearly darker or foil-sheened compared to the render's body, the scan is a reverse holo; if the scan's ARTWORK window is markedly darker or colour-shifted versus the render's, it is a holo; if the scan looks like the render overall, it is normal.\n\n`
+                    : "\n") +
                   `The first read filed this card as:\n` +
                   `${matched.cardName} — collector number ${matched.cardNumber}\n` +
                   `finish: ${parsed.finish ?? "normal"}, pattern: ${parsed.pattern ?? "none"}, ` +
@@ -584,6 +630,34 @@ export async function identifyPhoto(
           ...matched,
           checked: false,
           checkNote: "prerelease stamp read — a human must confirm the stamp before this files",
+        };
+      }
+      // Finish-only disagreement, with the reference render in hand: the
+      // second look literally compared the scan against the plain
+      // printing, which the first look never saw — its finish call wins,
+      // and the row verifies corrected instead of queueing a human for a
+      // question the comparison already answered.
+      if (
+        reference &&
+        verdict.same_card !== false &&
+        disagreements.length === 1 &&
+        (verdict.finish ?? "normal") !== (parsed.finish ?? "normal")
+      ) {
+        const f = verdict.finish ?? "normal";
+        return {
+          ...matched,
+          variant:
+            read.game === "mtg"
+              ? f === "normal"
+                ? "normal"
+                : "foil"
+              : f === "reverse_holofoil"
+                ? "reverseHolofoil"
+                : f === "holofoil"
+                  ? "holofoil"
+                  : "normal",
+          checked: true,
+          checkNote: null,
         };
       }
       if (disagreements.length === 0) return { ...matched, checked: true, checkNote: null };
