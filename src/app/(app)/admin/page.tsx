@@ -2765,7 +2765,7 @@ function BulkScanPanel() {
   const [varPick, setVarPick] = useState<Record<string, string>>({});
   // Full-screen look at a scan or a pick's art — an upside-down Misdreavus
   // at thumbnail size reads as anything.
-  const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null);
+  const [zoom, setZoom] = useState<{ src: string; alt: string; rotated?: boolean } | null>(null);
   // Manual flip per row, XORed with the read's own orientation call — the
   // human can right a scan the reader didn't flag (or un-right a wrong
   // call). Display only; the stored photo never changes.
@@ -3248,7 +3248,15 @@ function BulkScanPanel() {
                                   ? "rotate-180"
                                   : ""
                               }`}
-                              onClick={() => setZoom({ src: p, alt: `card #${r.seq} scan` })}
+                              onClick={() =>
+                                setZoom({
+                                  src: p,
+                                  alt: `card #${r.seq} scan`,
+                                  rotated:
+                                    (i === 0 && r.read1?.orientation === "upside_down") !==
+                                    !!flip[`${r.id}:${i}`],
+                                })
+                              }
                             />
                             <div className="mt-0.5 text-[10px] text-brand-ink4">
                               your scan{r.photo2 ? ` (pass ${i + 1})` : ""}
@@ -3413,7 +3421,7 @@ function BulkScanPanel() {
           )}
         </div>
       )}
-      {zoom && <CardZoom src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}
+      {zoom && <CardZoom src={zoom.src} alt={zoom.alt} rotated={zoom.rotated} onClose={() => setZoom(null)} />}
     </div>
   );
 }
