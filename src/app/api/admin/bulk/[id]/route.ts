@@ -3,6 +3,7 @@ import { randomBytes } from "crypto";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { BULK_BUCKET, finalizeJob, identifyPhoto, type BulkRead } from "@/lib/bulkScan";
+import { ensureScryCard } from "@/lib/scryfall";
 import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 300;
@@ -180,7 +181,12 @@ export async function PATCH(req: Request, { params }: Params) {
       // A correction: the human's pick IS the answer now.
       if (body.cardId) {
         const { data: card } = await admin.from("cards").select("id").eq("id", body.cardId).maybeSingle();
-        if (!card) return NextResponse.json({ error: "That card id isn't in the catalogue." }, { status: 400 });
+        // A scry-… id the stash hasn't caught up with is fetched on the
+        // spot — the picker showed it, so refusing to save it is a bug,
+        // not a safeguard.
+        if (!card && !(await ensureScryCard(admin, body.cardId))) {
+          return NextResponse.json({ error: "That card id isn't in the catalogue." }, { status: 400 });
+        }
       }
       const { error } = await admin
         .from("bulk_cards")
