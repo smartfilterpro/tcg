@@ -3046,7 +3046,26 @@ function BulkScanPanel() {
                       <>
                         {" "}
                         · uploaded to <b>{j.uploaded_to_name ?? "a member"}</b> ·{" "}
-                        {new Date(j.uploaded_at).toLocaleString()}
+                        {new Date(j.uploaded_at).toLocaleString()} ·{" "}
+                        <button
+                          className="underline hover:text-brand-ink2"
+                          title="Copy a shareable link showing every card with its scan — send it to the person whose cards these are"
+                          onClick={async () => {
+                            const res = await fetch(`/api/admin/bulk/${j.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ action: "report_link" }),
+                            });
+                            const json = await res.json();
+                            if (!res.ok) setError(json.error ?? "Couldn't make the link");
+                            else {
+                              await navigator.clipboard.writeText(json.url).catch(() => {});
+                              setMessage(`Report link copied: ${json.url}`);
+                            }
+                          }}
+                        >
+                          report link
+                        </button>
                       </>
                     )}
                   </span>

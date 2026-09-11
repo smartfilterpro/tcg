@@ -449,6 +449,30 @@ export async function POST(req: Request, { params }: Params) {
       });
     }
 
+    if (body.action === "report_link") {
+      // Minted once and reused, so a re-click doesn't invalidate a link
+      // the customer already has. Rotate by deleting the token in SQL if
+      // one ever leaks.
+      const { data: j } = await admin
+        .from("bulk_jobs")
+        .select("report_token")
+        .eq("id", id)
+        .maybeSingle();
+      let token = (j?.report_token as string | null) ?? null;
+      if (!token) {
+        token = randomBytes(18).toString("base64url");
+        const { error } = await admin.from("bulk_jobs").update({ report_token: token }).eq("id", id);
+        if (error) {
+          return NextResponse.json(
+            { error: /report_token/.test(error.message) ? "Run supabase/migrations/080_bulk_report.sql first." : error.message },
+            { status: 400 }
+          );
+        }
+      }
+      const origin = req.headers.get("origin") ?? `https://${req.headers.get("host") ?? ""}`;
+      return NextResponse.json({ ok: true, url: `${origin}/bulk/report/${id}?t=${token}` });
+    }
+
     if (body.action === "undo") {
       if (job.status !== "uploaded" || !Array.isArray(job.upload_result)) {
         return NextResponse.json({ error: "Nothing to undo — this job hasn't uploaded." }, { status: 409 });
