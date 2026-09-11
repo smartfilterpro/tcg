@@ -16,8 +16,8 @@ import { anthropic, SCAN_MODEL } from "@/lib/anthropic";
 import { estimateCostUsd, logAiUsage, tokensFrom } from "@/lib/usage";
 import { numberKey } from "@/lib/pokemontcg";
 import { normalizeForSearch } from "@/lib/text";
-import { pickPrinting } from "@/lib/cardPrinting";
-import { defaultVariantFor, isSpecificPrinting, summaryToRow } from "@/lib/types";
+import { patternPrintingFor, pickPrinting } from "@/lib/cardPrinting";
+import { ballPatternOf, defaultVariantFor, isSpecificPrinting, summaryToRow } from "@/lib/types";
 import { matchMtgCard } from "@/lib/scryfall";
 
 export const BULK_BUCKET = "bulk-scans";
@@ -78,6 +78,65 @@ const BALL_WORDS: Record<string, string> = {
   energy_symbol: "Energy Symbol pattern",
 };
 
+/** The machine learning from its reviewers, without a training run.
+ *
+ *  Every hand-corrected row is a labeled example: the stored read says
+ *  what the machine called the finish, the saved variant says what the
+ *  human holding the card decided. Aggregated into a short calibration
+ *  note and appended to both looks' system prompts, so the model is told
+ *  its OWN recent systematic errors — "you keep under-calling reverse
+ *  holo" — in numbers, from this rig's actual history. Cached ten
+ *  minutes; empty (and free) until corrections exist. */
+let calibCache: { at: number; text: string } = { at: 0, text: "" };
+async function correctionCalibration(admin: SupabaseClient): Promise<string> {
+  if (Date.now() - calibCache.at < 10 * 60 * 1000) return calibCache.text;
+  try {
+    const { data } = await admin
+      .from("bulk_cards")
+      .select("pass1_read, variant")
+      .eq("confidence", "corrected")
+      .not("pass1_read", "is", null)
+      .order("updated_at", { ascending: false })
+      .limit(400);
+    const clsFinish = (f?: string | null) =>
+      f === "holofoil" ? "holo" : f === "reverse_holofoil" ? "reverse holo" : f ? "normal" : null;
+    const clsVariant = (v?: string | null) =>
+      v === "holofoil" || v === "foil"
+        ? "holo"
+        : v === "reverseHolofoil" ||
+            ["pokeBall", "masterBall", "friendBall", "loveBall", "energySymbol"].includes(v ?? "")
+          ? "reverse holo"
+          : v === "normal"
+            ? "normal"
+            : null;
+    const flows = new Map<string, number>();
+    for (const r of data ?? []) {
+      const read = r.pass1_read as { finish?: string } | null;
+      const from = clsFinish(read?.finish);
+      const to = clsVariant(r.variant as string | null);
+      if (from && to && from !== to) {
+        const k = `called ${from}, human corrected to ${to}`;
+        flows.set(k, (flows.get(k) ?? 0) + 1);
+      }
+    }
+    const lines = [...flows.entries()]
+      .filter(([, n]) => n >= 3)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([k, n]) => `${n}× ${k}`);
+    calibCache = {
+      at: Date.now(),
+      text:
+        lines.length > 0
+          ? `\n\nCALIBRATION FROM HUMAN REVIEW — real corrections reviewers made to this machine's recent finish calls: ${lines.join("; ")}. These are its systematic errors on this rig's lighting; on borderline finish judgments, lean against repeating them.`
+          : "",
+    };
+  } catch {
+    calibCache = { at: Date.now(), text: "" };
+  }
+  return calibCache.text;
+}
+
 const READ_SCHEMA = {
   type: "object",
   properties: {
@@ -107,7 +166,7 @@ const READ_SCHEMA = {
       type: "string",
       enum: ["normal", "holofoil", "reverse_holofoil"],
       description:
-        "Where the shine is. The machine's own lamp puts a bright band or wash on EVERY card — that is GLARE, not foil: it is white or the lamp's own colour, crosses artwork, border and text alike, and has no repeating motif. 'holofoil': the ARTWORK window shows rainbow/prismatic colour (or the whole card does, as on full arts, ex cards, and foil Magic cards). 'reverse_holofoil': Pokémon only — the CARD BODY (not the artwork) carries etched foil with a visible REPEATING pattern and rainbow colour shift; the artwork window stays matte. 'normal': no foil — including when the only shine is the lamp's band or wash. Answer a foil value only on positive evidence: rainbow colour that varies across the surface, or a visible etched pattern. Brightness alone is 'normal'. EXCEPTION for flat document-scanner images (even light, no glare band): the rainbow is muted there and foil scans DARK instead — artwork darker than body = holofoil; body/text darker than artwork = reverse_holofoil; uniformly light = normal.",
+        "Where the shine is. The machine's own lamp puts a bright band or wash on EVERY card — that is GLARE, not foil: it is white or the lamp's own colour, crosses artwork, border and text alike, and has no repeating motif. 'holofoil': the ARTWORK window shows rainbow/prismatic colour (or the whole card does, as on full arts, ex cards, and foil Magic cards). 'reverse_holofoil': Pokémon only — the CARD BODY (not the artwork) carries etched foil with a visible REPEATING pattern and rainbow colour shift; the artwork window stays matte. 'normal': no foil — including when the only shine is the lamp's band or wash. Answer a foil value only on positive evidence: rainbow colour that varies across the surface, or a visible etched pattern. Brightness alone is 'normal'. EXCEPTION for flat document-scanner images (even light, no glare band): the rainbow is muted there and foil scans DARK instead — artwork darker than body = holofoil (the shimmer typically fills the artwork right to its edges); body/text darker than artwork = reverse_holofoil — a reverse's TEXT AREAS scan dark, and on a dark card even the printed NAME can be hard to read, which is itself reverse evidence; uniformly light = normal.",
     },
     pattern: {
       type: "string",
@@ -123,7 +182,7 @@ const READ_SCHEMA = {
         "unknown",
       ],
       description:
-        "ONLY when finish is reverse_holofoil: which motif is etched into the foil, repeating across the card face. A ball motif ('poke_ball' / 'master_ball' / 'friend_ball' / 'love_ball', or 'other_ball' for one you can see but can't name) marks a separate, much rarer printing and must not be missed; 'energy_symbol' is the same idea with repeating ENERGY TYPE SYMBOLS (grass leaves, flames, water drops…) as the motif. 'standard' is the set's ordinary pattern — stars, set symbols, sparkle. 'none' when the card isn't reverse holo. 'unknown' when it is but the pattern can't be made out — never guess.",
+        "The motif etched or watermarked into the CARD BODY, repeating across it. Report a motif you can SEE regardless of what you answered for finish — on scanner images the motif shows as a pale repeating watermark, and seeing one MEANS the card is a pattern reverse holo even if it read as matte. A ball motif ('poke_ball' / 'master_ball' / 'friend_ball' / 'love_ball', or 'other_ball' for one you can see but can't name) marks a separate, much rarer printing and must not be missed; 'energy_symbol' is the same idea with repeating ENERGY TYPE SYMBOLS (grass leaves, flames, water drops…) as the motif. 'standard' is the set's ORDINARY reverse pattern — stars, set symbols, sparkle, or ONE LARGE Poké Ball watermark filling the body (the modern sets' normal reverse: a single big ball is 'standard'; only SMALL REPEATING balls are a ball pattern). 'none' when no motif is visible — PLENTY of reverse holos carry no motif at all, so a missing motif is never evidence against reverse holo. 'unknown' when foil is present but the pattern can't be made out — never guess a ball.",
     },
     stamp: {
       type: "string",
@@ -219,9 +278,13 @@ const CHECK_SCHEMA = {
       type: "string",
       enum: ["standard", "poke_ball", "master_ball", "friend_ball", "love_ball", "other_ball", "energy_symbol", "none", "unknown"],
       description:
-        "ONLY when finish is reverse_holofoil: the motif etched into the foil " +
-        "(a ball, or 'energy_symbol' for repeating energy type symbols). " +
-        "'none' when the card isn't reverse holo (always 'none' for Magic).",
+        "The motif etched or watermarked into the card body, if you can SEE one " +
+        "(a ball, or 'energy_symbol' for repeating energy type symbols) — report " +
+        "it regardless of the finish answer; a visible motif means a reverse " +
+        "holo — but ONE large Poké Ball filling the body is 'standard' (the " +
+        "modern normal reverse); only SMALL REPEATING balls are a ball pattern. " +
+        "'none' when no motif is visible — many reverse holos have no motif, " +
+        "so 'none' never argues against a reverse finish (always 'none' for Magic).",
     },
     stamp: {
       type: "string",
@@ -285,6 +348,7 @@ export async function identifyPhoto(
 ): Promise<BulkRead> {
   try {
     const client = anthropic();
+    const calibration = await correctionCalibration(admin);
     const res = await client.messages.create({
       model: SCAN_MODEL,
       max_tokens: 400,
@@ -292,7 +356,7 @@ export async function identifyPhoto(
       // model deliberates before answering, which adds seconds per photo and
       // reads nothing extra off the cardboard.
       thinking: { type: "disabled" },
-      system: READ_SYSTEM,
+      system: READ_SYSTEM + calibration,
       output_config: {
         format: { type: "json_schema", schema: READ_SCHEMA as unknown as Record<string, unknown> },
       },
@@ -347,6 +411,13 @@ export async function identifyPhoto(
     };
     if (parsed.readable === false) {
       return { error: "no readable card in the photo (misfeed?)" };
+    }
+    // Self-consistency the schema also states: a visible pattern motif IS
+    // reverse-holo evidence. Scanner light mutes the foil, so the model
+    // sometimes reports the watermark while calling the finish matte —
+    // the motif wins.
+    if (BALL_WORDS[parsed.pattern ?? ""] && parsed.finish !== "reverse_holofoil") {
+      parsed.finish = "reverse_holofoil";
     }
     // The same hint string the phone scanner builds, so both go through one
     // set of rules for what a finish and a pattern mean.
@@ -542,7 +613,7 @@ export async function identifyPhoto(
         model: SCAN_MODEL,
         max_tokens: 300,
         thinking: { type: "disabled" },
-        system: CHECK_SYSTEM,
+        system: CHECK_SYSTEM + calibration,
         output_config: {
           format: { type: "json_schema", schema: CHECK_SCHEMA as unknown as Record<string, unknown> },
         },
@@ -632,19 +703,22 @@ export async function identifyPhoto(
           checkNote: "prerelease stamp read — a human must confirm the stamp before this files",
         };
       }
-      // Finish-only disagreement, with the reference render in hand: the
-      // second look literally compared the scan against the plain
-      // printing, which the first look never saw — its finish call wins,
+      // Finish and/or pattern disagreement, with the reference render in
+      // hand: the second look literally compared the scan against the
+      // plain printing, which the first look never saw — its call wins,
       // and the row verifies corrected instead of queueing a human for a
-      // question the comparison already answered.
-      if (
-        reference &&
-        verdict.same_card !== false &&
-        disagreements.length === 1 &&
-        (verdict.finish ?? "normal") !== (parsed.finish ?? "normal")
-      ) {
+      // question the comparison already answered. Card identity or stamp
+      // disputes still refuse.
+      const finishDiff = (verdict.finish ?? "normal") !== (parsed.finish ?? "normal");
+      const patternDiff =
+        (parsed.finish === "reverse_holofoil" || verdict.finish === "reverse_holofoil") &&
+        (verdict.pattern ?? "none") !== (parsed.pattern ?? "none");
+      const onlyFoilContested =
+        disagreements.length > 0 &&
+        disagreements.length === (finishDiff ? 1 : 0) + (patternDiff ? 1 : 0);
+      if (reference && verdict.same_card !== false && onlyFoilContested) {
         const f = verdict.finish ?? "normal";
-        return {
+        const adopted: BulkRead = {
           ...matched,
           variant:
             read.game === "mtg"
@@ -652,13 +726,40 @@ export async function identifyPhoto(
                 ? "normal"
                 : "foil"
               : f === "reverse_holofoil"
-                ? "reverseHolofoil"
+                ? (ballPatternOf(BALL_WORDS[verdict.pattern ?? ""] ?? "")?.variant ?? "reverseHolofoil")
                 : f === "holofoil"
                   ? "holofoil"
                   : "normal",
           checked: true,
           checkNote: null,
         };
+        // A ball/energy motif may have its own catalogue row — the named
+        // printing with its own price. Swap onto it when we hold one.
+        const ballWord = BALL_WORDS[verdict.pattern ?? ""];
+        if (read.game !== "mtg" && ballWord && adopted.cardId && adopted.cardName) {
+          try {
+            const row = await patternPrintingFor(
+              admin,
+              {
+                id: adopted.cardId,
+                name: adopted.cardName,
+                number: adopted.cardNumber ?? "",
+                setName: adopted.cardSet ?? null,
+              },
+              ballWord
+            );
+            if (row) {
+              adopted.cardId = row.id;
+              adopted.cardName = row.name;
+              adopted.cardNumber = row.number;
+              adopted.cardSet = row.setName;
+              adopted.variant = variantFor(false, row, ballWord);
+            }
+          } catch {
+            // The base row wearing the pattern finish is still right.
+          }
+        }
+        return adopted;
       }
       if (disagreements.length === 0) return { ...matched, checked: true, checkNote: null };
       const concern = (verdict.concern ?? "").trim();
