@@ -181,13 +181,37 @@ export async function POST(req: Request) {
       { data: buffer.toString("base64"), mediaType: contentType },
       { check: pass === 1 }
     ).then(async (read) => {
+      if (pass !== 1) {
+        await admin
+          .from("bulk_cards")
+          .update({ pass2_read: read, updated_at: new Date().toISOString() })
+          .eq("id", rowId);
+        return;
+      }
+      // The verdict lands WITH the read, not at Finalize: rows scanned
+      // since the last Finalize used to sit in the desk naked — no chip,
+      // no note — looking broken next to finalized neighbours. Same rules
+      // as finalizeJob's single-pass path, which still recomputes
+      // everything (and handles pass-2 pairing) when it runs.
+      const solo = read.cardId != null && read.checked === true;
       await admin
         .from("bulk_cards")
-        .update(
-          pass === 1
-            ? { pass1_read: read, updated_at: new Date().toISOString() }
-            : { pass2_read: read, updated_at: new Date().toISOString() }
-        )
+        .update({
+          pass1_read: read,
+          confidence: solo ? "verified" : "review",
+          card_id: read.cardId ?? null,
+          variant: read.variant ?? read.finish ?? "normal",
+          review_note: solo
+            ? null
+            : read.error
+              ? `read failed: ${read.error}`
+              : read.cardId == null
+                ? read.matchNote ?? "no exact catalogue match"
+                : read.checked === false
+                  ? read.checkNote ?? "the second look couldn't confirm the match"
+                  : "no second look on file — review by hand or re-scan",
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", rowId);
     });
 
