@@ -518,8 +518,12 @@ export async function searchMtgCards(query: string, limit = 30): Promise<CardSum
   // search with a 404, which lands in the catch and tries the next.
   for (const q of mtgSearchQueries(term)) {
     try {
+      // include_extras: tokens, emblems and art cards are excluded from
+      // Scryfall search by default — but people scan and collect tokens,
+      // and an Elf token that can't be FOUND can't be filed. Real cards
+      // still rank first; the extras only surface when they match.
       const listing = await scryGet(
-        `/cards/search?unique=prints&order=released&q=${encodeURIComponent(q)}`
+        `/cards/search?unique=prints&order=released&include_extras=true&q=${encodeURIComponent(q)}`
       );
       const cards = ((listing?.data as ScryCard[] | undefined) ?? []).filter((c) => !c.digital);
       if (cards.length > 0) return cards.slice(0, limit).map(scryToSummary);
@@ -584,7 +588,9 @@ function matchMtgSetName(term: string, sets: ScrySet[], explicit: boolean): Scry
  *  picker's "set:Trick or Trade" listing. Two pages covers any real set. */
 async function mtgSetCards(code: string): Promise<CardSummary[]> {
   const out: CardSummary[] = [];
-  let path = `/cards/search?q=${encodeURIComponent(`e:${code}`)}&order=set&unique=prints`;
+  // include_extras, same reason as the picker search: a token set's own
+  // listing is nothing BUT "extras", and people collect them.
+  let path = `/cards/search?q=${encodeURIComponent(`e:${code}`)}&order=set&unique=prints&include_extras=true`;
   for (let page = 0; page < 2 && path; page++) {
     const res = await scryGet(path);
     const cards = (res?.data as ScryCard[] | undefined) ?? [];
