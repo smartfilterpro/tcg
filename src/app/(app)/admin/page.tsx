@@ -3040,17 +3040,23 @@ function BulkScanPanel() {
                         Re-read
                       </button>
                     )}
-                    {j.needsReview > 0 && (
-                      <button
-                        className="btn text-xs text-brand-ink4 hover:bg-slate-100"
-                        onClick={() => {
-                          setOpen(open === j.id ? null : j.id);
-                          if (open !== j.id) loadRows(j.id);
-                        }}
-                      >
-                        {open === j.id ? "Close review" : `Review ${j.needsReview}`}
-                      </button>
-                    )}
+                    {/* Always present: a clean job (nothing needing review)
+                        still deserves eyes — spot-checking verified picks is
+                        how systematic misreads get caught. A clean job opens
+                        on the All tab; the review tab would just say 🎉. */}
+                    <button
+                      className="btn text-xs text-brand-ink4 hover:bg-slate-100"
+                      onClick={() => {
+                        setOpen(open === j.id ? null : j.id);
+                        if (open !== j.id) loadRows(j.id, j.needsReview > 0 ? "review" : "all", 0);
+                      }}
+                    >
+                      {open === j.id
+                        ? "Close cards"
+                        : j.needsReview > 0
+                          ? `Review ${j.needsReview}`
+                          : "Browse cards"}
+                    </button>
                     {j.status === "ready" && (
                       <>
                         <button className="btn text-xs text-brand-ink4 hover:bg-slate-100" onClick={() => exportCsv(j.id, j.label)}>
