@@ -3346,7 +3346,32 @@ function BulkScanPanel() {
                             })
                           }
                         />
-                        <div className="mt-0.5 text-[10px] text-brand-positive">system pick · tap to zoom</div>
+                        <div className="mt-0.5 text-[10px] text-brand-positive">
+                          system pick · tap to zoom ·{" "}
+                          <button
+                            className="text-brand-ink4 underline hover:text-brand-ink2"
+                            title="The catalogue row is wearing the wrong picture? Refetch its art from the source database."
+                            onClick={async () => {
+                              const res = await fetch("/api/admin/card-images", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ action: "reset_art", cardId: r.card!.id }),
+                              });
+                              const json = await res.json().catch(() => ({}));
+                              if (!res.ok) setError(json.error ?? "Couldn't reset the art");
+                              else {
+                                setMessage(
+                                  json.refetched
+                                    ? "Art refetched from the source."
+                                    : "Bad art cleared — the gap filler will fetch a fresh one."
+                                );
+                                if (open) loadRows(open, rowFilter, 0);
+                              }
+                            }}
+                          >
+                            wrong art?
+                          </button>
+                        </div>
                       </div>
                     )}
                     <div className="min-w-56 flex-1 text-xs leading-[1.7]">
