@@ -2983,8 +2983,38 @@ function BulkScanPanel() {
     const json = await res.json();
     if (!res.ok) setError(json.error);
     else {
-      setRows((rs) => rs.filter((r) => r.id !== row.id));
-      setRowCount((c) => Math.max(0, c - 1));
+      if (rowFilter === "review") {
+        // The queue lists only undecided rows — a decided one leaves it.
+        setRows((rs) => rs.filter((r) => r.id !== row.id));
+        setRowCount((c) => Math.max(0, c - 1));
+      } else {
+        // On All/Verified the row still belongs on screen: update it in
+        // place instead of making a successful save look like a vanish.
+        const pickedId = cardId ?? row.card?.id ?? null;
+        const picked = (hits[row.id] ?? []).find((c) => c.id === pickedId) ?? null;
+        setRows((rs) =>
+          rs.map((x) =>
+            x.id === row.id
+              ? {
+                  ...x,
+                  reviewed: true,
+                  confidence: "corrected",
+                  note: null,
+                  variant: varPick[row.id] ?? x.variant,
+                  card: picked
+                    ? {
+                        id: picked.id,
+                        name: picked.name,
+                        number: picked.number,
+                        set_name: picked.setName,
+                        image_small: picked.imageSmall,
+                      }
+                    : x.card,
+                }
+              : x
+          )
+        );
+      }
       load();
     }
   }
