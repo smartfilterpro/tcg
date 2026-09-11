@@ -709,6 +709,31 @@ async function matchCatalogue(
     const bySet = hits.filter((c) => normalizeForSearch(c.set_name ?? "").includes(set));
     if (bySet.length > 0) hits = bySet;
   }
+  // The number-line fingerprint, for when the NAME is the bad read.
+  //
+  // On a dark reverse holo the name is the least legible thing on the
+  // card and the model sometimes guesses one ("Ogerpon" off a Meowstic);
+  // the number line — 037/086 — is the most legible, and the printed
+  // total names the set. So a name that matches nothing pivots to
+  // number+total: the few cards in the catalogue wearing that exact line.
+  // One survivor is the card (the second look still confirms it against
+  // the photo, by the CORRECT name now); several go to the photo
+  // arbitration as candidates, which is built for exactly this choice.
+  if (hits.length === 0 && nameHits.length === 0 && printed && Number.isFinite(total) && total > 0) {
+    const lineForms = [
+      ...new Set([printed, printed.replace(/^0+/, "") || printed, printed.padStart(3, "0")]),
+    ];
+    const { data: byLine } = await admin
+      .from("cards")
+      .select("id, name, number, set_name, set_printed_total, rarity, prices")
+      .in("number", lineForms)
+      .eq("set_printed_total", total)
+      .limit(30);
+    const lineHits = ((byLine ?? []) as MatchCandidate[]).filter(
+      (c) => c.id.startsWith("scry-") === isMtg
+    );
+    if (lineHits.length > 0) hits = lineHits;
+  }
   if (hits.length === 0) {
     return nameHits.length === 0
       ? { ...none, matchNote: `nothing named "${name}" in the catalogue` }
