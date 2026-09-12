@@ -3428,16 +3428,32 @@ function BulkScanPanel() {
                           value={varPick[r.id] ?? r.variant}
                           onChange={(e) => setVarPick((v) => ({ ...v, [r.id]: e.target.value }))}
                         >
+                          {/* The full finish vocabulary for the row's game.
+                              Energy Symbol is ONE option on purpose: the
+                              motif is always the card's own type (water
+                              drops on a Water card, leaves on Grass), but
+                              it's a single printing and a single price. */}
                           {[
-                            ...new Set([
-                              "normal",
-                              "holofoil",
-                              "reverseHolofoil",
-                              "pokeBall",
-                              "masterBall",
-                              "energySymbol",
-                              r.variant,
-                            ]),
+                            ...new Set(
+                              (r.card?.id ?? "").startsWith("scry-") || r.read1?.game === "mtg"
+                                ? ["normal", "foil", "etched", r.variant]
+                                : [
+                                    "normal",
+                                    "holofoil",
+                                    "reverseHolofoil",
+                                    "pokeBall",
+                                    "masterBall",
+                                    "friendBall",
+                                    "loveBall",
+                                    "energySymbol",
+                                    "pcStamp",
+                                    "prereleaseStamp",
+                                    "staffStamp",
+                                    "1stEditionNormal",
+                                    "1stEditionHolofoil",
+                                    r.variant,
+                                  ]
+                            ),
                           ].map((v) => (
                             <option key={v} value={v}>
                               {variantLabel(v)}
