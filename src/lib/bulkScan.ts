@@ -21,6 +21,11 @@ import { ballPatternOf, defaultVariantFor, isSpecificPrinting, summaryToRow } fr
 import { matchMtgCard } from "@/lib/scryfall";
 
 export const BULK_BUCKET = "bulk-scans";
+/** Server-side re-read progress, by job id — the driver loop is detached
+ *  from any request, so a sleeping laptop can't pause it; the jobs list
+ *  reads this to show live progress. In-memory on purpose: a container
+ *  restart clears it, and pressing Re-read again simply resumes. */
+export const rereadRuns = new Map<string, { done: number; total: number }>();
 export const MAX_JOB_CARDS = 8000;
 
 export interface BulkRead {
