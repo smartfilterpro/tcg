@@ -503,17 +503,23 @@ export async function identifyPhoto(
       orientation: parsed.orientation,
       hint,
     };
-    // A non-English card can't match the catalogue as printed — it holds
-    // ENGLISH printings (for now). Match on the English name instead, with
-    // the number stripped: Japanese numbering never lines up with English
-    // sets, so keeping it would filter to unrelated #48s. The art is the
-    // same across languages, which is exactly what the photo arbitration
-    // judges by — and the row is always human-gated below.
+    // Non-English cards: the app supports English cards only, and says so
+    // plainly rather than approximating — filing a Japanese printing as
+    // its English equivalent would carry the wrong set, number and value.
+    // No match, no check (nothing to spend them on); the note names the
+    // card in English so the reviewer knows what they're holding.
     const foreign = !!parsed.language && parsed.language !== "en";
-    const englishName = (parsed.name_english ?? "").trim();
-    const matchRead: BulkRead =
-      foreign && englishName ? { ...read, name: englishName, number: "", set_name: "" } : read;
-    const { candidates, ...matchResult } = await matchCatalogue(admin, matchRead, hint);
+    if (foreign) {
+      const lang = parsed.language === "ja" ? "Japanese" : "non-English";
+      const englishName = (parsed.name_english ?? "").trim();
+      return {
+        ...read,
+        cardId: null,
+        checked: false,
+        matchNote: `a ${lang}-language card${englishName ? ` (${englishName} in English)` : ""} — TrainerDeck supports English cards only for now: delete this row, or file it by hand with the search`,
+      };
+    }
+    const { candidates, ...matchResult } = await matchCatalogue(admin, read, hint);
     let matched: BulkRead = { ...read, ...matchResult };
 
     // The catalogue only holds what this app has seen; Scryfall holds all
@@ -642,16 +648,6 @@ export async function identifyPhoto(
       } catch {
         // Arbitration is a bonus try; its failure keeps the honest "none".
       }
-    }
-    if (foreign) {
-      const lang = parsed.language === "ja" ? "Japanese" : "non-English";
-      return {
-        ...matched,
-        checked: false,
-        checkNote: matched.cardId
-          ? `a ${lang}-language printing — the pick is its ENGLISH equivalent (set, number and value differ between languages); confirm or delete`
-          : `a ${lang}-language printing${englishName ? ` (English name: ${englishName})` : ""} — the catalogue holds English cards only for now`,
-      };
     }
     if (!matched.cardId) return matched;
 

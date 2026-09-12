@@ -3030,7 +3030,8 @@ function BulkScanPanel() {
           reverse pattern, stamp) before it counts as verified. Feeding the stack again as an
           optional pass 2 (either direction; Finalize pairs by content) verifies by
           photo-vs-photo agreement instead. Everything unconfirmed lands in the review queue
-          below. AI spend is metered on the job, never on a member.
+          below. English cards only — non-English scans are flagged for deletion, never
+          matched. AI spend is metered on the job, never on a member.
         </p>
         <div className="flex flex-wrap gap-2">
           <input
