@@ -78,6 +78,50 @@ const BALL_WORDS: Record<string, string> = {
   energy_symbol: "Energy Symbol pattern",
 };
 
+/** Mean luminance of a card image's artwork window and body/text region,
+ *  on a normalized 100×140 grayscale. The finish call kept failing as a
+ *  qualitative judgment ("does the body look darker?"), so it stops being
+ *  one: these are computed pixels, fed to the check as numbers. The
+ *  body/artwork RATIO is the exposure-invariant signal — a reverse holo
+ *  depresses the body relative to the artwork, a holo the artwork
+ *  relative to the body. sharp ships with Next; a decode failure just
+ *  means no numbers, never a failed read. */
+async function luminanceStats(
+  buf: Buffer,
+  rotate180: boolean
+): Promise<{ art: number; body: number } | null> {
+  try {
+    const sharpMod = (await import("sharp")) as unknown as { default: (b: Buffer) => unknown };
+    type SharpChain = {
+      rotate: (d: number) => SharpChain;
+      greyscale: () => SharpChain;
+      resize: (w: number, h: number, o: Record<string, unknown>) => SharpChain;
+      raw: () => SharpChain;
+      toBuffer: () => Promise<Buffer>;
+    };
+    let img = sharpMod.default(buf) as SharpChain;
+    if (rotate180) img = img.rotate(180);
+    const raw = await img.greyscale().resize(100, 140, { fit: "fill" }).raw().toBuffer();
+    const W = 100;
+    const mean = (x0: number, x1: number, y0: number, y1: number) => {
+      let sum = 0;
+      let n = 0;
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          sum += raw[y * W + x];
+          n++;
+        }
+      }
+      return n > 0 ? Math.round(sum / n) : 0;
+    };
+    // Relative card geometry: artwork ≈ upper-middle window, body/text ≈
+    // the attack-text band below it. Borders excluded on all sides.
+    return { art: mean(10, 90, 20, 65), body: mean(10, 90, 80, 125) };
+  } catch {
+    return null;
+  }
+}
+
 /** The machine learning from its reviewers, without a training run.
  *
  *  Every hand-corrected row is a labeled example: the stored read says
@@ -188,7 +232,7 @@ const READ_SCHEMA = {
       type: "string",
       enum: ["none", "pokemon_center", "prerelease", "staff", "unknown"],
       description:
-        "Gold foil stamp pressed onto the artwork: a Pokémon Center logo, the word PRERELEASE, or the word STAFF. 'none' when there is clearly none.",
+        "Gold foil stamp pressed ONTO THE ARTWORK ITSELF: a Pokémon Center logo, the word PRERELEASE, or the word STAFF — a large gold badge sitting on top of the illustration. NOT a stamp: the set code in the bottom-left info bar. In particular the code PRE (Prismatic Evolutions) is a SET CODE that appears on every card of that set — reading it as a prerelease stamp is the known mistake here. 'none' when there is clearly none.",
     },
     readable: {
       type: "boolean",
@@ -289,7 +333,10 @@ const CHECK_SCHEMA = {
     stamp: {
       type: "string",
       enum: ["none", "pokemon_center", "prerelease", "staff", "unknown"],
-      description: "Gold foil stamp on the artwork, or 'none'.",
+      description:
+        "Gold foil stamp ON THE ARTWORK itself, or 'none'. The set code in the " +
+        "bottom-left bar is never a stamp — PRE there means the set Prismatic " +
+        "Evolutions, not PRERELEASE.",
     },
     concern: {
       type: "string",
@@ -608,6 +655,32 @@ export async function identifyPhoto(
         return null; // the check runs photo-only, as it always did
       }
     })();
+    // Pixel measurement alongside the reference: the numbers the check is
+    // told to trust over its own impression of "darker".
+    let lumText = "";
+    if (reference) {
+      try {
+        const scanStats = await luminanceStats(
+          Buffer.from(image.data, "base64"),
+          parsed.orientation === "upside_down"
+        );
+        const refStats = await luminanceStats(Buffer.from(reference.data, "base64"), false);
+        if (scanStats && refStats && scanStats.art > 5 && refStats.art > 5) {
+          const scanRatio = scanStats.body / scanStats.art;
+          const refRatio = refStats.body / refStats.art;
+          lumText =
+            `\n\nMEASURED LUMINANCE (computed from the pixels — trust these numbers over your visual impression; ignore them only if the scan shows background beyond the card):` +
+            ` scan artwork ${scanStats.art}, scan body/text ${scanStats.body};` +
+            ` reference artwork ${refStats.art}, reference body ${refStats.body}.` +
+            ` Body÷artwork ratio: scan ${scanRatio.toFixed(2)} vs reference ${refRatio.toFixed(2)}.` +
+            ` A scan ratio clearly below the reference's (≤0.85×) means the BODY is disproportionately dark → reverse holo.` +
+            ` A disproportionately dark ARTWORK instead (scan artwork much darker relative to its body than the reference's) → holo.` +
+            ` Ratios in line with the reference → the finish matches the reference card.`;
+        }
+      } catch {
+        // No numbers is fine; the visual comparison still runs.
+      }
+    }
     try {
       const check = await client.messages.create({
         model: SCAN_MODEL,
@@ -659,7 +732,8 @@ export async function identifyPhoto(
                   `The first read filed this card as:\n` +
                   `${matched.cardName} — collector number ${matched.cardNumber}\n` +
                   `finish: ${parsed.finish ?? "normal"}, pattern: ${parsed.pattern ?? "none"}, ` +
-                  `stamp: ${parsed.stamp ?? "none"}\n\nCheck it against the photo.`,
+                  `stamp: ${parsed.stamp ?? "none"}\n\nCheck it against the photo.` +
+                  lumText,
               },
             ],
           },
