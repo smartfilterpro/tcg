@@ -3030,7 +3030,8 @@ function BulkScanPanel() {
           reverse pattern, stamp) before it counts as verified. Feeding the stack again as an
           optional pass 2 (either direction; Finalize pairs by content) verifies by
           photo-vs-photo agreement instead. Everything unconfirmed lands in the review queue
-          below. AI spend is metered on the job, never on a member.
+          below. English cards only — non-English scans are flagged for deletion, never
+          matched. AI spend is metered on the job, never on a member.
         </p>
         <div className="flex flex-wrap gap-2">
           <input
@@ -3427,16 +3428,32 @@ function BulkScanPanel() {
                           value={varPick[r.id] ?? r.variant}
                           onChange={(e) => setVarPick((v) => ({ ...v, [r.id]: e.target.value }))}
                         >
+                          {/* The full finish vocabulary for the row's game.
+                              Energy Symbol is ONE option on purpose: the
+                              motif is always the card's own type (water
+                              drops on a Water card, leaves on Grass), but
+                              it's a single printing and a single price. */}
                           {[
-                            ...new Set([
-                              "normal",
-                              "holofoil",
-                              "reverseHolofoil",
-                              "pokeBall",
-                              "masterBall",
-                              "energySymbol",
-                              r.variant,
-                            ]),
+                            ...new Set(
+                              (r.card?.id ?? "").startsWith("scry-") || r.read1?.game === "mtg"
+                                ? ["normal", "foil", "etched", r.variant]
+                                : [
+                                    "normal",
+                                    "holofoil",
+                                    "reverseHolofoil",
+                                    "pokeBall",
+                                    "masterBall",
+                                    "friendBall",
+                                    "loveBall",
+                                    "energySymbol",
+                                    "pcStamp",
+                                    "prereleaseStamp",
+                                    "staffStamp",
+                                    "1stEditionNormal",
+                                    "1stEditionHolofoil",
+                                    r.variant,
+                                  ]
+                            ),
                           ].map((v) => (
                             <option key={v} value={v}>
                               {variantLabel(v)}

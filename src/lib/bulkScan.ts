@@ -238,6 +238,17 @@ const READ_SCHEMA = {
       type: "boolean",
       description: "False if the photo shows no readable card (blank, sleeve, misfeed).",
     },
+    language: {
+      type: "string",
+      enum: ["en", "ja", "other"],
+      description:
+        "The card's printed language. Japanese cards use Japanese script for the name and attacks; their set numbering differs from English printings.",
+    },
+    name_english: {
+      type: "string",
+      description:
+        "ONLY when language is not 'en': the card's ENGLISH name (e.g. バルジーナ → Mandibuzz). Empty for English cards.",
+    },
     orientation: {
       type: "string",
       enum: ["upright", "upside_down", "sideways", "unknown"],
@@ -245,7 +256,7 @@ const READ_SCHEMA = {
         "How the card sits in the photo. A feeder takes cards any way up — an upside-down card is still THIS card: mentally rotate and read it exactly as carefully, then report the orientation here so the review screen can right it.",
     },
   },
-  required: ["game", "name", "number", "set_name", "finish", "pattern", "stamp", "readable", "orientation"],
+  required: ["game", "name", "number", "set_name", "finish", "pattern", "stamp", "readable", "orientation", "language", "name_english"],
   // The structured-output API refuses object schemas without this — every
   // bulk read was 400ing ("'additionalProperties' must be explicitly set
   // to false"), and unlike the aiJson surfaces this path has no
@@ -455,6 +466,8 @@ export async function identifyPhoto(
       stamp?: string;
       readable?: boolean;
       orientation?: string;
+      language?: string;
+      name_english?: string;
     };
     if (parsed.readable === false) {
       return { error: "no readable card in the photo (misfeed?)" };
@@ -490,6 +503,22 @@ export async function identifyPhoto(
       orientation: parsed.orientation,
       hint,
     };
+    // Non-English cards: the app supports English cards only, and says so
+    // plainly rather than approximating — filing a Japanese printing as
+    // its English equivalent would carry the wrong set, number and value.
+    // No match, no check (nothing to spend them on); the note names the
+    // card in English so the reviewer knows what they're holding.
+    const foreign = !!parsed.language && parsed.language !== "en";
+    if (foreign) {
+      const lang = parsed.language === "ja" ? "Japanese" : "non-English";
+      const englishName = (parsed.name_english ?? "").trim();
+      return {
+        ...read,
+        cardId: null,
+        checked: false,
+        matchNote: `a ${lang}-language card${englishName ? ` (${englishName} in English)` : ""} — TrainerDeck supports English cards only for now: delete this row, or file it by hand with the search`,
+      };
+    }
     const { candidates, ...matchResult } = await matchCatalogue(admin, read, hint);
     let matched: BulkRead = { ...read, ...matchResult };
 
