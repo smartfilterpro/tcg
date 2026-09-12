@@ -22,6 +22,7 @@ import {
   type DetectedCard,
 } from "@/lib/types";
 import { normalizeForSearch } from "@/lib/text";
+import { setKey, setsAgree } from "@/lib/setName";
 
 const BASE = "https://api.scryfall.com";
 const TIMEOUT_MS = 8_000;
@@ -219,7 +220,10 @@ export function scryToSummary(c: ScryCard): CardSummary {
     setPrintedTotal: null,
     releaseDate: c.released_at ?? null,
     imageSmall: images.small ?? images.normal ?? null,
-    imageLarge: images.normal ?? images.large ?? images.small ?? null,
+    // large (672px) over normal (488px): this is what the zoom shows on a
+    // desktop, where 488 source pixels behind a ~480px card reads soft on
+    // any HiDPI screen.
+    imageLarge: images.large ?? images.normal ?? images.small ?? null,
     marketPrice: usd ?? usdFoil ?? usdEtched ?? null,
     prices: Object.keys(prices).length > 0 ? prices : null,
     tcgplayerId: c.tcgplayer_id ?? null,
@@ -426,6 +430,46 @@ export async function matchMtgCard(
   return { match: sorted[0] ?? null, candidates: sorted };
 }
 
+/** Resolve many card names at once — Scryfall's collection endpoint takes
+ *  75 identifiers per request, so a whole decklist is one or two calls
+ *  instead of a rate-limited crawl. Resolved cards are stashed into the
+ *  catalogue (insert-only; the price loop owns them from there) and come
+ *  back keyed by normalizeForSearch of the full name AND the front face,
+ *  so "Fable of the Mirror-Breaker" finds its // card. */
+export async function resolveMtgNames(
+  admin: SupabaseClient,
+  names: string[]
+): Promise<Map<string, CardSummary>> {
+  const out = new Map<string, CardSummary>();
+  const uniq = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+  for (let i = 0; i < uniq.length; i += 75) {
+    const res = await scryPost("/cards/collection", {
+      identifiers: uniq.slice(i, i + 75).map((name) => ({ name })),
+    });
+    const found = ((res?.data as ScryCard[] | undefined) ?? []).filter((c) => !c.digital);
+    for (const c of found) {
+      const s = scryToSummary(c);
+      const keys = new Set([
+        normalizeForSearch(s.name),
+        normalizeForSearch(s.name.split("//")[0].trim()),
+      ]);
+      for (const k of keys) if (k && !out.has(k)) out.set(k, s);
+    }
+    if (found.length > 0) {
+      try {
+        await admin.from("cards").upsert(
+          found.map((c) => summaryToRow(scryToSummary(c))),
+          { onConflict: "id", ignoreDuplicates: true }
+        );
+      } catch {
+        // Pre-072, or a transient write failure — the resolution itself
+        // still answers; the stash is a bonus for next time.
+      }
+    }
+  }
+  return out;
+}
+
 /** A collector number read out of a picker query, when there is one.
  *
  *  People type numbers the way the card prints them — "489", "#489",
@@ -474,8 +518,12 @@ export async function searchMtgCards(query: string, limit = 30): Promise<CardSum
   // search with a 404, which lands in the catch and tries the next.
   for (const q of mtgSearchQueries(term)) {
     try {
+      // include_extras: tokens, emblems and art cards are excluded from
+      // Scryfall search by default — but people scan and collect tokens,
+      // and an Elf token that can't be FOUND can't be filed. Real cards
+      // still rank first; the extras only surface when they match.
       const listing = await scryGet(
-        `/cards/search?unique=prints&order=released&q=${encodeURIComponent(q)}`
+        `/cards/search?unique=prints&order=released&include_extras=true&q=${encodeURIComponent(q)}`
       );
       const cards = ((listing?.data as ScryCard[] | undefined) ?? []).filter((c) => !c.digital);
       if (cards.length > 0) return cards.slice(0, limit).map(scryToSummary);
@@ -489,12 +537,117 @@ export async function searchMtgCards(query: string, limit = 30): Promise<CardSum
 /** Picker search for MTG: our own rows first (instant, and they carry the
  *  member-visible prices), then Scryfall for everything we've never held,
  *  deduped by id. */
+/** Scryfall's set directory, cached — the bridge from a set's NAME (what a
+ *  person types) to its CODE (what the search API takes). */
+interface ScrySet {
+  code: string;
+  name: string;
+  digital?: boolean;
+  card_count?: number;
+  set_type?: string;
+}
+let setDirCache: { at: number; sets: ScrySet[] } = { at: 0, sets: [] };
+async function mtgSetDirectory(): Promise<ScrySet[]> {
+  if (Date.now() - setDirCache.at < 6 * 3_600_000 && setDirCache.sets.length > 0) {
+    return setDirCache.sets;
+  }
+  const res = await scryGet("/sets");
+  const sets = ((res?.data as ScrySet[] | undefined) ?? []).filter(
+    (s) => !s.digital && (s.card_count ?? 0) > 0
+  );
+  if (sets.length > 0) setDirCache = { at: Date.now(), sets };
+  return sets;
+}
+
+/** The set a typed term names, or null. Bare terms match strictly (the
+ *  exact name, punctuation-blind, or setsAgree with exactly one set) so a
+ *  card-name search is never hijacked; an explicit "set:" prefix also
+ *  accepts the raw code and a unique substring. Ties prefer the biggest
+ *  printing — "The Hobbit" over its promos and tokens. */
+function matchMtgSetName(term: string, sets: ScrySet[], explicit: boolean): ScrySet | null {
+  const key = setKey(term);
+  if (!key) return null;
+  const biggest = (list: ScrySet[]) =>
+    [...list].sort((a, b) => (b.card_count ?? 0) - (a.card_count ?? 0))[0] ?? null;
+  const exact = sets.filter((s) => setKey(s.name) === key);
+  if (exact.length > 0) return biggest(exact);
+  const agree = sets.filter((s) => setsAgree(s.name, term));
+  if (agree.length === 1) return agree[0];
+  if (explicit) {
+    const code = sets.find((s) => s.code.toLowerCase() === term.toLowerCase());
+    if (code) return code;
+    if (key.length >= 4) {
+      const contains = sets.filter((s) => setKey(s.name).includes(key));
+      if (contains.length >= 1 && contains.length <= 3) return biggest(contains);
+    }
+  }
+  return null;
+}
+
+/** Every card in one set, collector order — the Magic side of the Pokémon
+ *  picker's "set:Trick or Trade" listing. Two pages covers any real set. */
+async function mtgSetCards(code: string): Promise<CardSummary[]> {
+  const out: CardSummary[] = [];
+  // include_extras, same reason as the picker search: a token set's own
+  // listing is nothing BUT "extras", and people collect them.
+  let path = `/cards/search?q=${encodeURIComponent(`e:${code}`)}&order=set&unique=prints&include_extras=true`;
+  for (let page = 0; page < 2 && path; page++) {
+    const res = await scryGet(path);
+    const cards = (res?.data as ScryCard[] | undefined) ?? [];
+    out.push(...cards.filter((c) => !c.digital).map(scryToSummary));
+    const next = res?.next_page as string | undefined;
+    path = next && next.startsWith("https://api.scryfall.com") ? next.slice("https://api.scryfall.com".length) : "";
+  }
+  return out;
+}
+
 export async function runMtgSearch(
   supabase: SupabaseClient,
-  query: string
+  query: string,
+  opts?: {
+    /** Our own rows only, immediately — the picker's fast lane. */
+    localOnly?: boolean;
+  }
 ): Promise<CardSummary[]> {
   const term = query.trim();
   if (!term) return [];
+
+  // "set:The Hobbit" — or a bare term that IS a set's name — lists the
+  // set in collector order, the same contract the Pokémon picker keeps.
+  // Scryfall's own set: filter only takes CODES, so the directory does
+  // the name-to-code step people shouldn't have to know about.
+  // A result this search SHOWS can be TAPPED — in the admin review desk,
+  // in the picker — and the tap saves the card's id, which the server
+  // checks against the cards table. So everything remote gets stashed
+  // (insert-only, best-effort) before it's returned; without this, a
+  // Scryfall-only result was a button that couldn't work.
+  const stash = async (cards: CardSummary[]) => {
+    if (cards.length === 0) return;
+    try {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      await createAdminClient()
+        .from("cards")
+        .upsert(cards.slice(0, 60).map(summaryToRow), { onConflict: "id", ignoreDuplicates: true });
+    } catch {
+      // The stash is a bonus; the search result stands either way.
+    }
+  };
+
+  const explicitSet = /^set:\s*(.+)$/i.exec(term);
+  if (!opts?.localOnly) {
+    try {
+      const dir = await mtgSetDirectory();
+      const hit = matchMtgSetName((explicitSet?.[1] ?? term).trim(), dir, !!explicitSet);
+      if (hit) {
+        const cards = await mtgSetCards(hit.code);
+        await stash(cards);
+        return cards;
+      }
+    } catch {
+      // The directory is a bonus; the name search below still answers.
+    }
+  }
+
   let local: CardSummary[] = [];
   try {
     const wanted = normalizeForSearch(term);
@@ -531,9 +684,31 @@ export async function runMtgSearch(
   } catch {
     // pre-072 database — Scryfall alone still answers
   }
+  if (opts?.localOnly) return local.slice(0, 40);
   const remote = await searchMtgCards(term);
   const seen = new Set(local.map((c) => c.id));
-  return [...local, ...remote.filter((c) => !seen.has(c.id))].slice(0, 40);
+  const fresh = remote.filter((c) => !seen.has(c.id));
+  await stash(fresh);
+  return [...local, ...fresh].slice(0, 40);
+}
+
+/** Make sure one scry-… id exists as a catalogue row, fetching and
+ *  stashing it on demand. A picker can show results the stash hasn't
+ *  caught up with (older UI, a race) — a save naming one must not bounce
+ *  off the "is it in the catalogue" check. */
+export async function ensureScryCard(admin: SupabaseClient, cardId: string): Promise<boolean> {
+  if (!cardId.startsWith("scry-")) return false;
+  try {
+    const raw = await scryGet(`/cards/${cardId.slice("scry-".length)}`);
+    if (!raw) return false;
+    const summary = scryToSummary(raw as unknown as ScryCard);
+    await admin
+      .from("cards")
+      .upsert([summaryToRow(summary)], { onConflict: "id", ignoreDuplicates: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Refresh prices (and any missing images) for the stalest MTG rows, in

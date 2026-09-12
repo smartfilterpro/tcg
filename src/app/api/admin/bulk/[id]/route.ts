@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { BULK_BUCKET, finalizeJob, type BulkRead } from "@/lib/bulkScan";
+import { BULK_BUCKET, finalizeJob, identifyPhoto, rereadRuns, type BulkRead } from "@/lib/bulkScan";
+import { ensureScryCard } from "@/lib/scryfall";
 import { errorJson } from "@/lib/apiError";
 
 export const maxDuration = 300;
@@ -29,6 +30,7 @@ export async function GET(req: Request, { params }: Params) {
       .select("id, seq, pass1_path, pass2_path, pass1_read, pass2_read, card_id, variant, confidence, reviewed, review_note", { count: "exact" })
       .eq("job_id", id);
     if (which === "review") q = q.eq("confidence", "review").eq("reviewed", false);
+    else if (which === "verified") q = q.eq("confidence", "verified");
     const { data: rows, count } = await q.order("seq").range(page * PAGE, page * PAGE + PAGE - 1);
 
     const signed = await Promise.all(
@@ -41,7 +43,7 @@ export async function GET(req: Request, { params }: Params) {
           if (typeof cardId !== "string" || !cardId) return null;
           const { data: c } = await admin
             .from("cards")
-            .select("id, name, number, set_name")
+            .select("id, name, number, set_name, image_small")
             .eq("id", cardId)
             .maybeSingle();
           return c ?? null;
@@ -80,6 +82,79 @@ export async function GET(req: Request, { params }: Params) {
  *  { action: "cancel" }                            close it out
  *  { action: "rotate_key" }                        new device key, old one dead immediately
  *  { row, cardId?, variant?, note? }               a human's verdict on a row */
+/** DELETE — remove a job outright: its photos in storage, its card rows,
+ *  and the job itself, in that order so a failure partway leaves the job
+ *  visible (and re-deletable) rather than orphaning files under a job
+ *  nobody can see. Member collections are untouched: an uploaded job's
+ *  cards were written to the member and stay theirs — deleting the job
+ *  deletes the paperwork, not the delivery (that's what Undo upload is
+ *  for, before deleting). */
+export async function DELETE(req: Request, { params }: Params) {
+  try {
+    await requireAdmin();
+    const { id } = await params;
+    const admin = createAdminClient();
+    const { data: job } = await admin.from("bulk_jobs").select("id, status").eq("id", id).maybeSingle();
+    if (!job) return NextResponse.json({ error: "Job not found." }, { status: 404 });
+
+    // ?row=<id> — delete ONE row: the shutter fired on a hand, an empty
+    // bucket, a black frame. The photo goes too, and with the row gone it
+    // no longer blocks the upload gate.
+    const rowId = new URL(req.url).searchParams.get("row");
+    if (rowId) {
+      if (job.status === "uploaded") {
+        return NextResponse.json({ error: "Already uploaded — undo first to edit." }, { status: 409 });
+      }
+      const { data: row } = await admin
+        .from("bulk_cards")
+        .select("id, pass1_path, pass2_path")
+        .eq("id", rowId)
+        .eq("job_id", id)
+        .maybeSingle();
+      if (!row) return NextResponse.json({ error: "Row not found." }, { status: 404 });
+      const paths = [row.pass1_path, row.pass2_path].filter(
+        (p): p is string => typeof p === "string" && p.length > 0
+      );
+      if (paths.length > 0) {
+        const { error: rmErr } = await admin.storage.from(BULK_BUCKET).remove(paths);
+        if (rmErr) throw rmErr;
+      }
+      const { error: delErr } = await admin.from("bulk_cards").delete().eq("id", row.id);
+      if (delErr) throw delErr;
+      return NextResponse.json({ ok: true, row: row.id });
+    }
+
+    // Storage first. list() pages at 100 by default; loop each pass folder
+    // until it runs dry — an 8,000-card job holds up to 16k files.
+    for (const folder of [`${id}/pass1`, `${id}/pass2`, id]) {
+      for (;;) {
+        const { data: files } = await admin.storage
+          .from(BULK_BUCKET)
+          .list(folder, { limit: 100 });
+        // Subfolders list with a null id; only real files get removed, and
+        // an all-folders page breaks the loop like an empty one.
+        const paths = (files ?? [])
+          .filter((f) => f.name && (f as { id?: string | null }).id != null)
+          .map((f) => `${folder}/${f.name}`);
+        if (paths.length === 0) break;
+        const { error: rmErr } = await admin.storage.from(BULK_BUCKET).remove(paths);
+        if (rmErr) throw rmErr;
+      }
+    }
+
+    const { error: rowsErr } = await admin.from("bulk_cards").delete().eq("job_id", id);
+    if (rowsErr) throw rowsErr;
+    const { error: jobErr } = await admin.from("bulk_jobs").delete().eq("id", id);
+    if (jobErr) throw jobErr;
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return errorJson(err, "Couldn't delete the job");
+  }
+}
+
 export async function PATCH(req: Request, { params }: Params) {
   try {
     await requireAdmin();
@@ -92,7 +167,11 @@ export async function PATCH(req: Request, { params }: Params) {
       note?: string;
     };
     const admin = createAdminClient();
-    const { data: job } = await admin.from("bulk_jobs").select("id, status").eq("id", id).maybeSingle();
+    const { data: job } = await admin
+      .from("bulk_jobs")
+      .select("id, status, created_by")
+      .eq("id", id)
+      .maybeSingle();
     if (!job) return NextResponse.json({ error: "Job not found." }, { status: 404 });
 
     if (body.row) {
@@ -102,7 +181,12 @@ export async function PATCH(req: Request, { params }: Params) {
       // A correction: the human's pick IS the answer now.
       if (body.cardId) {
         const { data: card } = await admin.from("cards").select("id").eq("id", body.cardId).maybeSingle();
-        if (!card) return NextResponse.json({ error: "That card id isn't in the catalogue." }, { status: 400 });
+        // A scry-… id the stash hasn't caught up with is fetched on the
+        // spot — the picker showed it, so refusing to save it is a bug,
+        // not a safeguard.
+        if (!card && !(await ensureScryCard(admin, body.cardId))) {
+          return NextResponse.json({ error: "That card id isn't in the catalogue." }, { status: 400 });
+        }
       }
       const { error } = await admin
         .from("bulk_cards")
@@ -130,6 +214,82 @@ export async function PATCH(req: Request, { params }: Params) {
         .update({ status: "ready", updated_at: new Date().toISOString() })
         .eq("id", id);
       return NextResponse.json({ ok: true, result });
+    }
+    if (body.action === "reread") {
+      // Second chances without re-feeding cardboard: the photos are already
+      // in storage, so every MACHINE-decided row — the review queue AND the
+      // machine's own "verified" calls — gets a fresh identify-and-check
+      // with whatever the reader has learned since it was shot. Verified
+      // rows are included on purpose: when a reader flaw is systematic
+      // (every card called reverse holo under the rig's lamp), the wrong
+      // answers are the confident ones. Only human verdicts are untouched.
+      // Batched with a time budget — a big job takes several clicks, each
+      // one reporting how many are left.
+      if (job.status === "uploaded") {
+        return NextResponse.json({ error: "Already uploaded — undo first." }, { status: 409 });
+      }
+      const { data: stuck } = await admin
+        .from("bulk_cards")
+        .select("id, seq, pass1_path")
+        .eq("job_id", id)
+        .eq("reviewed", false)
+        .not("pass1_path", "is", null)
+        .order("seq");
+      const rows = (stuck ?? []) as Array<{ id: string; seq: number; pass1_path: string }>;
+      const adminUserId = (job.created_by as string | null) ?? "";
+      // The loop runs ON THE SERVER, detached from the request — Railway's
+      // process is long-lived, so a sleeping laptop no longer pauses a
+      // 500-card re-read. The request returns immediately with the total;
+      // progress lives in rereadRuns and rides along on the jobs list, and
+      // pressing Re-read while one runs just reports it. A container
+      // restart aborts the run harmlessly — pressing again resumes with
+      // whatever rows still need it.
+      const existing = rereadRuns.get(id);
+      if (existing) {
+        return NextResponse.json({ ok: true, running: true, ...existing });
+      }
+      if (rows.length === 0) {
+        const result = await finalizeJob(admin, id);
+        return NextResponse.json({ ok: true, running: false, done: 0, total: 0, result });
+      }
+      rereadRuns.set(id, { done: 0, total: rows.length });
+      void (async () => {
+        try {
+          for (let i = 0; i < rows.length; i += 4) {
+            await Promise.all(
+              rows.slice(i, i + 4).map(async (r) => {
+                const { data: file } = await admin.storage.from(BULK_BUCKET).download(r.pass1_path);
+                if (!file) return;
+                const buf = Buffer.from(await file.arrayBuffer());
+                const mediaType = r.pass1_path.endsWith(".png")
+                  ? "image/png"
+                  : r.pass1_path.endsWith(".webp")
+                    ? "image/webp"
+                    : "image/jpeg";
+                const read = await identifyPhoto(
+                  admin,
+                  id,
+                  adminUserId,
+                  { data: buf.toString("base64"), mediaType },
+                  { check: true }
+                );
+                await admin
+                  .from("bulk_cards")
+                  .update({ pass1_read: read, updated_at: new Date().toISOString() })
+                  .eq("id", r.id);
+              })
+            );
+            const p = rereadRuns.get(id);
+            if (p) p.done = Math.min(rows.length, i + 4);
+          }
+          await finalizeJob(admin, id);
+        } catch (err) {
+          console.error(`reread ${id} aborted:`, err);
+        } finally {
+          rereadRuns.delete(id);
+        }
+      })();
+      return NextResponse.json({ ok: true, running: true, done: 0, total: rows.length });
     }
     if (body.action === "reopen") {
       if (job.status === "uploaded") {
@@ -309,6 +469,30 @@ export async function POST(req: Request, { params }: Params) {
         cards: counted.reduce((s, c) => s + c.qty, 0),
         lines: counted.length,
       });
+    }
+
+    if (body.action === "report_link") {
+      // Minted once and reused, so a re-click doesn't invalidate a link
+      // the customer already has. Rotate by deleting the token in SQL if
+      // one ever leaks.
+      const { data: j } = await admin
+        .from("bulk_jobs")
+        .select("report_token")
+        .eq("id", id)
+        .maybeSingle();
+      let token = (j?.report_token as string | null) ?? null;
+      if (!token) {
+        token = randomBytes(18).toString("base64url");
+        const { error } = await admin.from("bulk_jobs").update({ report_token: token }).eq("id", id);
+        if (error) {
+          return NextResponse.json(
+            { error: /report_token/.test(error.message) ? "Run supabase/migrations/080_bulk_report.sql first." : error.message },
+            { status: 400 }
+          );
+        }
+      }
+      const origin = req.headers.get("origin") ?? `https://${req.headers.get("host") ?? ""}`;
+      return NextResponse.json({ ok: true, url: `${origin}/bulk/report/${id}?t=${token}` });
     }
 
     if (body.action === "undo") {

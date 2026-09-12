@@ -13,25 +13,29 @@ import { errorJson } from "@/lib/apiError";
 export async function GET(req: Request) {
   try {
     await requireUser();
-    const q = new URL(req.url).searchParams.get("q")?.trim();
+    const params = new URL(req.url).searchParams;
+    const q = params.get("q")?.trim();
     if (!q) return NextResponse.json({ cards: [] });
+    // local=1 — the picker's fast lane: our own rows only, returned
+    // immediately, painted while the full answer is still in flight.
+    const localOnly = params.get("local") === "1";
 
     // game=mtg — the Magic pipeline is its own, much shorter road: our own
     // rows plus Scryfall, which holds every printing and costs nothing.
     // None of the Pokémon search's staging (or its paid deep escalation)
     // applies.
-    if (new URL(req.url).searchParams.get("game") === "mtg") {
+    if (params.get("game") === "mtg") {
       const supabaseMtg = await createClient();
-      const cards = await runMtgSearch(supabaseMtg, q);
-      return NextResponse.json({ cards, source: "scryfall" });
+      const cards = await runMtgSearch(supabaseMtg, q, { localOnly });
+      return NextResponse.json({ cards, source: localOnly ? "catalogue" : "scryfall" });
     }
 
     // deep=1 — the picker's "search every source" escalation. Off by
     // default because it spends paid credits, and a debounced search box
     // would spend them a keystroke at a time.
-    const deep = new URL(req.url).searchParams.get("deep") === "1";
+    const deep = params.get("deep") === "1";
     const supabase = await createClient();
-    const { cards, source, notice } = await runCardSearch(supabase, q, { deep });
+    const { cards, source, notice } = await runCardSearch(supabase, q, { deep, localOnly });
     // The trace is deliberately dropped here. It is a few kilobytes of
     // explanation on every keystroke of a debounced search box, and the
     // picker has no use for it. The notice is one sentence and only appears

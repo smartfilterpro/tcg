@@ -172,6 +172,7 @@ export const VARIANT_LABELS: Record<string, string> = {
   masterBall: "Master Ball pattern",
   friendBall: "Friend Ball pattern",
   loveBall: "Love Ball pattern",
+  energySymbol: "Energy Symbol pattern",
   // MTG finishes (Scryfall's vocabulary, our keys).
   foil: "Foil",
   etched: "Etched Foil",
@@ -247,7 +248,13 @@ export const STAMP_VARIANTS = ["pcStamp", "prereleaseStamp", "staffStamp"] as co
  *  The list grows: Poké Ball and Master Ball came with Scarlet & Violet,
  *  Friend Ball with Mega Evolution. Adding one is a line here and a label
  *  above. */
-export const PATTERN_VARIANTS = ["pokeBall", "masterBall", "friendBall", "loveBall"] as const;
+export const PATTERN_VARIANTS = [
+  "pokeBall",
+  "masterBall",
+  "friendBall",
+  "loveBall",
+  "energySymbol",
+] as const;
 
 /** Every finish a member can record that no database will ever list for
  *  them. Offered in the pickers on top of whatever the card's price map
@@ -300,6 +307,11 @@ export function ballPatternOf(hint: string | null | undefined): {
   if (h.includes("master ball")) return { variant: "masterBall", words: ["masterball"] };
   if (h.includes("friend ball")) return { variant: "friendBall", words: ["friendball"] };
   if (h.includes("love ball")) return { variant: "loveBall", words: ["loveball"] };
+  // Not a ball, but the same mechanism: the Mega-era reverse whose motif is
+  // repeating energy symbols, sold as "(Energy Symbol Pattern)" rows.
+  if (h.includes("energy symbol")) {
+    return { variant: "energySymbol", words: ["energy symbol", "energysymbol"] };
+  }
   // A ball the scanner recognised as a ball but couldn't name. The list of
   // ball patterns grows every set — Poké and Master with Scarlet & Violet,
   // Friend and Love since — so "some ball" still gets to find the printing's
@@ -433,12 +445,19 @@ export function defaultVariantFor(
   if (hint.includes("master ball")) return "masterBall";
   if (hint.includes("friend ball")) return "friendBall";
   if (hint.includes("love ball")) return "loveBall";
+  if (hint.includes("energy symbol")) return "energySymbol";
   // The scanner explicitly saw NO foil ("matte") — trust it when possible
   // "matte" is only believable on a card that HAS a plain printing. On a
   // full art or an ex it is the light, not the card.
   if (hint.includes("matte") && avail.includes("normal")) return "normal";
   if (hint.includes("matte") && avail.length === 1) return avail[0];
   if (hint.includes("reverse") && avail.includes("reverseHolofoil")) return "reverseHolofoil";
+  // A brand-new set's base row often knows only its 'normal' price because
+  // the reverse is a separate product still being listed. With the price
+  // map that young, the machine's eyes outrank it: a seen reverse must not
+  // be filed as Normal for lack of a price key. (An established card with
+  // a full price map still vetoes as before.)
+  if (hint.includes("reverse") && avail.length <= 1) return "reverseHolofoil";
   if (hint.includes("holo") && avail.includes("holofoil")) return "holofoil";
   // Database veto: the scanner saw foil, but this printing only exists as
   // reverse holo — the shine it saw must be the reverse pattern.
@@ -548,6 +567,11 @@ export interface DeckSuggestion {
   /** Where "buy it" points — a TCGplayer product/search URL, affiliate-
    *  wrapped when the program link is configured (see lib/buyLink). */
   buyUrl?: string;
+  /** The priciest printing's market price, when it exceeds the shown one.
+   *  `card` and its price are the CHEAPEST priced printing — a buy list is
+   *  a shopping list — and this carries the top of the range so collector
+   *  versions are visible without being quoted as the cost. */
+  priceHigh?: number | null;
 }
 
 export interface Deck {

@@ -3,8 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import CardPickerModal from "@/components/CardPickerModal";
+import CardLookup from "@/components/CardLookup";
 import CardText, { useCardText } from "@/components/CardText";
 import CardZoom from "@/components/CardZoom";
+import { askDeckAI } from "@/components/TrainerChat";
+import { AI_NAME } from "@/lib/branding";
 import CreditsMeter, { BulkScanNudge } from "@/components/CreditsMeter";
 import PriceHistory from "@/components/PriceHistory";
 import { artSrc } from "@/lib/art";
@@ -754,6 +757,7 @@ export default function CollectionPage({
             headerExtra={
               <select
                 className="input w-auto shrink-0"
+                name="add-finish"
                 value={addVariant}
                 onChange={(e) => setAddVariant(e.target.value)}
                 title="Finish to add cards as"
@@ -864,20 +868,23 @@ export default function CollectionPage({
         </div>
         {/* Adding, scanning and refreshing all act on YOUR collection, so
             they'd be lying about what they'd do while someone else's is on
-            screen. */}
-        {!readOnly && (
-          <div className="flex flex-wrap gap-2">
-            <button className="btn-secondary" onClick={refreshPrices} disabled={refreshing}>
-              {refreshing ? "Refreshing…" : "↻ Refresh prices"}
-            </button>
-            <button className="btn-secondary" onClick={() => setShowAdd(true)}>
-              + Add by search
-            </button>
-            <Link href="/scan" className="btn-primary">
-              📷 Scan
-            </Link>
-          </div>
-        )}
+            screen. Look up writes nothing, so it stays even then. */}
+        <div className="flex flex-wrap gap-2">
+          <CardLookup game={activeGame} />
+          {!readOnly && (
+            <>
+              <button className="btn-secondary" onClick={refreshPrices} disabled={refreshing}>
+                {refreshing ? "Refreshing…" : "↻ Refresh prices"}
+              </button>
+              <button className="btn-secondary" onClick={() => setShowAdd(true)}>
+                + Add by search
+              </button>
+              <Link href="/scan" className="btn-primary">
+                📷 Scan
+              </Link>
+            </>
+          )}
+        </div>
       </div>
 
       {householdSwitcher}
@@ -894,19 +901,21 @@ export default function CollectionPage({
         <input
           className="min-w-[150px] flex-[1_1_180px] rounded-full border border-brand-line-strong bg-white px-4 py-2.5 text-sm outline-none placeholder:text-brand-ink5 focus:border-brand-accent focus:ring-[3px] focus:ring-brand-accent/15"
           type="search"
+          name="collection-search"
           placeholder="🔍 Search your cards by name…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
         {[
-          { value: supertypeFilter, set: setSupertypeFilter, all: "All types", opts: facets.supertypes.map((v) => ({ v, label: v })) },
-          { value: typeFilter, set: setTypeFilter, all: "All energy", opts: facets.types.map((v) => ({ v, label: v })) },
-          { value: setFilter, set: setSetFilter, all: "All sets", opts: facets.sets.map((v) => ({ v, label: v })) },
-          { value: rarityFilter, set: setRarityFilter, all: "All rarities", opts: facets.rarities.map((v) => ({ v, label: v })) },
-          { value: variantFilter, set: setVariantFilter, all: "All finishes", opts: facets.variants.map((v) => ({ v, label: variantLabel(v) })) },
+          { name: "filter-supertype", value: supertypeFilter, set: setSupertypeFilter, all: "All types", opts: facets.supertypes.map((v) => ({ v, label: v })) },
+          { name: "filter-energy", value: typeFilter, set: setTypeFilter, all: "All energy", opts: facets.types.map((v) => ({ v, label: v })) },
+          { name: "filter-set", value: setFilter, set: setSetFilter, all: "All sets", opts: facets.sets.map((v) => ({ v, label: v })) },
+          { name: "filter-rarity", value: rarityFilter, set: setRarityFilter, all: "All rarities", opts: facets.rarities.map((v) => ({ v, label: v })) },
+          { name: "filter-finish", value: variantFilter, set: setVariantFilter, all: "All finishes", opts: facets.variants.map((v) => ({ v, label: variantLabel(v) })) },
         ].map((f) => (
           <select
             key={f.all}
+            name={f.name}
             className={`w-[124px] shrink-0 cursor-pointer truncate rounded-full border bg-white px-3 py-2.5 text-[13px] outline-none ${
               f.value ? "border-brand-accent text-brand-accent" : "border-brand-line-strong text-brand-ink2"
             }`}
@@ -921,6 +930,7 @@ export default function CollectionPage({
         ))}
         <select
           className="w-[124px] shrink-0 cursor-pointer truncate rounded-full border border-brand-line-strong bg-white px-3 py-2.5 text-[13px] text-brand-ink2 outline-none"
+          name="sort"
           value={sort}
           onChange={(e) => setSort(e.target.value as SortKey)}
         >
@@ -1163,6 +1173,7 @@ export default function CollectionPage({
                     <span className="shrink-0">Finish:</span>
                     <select
                       className="input min-w-0 flex-1 py-1 text-xs sm:w-auto sm:flex-none"
+                      name="card-finish"
                       value={selected.variant ?? "normal"}
                       disabled={readOnly}
                       onChange={(e) => changeVariant(selected, e.target.value)}
@@ -1229,6 +1240,7 @@ export default function CollectionPage({
                     <span className="shrink-0 text-xs text-slate-500">Your value $</span>
                     <input
                       className="input w-full min-w-0 flex-1 py-1 text-xs sm:w-24 sm:flex-none"
+                      name="card-value"
                       inputMode="decimal"
                       placeholder="auto"
                       value={valueDraft}
@@ -1267,6 +1279,43 @@ export default function CollectionPage({
                 onRetry={cardText.retry}
                 missingNote="No printed text on file for this card yet — it fills in automatically as the card databases are read."
               />
+            </div>
+
+            {/* The card, as a question. The printed text above says WHAT the
+                card does; these hand the card to DeckAI for the questions
+                text can't answer — how it plays, what a term means, whether
+                it belongs in one of your decks. The card's identity rides in
+                the question so the chat looks up this exact printing. */}
+            <div className="mt-3">
+              <div className="mb-1.5 text-xs font-semibold text-slate-500">
+                Ask {AI_NAME} about this card
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {(() => {
+                  const who = `${selected.card.name} (${selected.card.set_name ?? "unknown set"} #${selected.card.number ?? "?"})`;
+                  const asks: Array<[string, string]> = [
+                    ["How do I play it?", `How do I play ${who} well? Walk me through when and why.`],
+                    [
+                      "Explain it simply",
+                      `Explain what ${who} does in simple terms — assume I'm still learning the game.`,
+                    ],
+                    [
+                      "Fit my decks?",
+                      `Would ${who} improve any of my saved decks or fit a strategy I could build?`,
+                    ],
+                  ];
+                  return asks.map(([label, q]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:border-brand-accent hover:text-brand-accent"
+                      onClick={() => askDeckAI(q)}
+                    >
+                      💬 {label}
+                    </button>
+                  ));
+                })()}
+              </div>
             </div>
 
             <PriceHistory cardId={selected.card.id} />
@@ -1313,6 +1362,7 @@ export default function CollectionPage({
               </label>
               <textarea
                 className="input mt-1 min-h-16 text-sm"
+                name="card-notes"
                 value={notesDraft}
                 onChange={(e) => setNotesDraft(e.target.value)}
                 placeholder="Anything special about your copy…"

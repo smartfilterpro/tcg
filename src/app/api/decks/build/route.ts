@@ -14,7 +14,7 @@ import { normalizeForSearch } from "@/lib/text";
 import { fetchAllRows } from "@/lib/fetchAll";
 import { rowToSummary, CARD_SUMMARY_COLUMNS } from "@/lib/types";
 import { buyLinkFor } from "@/lib/buyLink";
-import { ensureMtgBattleData, matchMtgCard, type MtgBattleData } from "@/lib/scryfall";
+import { ensureMtgBattleData, matchMtgCard, resolveMtgNames, type MtgBattleData } from "@/lib/scryfall";
 import { mtgAnalysis, repairMtgCopies, isBasicLand, type MtgDeckEntry } from "@/lib/mtgDeckLegality";
 import type { CardSummary, CardSummaryRow, DeckCardEntry } from "@/lib/types";
 import { errorJson, safeMessage } from "@/lib/apiError";
@@ -715,12 +715,16 @@ export async function POST(req: Request) {
         );
       }
 
+      // The MAGIC profile only (078). No fallback to the Pokémon notes:
+      // "Fire types are my favorite" steering a Commander build is the
+      // bug this column exists to end. select("*") so a pre-078 row
+      // simply reads empty.
       const { data: mtgPlayProfile } = await supabase
         .from("play_profiles")
-        .select("style_notes")
+        .select("*")
         .eq("user_id", user.id)
         .maybeSingle();
-      const mtgStyleNotes = mtgPlayProfile?.style_notes?.trim();
+      const mtgStyleNotes = (mtgPlayProfile as { mtg_style_notes?: string } | null)?.mtg_style_notes?.trim();
 
       cleanupJobs();
       const mtgJobId = crypto.randomUUID();
@@ -950,6 +954,7 @@ export async function POST(req: Request) {
               reason: string;
               card?: CardSummary | null;
               buyUrl?: string;
+              priceHigh?: number | null;
             }>;
           };
           try {
@@ -1094,6 +1099,10 @@ export async function POST(req: Request) {
           // budget than the Pokémon path can afford). A name that resolves
           // nowhere is removed and said out loud.
           const resolvedByKey = new Map<string, CardSummary>();
+          // Priciest printing seen per name — the top of the buy list's
+          // range. The resolved row itself is the CHEAPEST priced printing:
+          // a reprinted staple costs its reprint price, not its original's.
+          const priceHighByKey = new Map<string, number>();
           const keys = [
             ...new Set(
               (deck.cards ?? [])
@@ -1113,20 +1122,63 @@ export async function POST(req: Request) {
                 CardSummaryRow & { tcgplayer_id?: string | null; battle_data?: MtgBattleData | null }
               >) {
                 const k = normalizeForSearch(raw.name);
-                if (!resolvedByKey.has(k) || raw.market_price != null) {
-                  const summary = rowToSummary(raw);
-                  if (raw.tcgplayer_id != null) summary.tcgplayerId = Number(raw.tcgplayer_id) || null;
-                  resolvedByKey.set(k, summary);
-                  if (raw.battle_data && (raw.battle_data as { game?: string }).game === "mtg") {
-                    factsByName.set(k, raw.battle_data as MtgBattleData);
-                  }
+                const summary = rowToSummary(raw);
+                if (raw.tcgplayer_id != null) summary.tcgplayerId = Number(raw.tcgplayer_id) || null;
+                if (summary.marketPrice != null) {
+                  priceHighByKey.set(k, Math.max(priceHighByKey.get(k) ?? 0, summary.marketPrice));
                 }
+                // Oracle facts read the same off any printing — take them
+                // wherever they appear, winner or not.
+                if (raw.battle_data && (raw.battle_data as { game?: string }).game === "mtg") {
+                  factsByName.set(k, raw.battle_data as MtgBattleData);
+                }
+                const prev = resolvedByKey.get(k);
+                const wins =
+                  !prev ||
+                  (summary.marketPrice != null &&
+                    (prev.marketPrice == null || summary.marketPrice < prev.marketPrice));
+                if (wins) resolvedByKey.set(k, summary);
               }
             }
           } catch {
             // Pre-066/072 — the Scryfall rescue below carries it.
           }
 
+          // Whatever the catalogue didn't hold resolves at Scryfall in ONE
+          // OR TWO batch calls, not a per-name crawl. A full-buy deck is
+          // mostly cards this app has never held — the old 25-name budget
+          // meant a Commander list could lose SEVENTY real staples and
+          // ship as 82 lands. Resolved rows are stashed, so the next build
+          // finds them locally.
+          const missingNames = [
+            ...new Set(
+              (deck.cards ?? [])
+                .filter(
+                  (c) =>
+                    !isBasicLand(c.name) &&
+                    !resolvedByKey.has(normalizeForSearch(c.name)) &&
+                    !(c.card_id && mtgById.has(c.card_id))
+                )
+                .map((c) => c.name)
+            ),
+          ];
+          if (missingNames.length > 0) {
+            try {
+              const fetched = await resolveMtgNames(admin, missingNames);
+              for (const [k, s] of fetched) {
+                if (resolvedByKey.has(k)) continue;
+                resolvedByKey.set(k, s);
+                if (s.battleData && (s.battleData as { game?: string }).game === "mtg") {
+                  factsByName.set(k, s.battleData as MtgBattleData);
+                }
+              }
+            } catch {
+              // The per-name fuzzy fallback below still gets its budget.
+            }
+          }
+
+          // The fuzzy per-name path is now only for stragglers the exact
+          // batch couldn't place (misspellings, partial split-card names).
           let externalBudget = 25;
           const dropped: string[] = [];
           const keep: typeof deck.cards = [];
@@ -1178,6 +1230,32 @@ export async function POST(req: Request) {
               `resolved to no real card and ${dropped.length === 1 ? "was" : "were"} removed: ` +
               `${dropped.join(", ")}. The deck is short — rebuild to fill the gap.`;
             console.warn(`deck build (mtg): unresolvable names dropped — ${dropped.join(" | ")}`);
+          }
+
+          // LEGALITY, ENFORCED — not merely flagged. The revision pass ran
+          // BEFORE full-buy names resolved, so a banned card the player
+          // doesn't own carried a null legality and sailed through (a
+          // Selvala deck shipped Rofellos with only a warning under it).
+          // Now the facts are in hand: anything banned or not legal in the
+          // format is cut, said out loud, and the basics top-up below
+          // fills the hole.
+          {
+            const illegal: string[] = [];
+            deck.cards = (deck.cards ?? []).filter((c) => {
+              if (isBasicLand(c.name)) return true;
+              const leg = factsByName.get(normalizeForSearch(c.name))?.legalities?.[legalityKey];
+              if (leg === "banned" || leg === "not_legal") {
+                illegal.push(`${c.name} (${leg === "banned" ? "banned" : "not legal"} in ${mtgFormat})`);
+                return false;
+              }
+              return true;
+            });
+            if (illegal.length > 0) {
+              deck.strategy =
+                `${deck.strategy}\n\n⚠️ Removed for legality: ${illegal.join(", ")}. ` +
+                `Rebuild to fill ${illegal.length === 1 ? "its slot" : "their slots"} with something on-strategy.`;
+              console.warn(`deck build (mtg): illegal cards cut — ${illegal.join(" | ")}`);
+            }
           }
           // Fill the deck to size with basics rather than shipping short.
           //
@@ -1292,6 +1370,8 @@ export async function POST(req: Request) {
               const owned = ownedQtyByName.get(k) ?? 0;
               const toBuy = Math.max(0, inDeck - owned);
               if (toBuy === 0) continue;
+              const row = resolvedByKey.get(k) ?? null;
+              const high = priceHighByKey.get(k);
               buy.push({
                 name: c.name,
                 quantity: toBuy,
@@ -1299,7 +1379,9 @@ export async function POST(req: Request) {
                   owned > 0
                     ? `You own ${owned} — this completes the ${inDeck} the deck runs.`
                     : `The deck runs ${inDeck}.`,
-                card: resolvedByKey.get(k) ?? null,
+                card: row,
+                priceHigh:
+                  row?.marketPrice != null && high != null && high > row.marketPrice ? high : null,
               });
             }
             buy.sort(
@@ -1914,6 +1996,7 @@ export async function POST(req: Request) {
             card?: CardSummary | null;
             owners?: Array<{ userId: string; name: string; qty: number }>;
             buyUrl?: string;
+            priceHigh?: number | null;
           }>;
         };
         try {
@@ -2027,6 +2110,8 @@ export async function POST(req: Request) {
         // it turns a buy link into the exact product page instead of a
         // search. Empty in collection mode; those fall back to search links.
         const tcgpIdByKey = new Map<string, string>();
+        // Priciest printing seen per name — the top of the buy list's range.
+        const priceHighByKey = new Map<string, number>();
         if (poolMode === "all") {
           const keys = [
             ...new Set(
@@ -2039,9 +2124,17 @@ export async function POST(req: Request) {
             const schemeRank = (id: string) =>
               id.startsWith("tcgp-") ? 2 : id.startsWith("tcgdex-") ? 1 : 0;
             // Prefer the row that can actually serve the buy list: priced
-            // and pictured first, then the canonical id scheme.
-            const score = (s: CardSummary) =>
-              (s.marketPrice != null ? 0 : 4) + (s.imageSmall ? 0 : 2) + schemeRank(s.id) * 0.1;
+            // first, and among priced printings the CHEAPEST — the buy list
+            // is a shopping list, and quoting a card at its collector-art
+            // printing made a $3 deck slot read as a $500 one. Picture and
+            // canonical id scheme only break ties.
+            const better = (a: CardSummary, b: CardSummary) => {
+              if ((a.marketPrice != null) !== (b.marketPrice != null)) return a.marketPrice != null;
+              if (a.marketPrice != null && b.marketPrice != null && a.marketPrice !== b.marketPrice)
+                return a.marketPrice < b.marketPrice;
+              if (!a.imageSmall !== !b.imageSmall) return !!a.imageSmall;
+              return schemeRank(a.id) < schemeRank(b.id);
+            };
             for (let i = 0; i < keys.length; i += 100) {
               const { data, error: qErr } = await admin
                 .from("cards")
@@ -2054,10 +2147,16 @@ export async function POST(req: Request) {
               >) {
                 const k = normalizeForSearch(raw.name);
                 const summary = rowToSummary(raw);
+                if (summary.marketPrice != null) {
+                  priceHighByKey.set(k, Math.max(priceHighByKey.get(k) ?? 0, summary.marketPrice));
+                }
                 const prev = resolvedByKey.get(k);
-                if (!prev || score(summary) < score(prev)) {
+                if (!prev || better(summary, prev)) {
                   resolvedByKey.set(k, summary);
+                  // Set or clear together with the winner: a stale id from
+                  // a losing row would buy-link a different printing.
                   if (raw.tcgplayer_id != null) tcgpIdByKey.set(k, String(raw.tcgplayer_id));
+                  else tcgpIdByKey.delete(k);
                 }
               }
             }
@@ -2237,6 +2336,8 @@ export async function POST(req: Request) {
             const owned = ownedQtyByName.get(k) ?? 0;
             const toBuy = Math.max(0, inDeck - owned);
             if (toBuy === 0) continue;
+            const row = resolvedByKey.get(k) ?? null;
+            const high = priceHighByKey.get(k);
             buy.push({
               name: c.name,
               quantity: toBuy,
@@ -2244,7 +2345,9 @@ export async function POST(req: Request) {
                 owned > 0
                   ? `You own ${owned} — this completes the ${inDeck} the deck runs.`
                   : `The deck runs ${inDeck}.`,
-              card: resolvedByKey.get(k) ?? null,
+              card: row,
+              priceHigh:
+                row?.marketPrice != null && high != null && high > row.marketPrice ? high : null,
             });
           }
           // Priciest gap first: that's the purchase decision worth seeing.
@@ -2276,8 +2379,21 @@ export async function POST(req: Request) {
         for (const suggestion of (deck.missing_suggestions ?? []).slice(0, 5)) {
           if (suggestion.card) continue;
           try {
-            const found = await searchCards({ name: suggestion.name, pageSize: 1 });
-            suggestion.card = found[0] ?? null;
+            // Several printings, not the first hit: quote the cheapest and
+            // carry the collector printings' price as the top of a range.
+            const found = await searchCards({ name: suggestion.name, pageSize: 12 });
+            const wanted = normalizeForSearch(suggestion.name);
+            const printings = found.filter((f) => normalizeForSearch(f.name) === wanted);
+            const pool = printings.length > 0 ? printings : found;
+            const priced = pool
+              .filter((f) => f.marketPrice != null)
+              .sort((a, b) => (a.marketPrice ?? 0) - (b.marketPrice ?? 0));
+            suggestion.card = priced[0] ?? pool[0] ?? null;
+            const high = priced.length > 0 ? priced[priced.length - 1].marketPrice : null;
+            suggestion.priceHigh =
+              suggestion.card?.marketPrice != null && high != null && high > suggestion.card.marketPrice
+                ? high
+                : null;
           } catch {
             suggestion.card = null;
           }

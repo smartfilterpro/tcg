@@ -299,12 +299,26 @@ async function runCoach(
     const FACT_COLUMNS = "id, name, supertype, subtypes, types, hp, battle_data, text_attempts, text_failed_at";
     const entries = deck.cards ?? [];
     const byKey = new Map<string, FactRow>();
+    const byId = new Map<string, FactRow>();
+    // A row goes into the map under every name a deck entry might use for
+    // it. Split and double-faced Magic cards are the ones this loses
+    // otherwise: the catalogue says "The Arkenstone // Seek the Heart",
+    // the deck list says "The Arkenstone", and a card fetched BY ITS OWN
+    // ID was still reported as "no data on file".
+    const fileRow = (r: FactRow) => {
+      byId.set(r.id, r);
+      const k = normalizeForSearch(r.name);
+      if (!byKey.has(k) || (!byKey.get(k)!.battle_data && r.battle_data)) byKey.set(k, r);
+      const front = r.name.split("//")[0].trim();
+      if (front && front !== r.name) {
+        const fk = normalizeForSearch(front);
+        if (!byKey.has(fk) || (!byKey.get(fk)!.battle_data && r.battle_data)) byKey.set(fk, r);
+      }
+    };
     const ids = [...new Set(entries.map((e) => e.card_id).filter((v): v is string => !!v))];
     if (ids.length > 0) {
       const { data } = await admin.from("cards").select(FACT_COLUMNS).in("id", ids);
-      for (const r of (data ?? []) as unknown as FactRow[]) {
-        byKey.set(normalizeForSearch(r.name), r);
-      }
+      for (const r of (data ?? []) as unknown as FactRow[]) fileRow(r);
     }
     const unresolvedKeys = [
       ...new Set(
@@ -321,11 +335,8 @@ async function runCoach(
           .in("name_key", unresolvedKeys)
           .order("id")
           .limit(400);
-        for (const r of (data ?? []) as unknown as FactRow[]) {
-          const k = normalizeForSearch(r.name);
-          // Prefer a row that carries text over the first arbitrary printing.
-          if (!byKey.has(k) || (!byKey.get(k)!.battle_data && r.battle_data)) byKey.set(k, r);
-        }
+        // fileRow prefers a row that carries text over an arbitrary printing.
+        for (const r of (data ?? []) as unknown as FactRow[]) fileRow(r);
       } catch {
         // Pre-066: by-id rows carry what they can.
       }
@@ -348,7 +359,9 @@ async function runCoach(
     }
 
     const lines = entries.map((e) => {
-      const r = byKey.get(normalizeForSearch(e.name));
+      // The entry's own card_id is proof; the name key is the fallback.
+      const r =
+        (e.card_id ? byId.get(e.card_id) : undefined) ?? byKey.get(normalizeForSearch(e.name));
       const bd = r?.battle_data ?? null;
       const isPoke = /pok/i.test(r?.supertype ?? (e.category === "pokemon" ? "Pokémon" : ""));
       const stage =

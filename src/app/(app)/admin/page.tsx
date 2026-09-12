@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { resilientFetch } from "@/lib/clientLoop";
 import type { Profile } from "@/lib/types";
+import { variantLabel } from "@/lib/types";
+import CardZoom from "@/components/CardZoom";
 import { uploadCardPhoto } from "@/lib/photos";
 import { artSrc, photoSrc } from "@/lib/art";
 
@@ -816,6 +818,10 @@ export default function AdminPage() {
         <h2 className="mb-2 font-display text-[17px] font-bold">📥 Load a CSV into a collection</h2>
         <CsvLoadPanel />
       </div>
+      <div className="card-panel p-4">
+        <h2 className="mb-2 font-display text-[17px] font-bold">🧹 Clear a collection</h2>
+        <ClearCollectionPanel />
+      </div>
       </>
       )}
 
@@ -1399,6 +1405,10 @@ export default function AdminPage() {
             <SealedProbePanel />
           </div>
           <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🕳️ Scan gaps</h2>
+            <ScanGapsPanel />
+          </div>
+          <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🔎 Why is this set short?</h2>
             <SetProbePanel />
           </div>
@@ -1409,6 +1419,14 @@ export default function AdminPage() {
           <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">🎱 Ball-pattern copies</h2>
             <PatternConsolidatePanel />
+          </div>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">🔢 Same card, two rows</h2>
+            <DedupePrintingsPanel />
+          </div>
+          <div className="card-panel p-4">
+            <h2 className="mb-2 font-display text-[17px] font-bold">📖 Rules library</h2>
+            <RulesLibraryPanel />
           </div>
           <div className="card-panel p-4">
             <h2 className="mb-2 font-display text-[17px] font-bold">⏱️ Recent scans</h2>
@@ -2696,12 +2714,15 @@ interface BulkJob {
   expected_cards: number | null;
   ai_cost_usd: number;
   uploaded_at: string | null;
+  uploaded_to_name?: string | null;
   created_at: string;
   pass1: number;
   pass2: number;
   verified: number;
   needsReview: number;
   reviewed: number;
+  /** Live server-side re-read progress, when one is running. */
+  rereading?: { done: number; total: number } | null;
   device_key?: string;
 }
 
@@ -2710,9 +2731,22 @@ interface BulkRow {
   seq: number;
   photo1: string | null;
   photo2: string | null;
-  read1: { name?: string; number?: string; cardName?: string | null; error?: string } | null;
-  read2: { name?: string; number?: string; cardName?: string | null; error?: string } | null;
-  card: { id: string; name: string; number: string; set_name: string | null } | null;
+  read1: {
+    name?: string;
+    number?: string;
+    game?: string;
+    cardName?: string | null;
+    orientation?: string;
+    error?: string;
+  } | null;
+  read2: { name?: string; number?: string; game?: string; cardName?: string | null; error?: string } | null;
+  card: {
+    id: string;
+    name: string;
+    number: string;
+    set_name: string | null;
+    image_small: string | null;
+  } | null;
   variant: string;
   confidence: string | null;
   reviewed: boolean;
@@ -2730,7 +2764,24 @@ function BulkScanPanel() {
   const [rows, setRows] = useState<BulkRow[]>([]);
   const [rowCount, setRowCount] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [pick, setPick] = useState<Record<string, string>>({}); // row id → card id text
+  const [pick, setPick] = useState<Record<string, string>>({}); // row id → search text / card id
+  // Row id → corrected finish. The machine reads the finish off the photo
+  // and gets glare-fooled; the human eye holding the card wins. The choice
+  // rides along with whichever save the row gets.
+  const [varPick, setVarPick] = useState<Record<string, string>>({});
+  // Full-screen look at a scan or a pick's art — an upside-down Misdreavus
+  // at thumbnail size reads as anything.
+  const [zoom, setZoom] = useState<{ src: string; alt: string; rotated?: boolean } | null>(null);
+  // Manual flip per row, XORed with the read's own orientation call — the
+  // human can right a scan the reader didn't flag (or un-right a wrong
+  // call). Display only; the stored photo never changes.
+  const [flip, setFlip] = useState<Record<string, boolean>>({});
+  // row id → catalogue search results, so a reviewer can pick the card by
+  // eye instead of hunting down an id in another tab.
+  const [hits, setHits] = useState<
+    Record<string, Array<{ id: string; name: string; number: string; setName: string; imageSmall: string | null }>>
+  >({});
+  const [searchingRow, setSearchingRow] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -2746,14 +2797,22 @@ function BulkScanPanel() {
     load();
   }, [load]);
 
-  const loadRows = useCallback(async (jobId: string) => {
-    const res = await fetch(`/api/admin/bulk/${jobId}?rows=review`);
-    const json = await res.json();
-    if (res.ok) {
-      setRows(json.rows ?? []);
-      setRowCount(json.rowCount ?? 0);
-    }
-  }, []);
+  const [rowFilter, setRowFilter] = useState<"review" | "verified" | "all">("review");
+  const [rowPage, setRowPage] = useState(0);
+
+  const loadRows = useCallback(
+    async (jobId: string, which: "review" | "verified" | "all" = rowFilter, page = 0) => {
+      const res = await fetch(`/api/admin/bulk/${jobId}?rows=${which}&page=${page}`);
+      const json = await res.json();
+      if (res.ok) {
+        setRows((prev) => (page > 0 ? [...prev, ...(json.rows ?? [])] : (json.rows ?? [])));
+        setRowCount(json.rowCount ?? 0);
+        setRowFilter(which);
+        setRowPage(page);
+      }
+    },
+    [rowFilter]
+  );
 
   async function createJob() {
     if (!label.trim()) return;
@@ -2774,12 +2833,65 @@ function BulkScanPanel() {
     setBusy(false);
   }
 
+  /** Kick off a server-side re-read. The loop runs detached on the
+   *  server, so closing the laptop doesn't pause it; the job row shows
+   *  live progress, and the ✅ message lands when polling sees it finish. */
+  async function rereadAll(jobId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/bulk/${jobId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reread" }),
+      });
+      const json = await res.json();
+      if (!res.ok) setError(json.error ?? "Re-read failed");
+      else if (!json.running) {
+        setMessage(
+          `Nothing to re-read — ${json.result?.verified ?? "?"} verified, ${json.result?.review ?? "?"} for review.`
+        );
+      } else {
+        setMessage(
+          `Re-read running on the server (${json.done}/${json.total}) — safe to close this page; the job row shows progress and the ✅ lands here when it finishes.`
+        );
+      }
+    } finally {
+      load();
+      setBusy(false);
+    }
+  }
+
+  // Poll while any job is re-reading server-side, and announce completions:
+  // a job leaving the running set gets its ✅ with the fresh counts.
+  const wasRereading = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const running = new Set((jobs ?? []).filter((j) => j.rereading).map((j) => j.id));
+    for (const id of wasRereading.current) {
+      if (!running.has(id)) {
+        const j = (jobs ?? []).find((x) => x.id === id);
+        if (j) {
+          setMessage(
+            `✅ Re-read complete for "${j.label}" — now ${j.verified} verified, ${j.needsReview} for review.`
+          );
+          if (open === id) loadRows(id);
+        }
+      }
+    }
+    wasRereading.current = running;
+    if (running.size > 0) {
+      const t = setTimeout(() => void load(), 4000);
+      return () => clearTimeout(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs]);
+
   async function jobAction(jobId: string, action: string, extra: Record<string, unknown> = {}) {
     setBusy(true);
     setError(null);
     setMessage(null);
     const method =
-      action === "finalize" || action === "reopen" || action === "cancel" || action === "rotate_key"
+      action === "finalize" || action === "reread" || action === "reopen" || action === "cancel" || action === "rotate_key"
         ? "PATCH"
         : "POST";
     const res = await fetch(`/api/admin/bulk/${jobId}`, {
@@ -2792,8 +2904,17 @@ function BulkScanPanel() {
     else {
       if (action === "finalize" && json.result) {
         setMessage(
-          `Paired ${json.result.total} cards: ${json.result.verified} verified, ${json.result.review} for review` +
-            (json.result.aligned ? "." : " — pass counts differ, so nothing auto-verified.")
+          `${json.result.total} cards: ${json.result.verified} verified, ${json.result.review} for review` +
+            (json.result.pass2Count > 0 && !json.result.aligned
+              ? " — some photos had no partner in the other pass; they're in the review queue."
+              : ".")
+        );
+      }
+      if (action === "reread" && json.result) {
+        setMessage(
+          `Re-read ${json.reread} photo${json.reread === 1 ? "" : "s"}` +
+            (json.remaining > 0 ? ` (${json.remaining} still queued — run it again)` : "") +
+            ` — now ${json.result.verified} verified, ${json.result.review} for review.`
         );
       }
       if (action === "upload") setMessage(`Loaded ${json.cards} cards (${json.lines} lines) into ${json.member}'s collection.`);
@@ -2824,18 +2945,94 @@ function BulkScanPanel() {
     URL.revokeObjectURL(url);
   }
 
+  // The rig key: shown once, like a job's device key. It lets the Pi
+  // bridge create jobs from the scanning bench without this panel.
+  const [rigKey, setRigKey] = useState<string | null>(null);
+  const [rigKeyAt, setRigKeyAt] = useState<string | null>(null);
+  useEffect(() => {
+    void fetch("/api/admin/rig-key")
+      .then((r) => r.json())
+      .then((j) => setRigKeyAt(j.exists ? (j.created_at as string | null) ?? "unknown" : null))
+      .catch(() => {});
+  }, []);
+  async function mintRigKey() {
+    const res = await fetch("/api/admin/rig-key", { method: "POST" });
+    const json = await res.json();
+    if (!res.ok) setError(json.error ?? "Couldn't generate a rig key");
+    else {
+      setRigKey(json.rig_key as string);
+      setRigKeyAt(new Date().toISOString());
+    }
+  }
+
+  async function searchCatalogue(row: BulkRow) {
+    // The typed text wins; empty box searches what the read saw, so one tap
+    // usually gets the shortlist.
+    const q =
+      (pick[row.id] ?? "").trim() ||
+      `${row.read1?.name ?? ""} ${(row.read1?.number ?? "").split("/")[0]}`.trim();
+    if (!q) return;
+    setSearchingRow(row.id);
+    try {
+      const game = row.read1?.game === "mtg" ? "&game=mtg" : "";
+      const res = await fetch(`/api/cards/search?q=${encodeURIComponent(q)}${game}`);
+      const json = await res.json();
+      setHits((h) => ({ ...h, [row.id]: (json.cards ?? []).slice(0, 8) }));
+    } catch {
+      setError("Search failed — try again.");
+    } finally {
+      setSearchingRow(null);
+    }
+  }
+
   async function saveRow(row: BulkRow, cardId: string | null) {
     if (!open) return;
     const res = await fetch(`/api/admin/bulk/${open}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ row: row.id, cardId: cardId ?? row.card?.id ?? null }),
+      body: JSON.stringify({
+        row: row.id,
+        cardId: cardId ?? row.card?.id ?? null,
+        ...(varPick[row.id] && varPick[row.id] !== row.variant
+          ? { variant: varPick[row.id] }
+          : {}),
+      }),
     });
     const json = await res.json();
     if (!res.ok) setError(json.error);
     else {
-      setRows((rs) => rs.filter((r) => r.id !== row.id));
-      setRowCount((c) => Math.max(0, c - 1));
+      if (rowFilter === "review") {
+        // The queue lists only undecided rows — a decided one leaves it.
+        setRows((rs) => rs.filter((r) => r.id !== row.id));
+        setRowCount((c) => Math.max(0, c - 1));
+      } else {
+        // On All/Verified the row still belongs on screen: update it in
+        // place instead of making a successful save look like a vanish.
+        const pickedId = cardId ?? row.card?.id ?? null;
+        const picked = (hits[row.id] ?? []).find((c) => c.id === pickedId) ?? null;
+        setRows((rs) =>
+          rs.map((x) =>
+            x.id === row.id
+              ? {
+                  ...x,
+                  reviewed: true,
+                  confidence: "corrected",
+                  note: null,
+                  variant: varPick[row.id] ?? x.variant,
+                  card: picked
+                    ? {
+                        id: picked.id,
+                        name: picked.name,
+                        number: picked.number,
+                        set_name: picked.setName,
+                        image_small: picked.imageSmall,
+                      }
+                    : x.card,
+                }
+              : x
+          )
+        );
+      }
       load();
     }
   }
@@ -2846,9 +3043,13 @@ function BulkScanPanel() {
         <h2 className="mb-2 font-display text-[17px] font-bold">📦 Mail-in scanning jobs</h2>
         <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
           One job per customer stack. The rig posts one photo per card with the job&apos;s device
-          key — pass 1 in feed order, pass 2 with the stack reversed. Two passes agreeing on the
-          same catalogue card is what verifies a card with no human; everything else lands in
-          the review queue below. AI spend is metered on the job, never on a member.
+          key, and one pass is enough: every photo gets two AI looks — one to identify the card,
+          then an independent second look that must confirm the card AND its finish (holo,
+          reverse pattern, stamp) before it counts as verified. Feeding the stack again as an
+          optional pass 2 (either direction; Finalize pairs by content) verifies by
+          photo-vs-photo agreement instead. Everything unconfirmed lands in the review queue
+          below. English cards only — non-English scans are flagged for deletion, never
+          matched. AI spend is metered on the job, never on a member.
         </p>
         <div className="flex flex-wrap gap-2">
           <input
@@ -2864,6 +3065,10 @@ function BulkScanPanel() {
         {newKey && (
           <div className="mt-2 rounded-lg border border-brand-line p-2.5 font-mono text-[11px]">
             <div className="mb-1 text-brand-ink3">
+              Job id — what the Pi bridge&apos;s &quot;Use an existing job&quot; asks for:
+            </div>
+            <div className="select-all break-all">{newKey.id}</div>
+            <div className="mb-1 mt-2 text-brand-ink3">
               Device key for the rig — shown once; use &quot;Rotate key&quot; on the job row below if
               you lose it:
             </div>
@@ -2874,16 +3079,41 @@ function BulkScanPanel() {
               photo=@card.jpg
             </div>
             <div className="mt-2 text-brand-ink3">
+              Document scanner (fi-8170 etc.) — scan to a folder (or FTP into one), then run the
+              bridge on that machine; it posts each file in name order:
+            </div>
+            <div className="select-all break-all">
+              node scripts/bulk-bridge.mjs --dir ~/scans --job {newKey.id} --key {newKey.key}
+            </div>
+            <div className="mt-2 text-brand-ink3">
               Phone capture link — open on the phone, or turn into a QR code:
             </div>
             <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 1)}</div>
             <div className="mt-1.5 text-brand-ink4">
-              Pass 2 (same job/key, for after flipping the pile — save this now, the key won&apos;t be
-              shown again once you leave this page):
+              Optional pass 2 (same job/key, only if you want photo-vs-photo verification — save
+              this now, the key won&apos;t be shown again once you leave this page):
             </div>
             <div className="select-all break-all">{bulkCaptureLink(newKey.id, newKey.key, 2)}</div>
           </div>
         )}
+
+        <div className="mt-3 rounded-lg border border-brand-line p-2.5 text-xs">
+          <div className="text-brand-ink3">
+            🥧 Pi bridge rig key — lets the scanning bench create its own jobs (run{" "}
+            <code>node scripts/pi-bridge.mjs --dir ~/scans</code> on the Pi, open port 8321, paste
+            this key once).{" "}
+            {rigKeyAt ? "One exists; generating again replaces it immediately." : "None yet."}
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <button className="btn text-xs text-brand-ink4 hover:bg-slate-100" onClick={() => void mintRigKey()}>
+              {rigKeyAt ? "Rotate rig key" : "Generate rig key"}
+            </button>
+            {rigKey && <code className="select-all break-all font-mono text-[11px]">{rigKey}</code>}
+          </div>
+          {rigKey && (
+            <div className="mt-1 text-brand-ink4">Shown once — paste it into the Pi&apos;s page now.</div>
+          )}
+        </div>
 
         {jobs == null ? (
           <p className="mt-3 text-xs text-brand-ink4">Loading…</p>
@@ -2896,9 +3126,43 @@ function BulkScanPanel() {
                 <div className="flex flex-wrap items-center gap-2">
                   <b className="text-sm">{j.label}</b>
                   <span className="chip bg-slate-100 text-slate-600">{j.status}</span>
+                  {j.rereading && (
+                    <span className="chip bg-amber-100 text-amber-800">
+                      re-reading {j.rereading.done}/{j.rereading.total}…
+                    </span>
+                  )}
                   <span className="font-mono text-[11px] text-brand-ink4">
                     pass1 {j.pass1} · pass2 {j.pass2} · ✓{j.verified} · 👀{j.needsReview} · ✍️
                     {j.reviewed} · ${j.ai_cost_usd.toFixed(2)} AI
+                  </span>
+                  <span className="basis-full font-mono text-[11px] text-brand-ink4">
+                    scanned {new Date(j.created_at).toLocaleString()}
+                    {j.status === "uploaded" && j.uploaded_at && (
+                      <>
+                        {" "}
+                        · uploaded to <b>{j.uploaded_to_name ?? "a member"}</b> ·{" "}
+                        {new Date(j.uploaded_at).toLocaleString()} ·{" "}
+                        <button
+                          className="underline hover:text-brand-ink2"
+                          title="Copy a shareable link showing every card with its scan — send it to the person whose cards these are"
+                          onClick={async () => {
+                            const res = await fetch(`/api/admin/bulk/${j.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ action: "report_link" }),
+                            });
+                            const json = await res.json();
+                            if (!res.ok) setError(json.error ?? "Couldn't make the link");
+                            else {
+                              await navigator.clipboard.writeText(json.url).catch(() => {});
+                              setMessage(`Report link copied: ${json.url}`);
+                            }
+                          }}
+                        >
+                          report link
+                        </button>
+                      </>
+                    )}
                   </span>
                   <span className="ml-auto flex flex-wrap gap-1.5">
                     {j.status !== "uploaded" && j.status !== "cancelled" && (
@@ -2906,17 +3170,33 @@ function BulkScanPanel() {
                         {j.status === "ready" ? "Re-pair" : "Finalize"}
                       </button>
                     )}
-                    {j.needsReview > 0 && (
+                    {j.status === "ready" && (
                       <button
                         className="btn text-xs text-brand-ink4 hover:bg-slate-100"
-                        onClick={() => {
-                          setOpen(open === j.id ? null : j.id);
-                          if (open !== j.id) loadRows(j.id);
-                        }}
+                        disabled={busy}
+                        title="Run the AI again on every machine-decided row (verified included; human verdicts kept) — no re-feeding needed"
+                        onClick={() => rereadAll(j.id)}
                       >
-                        {open === j.id ? "Close review" : `Review ${j.needsReview}`}
+                        Re-read
                       </button>
                     )}
+                    {/* Always present: a clean job (nothing needing review)
+                        still deserves eyes — spot-checking verified picks is
+                        how systematic misreads get caught. A clean job opens
+                        on the All tab; the review tab would just say 🎉. */}
+                    <button
+                      className="btn text-xs text-brand-ink4 hover:bg-slate-100"
+                      onClick={() => {
+                        setOpen(open === j.id ? null : j.id);
+                        if (open !== j.id) loadRows(j.id, j.needsReview > 0 ? "review" : "all", 0);
+                      }}
+                    >
+                      {open === j.id
+                        ? "Close cards"
+                        : j.needsReview > 0
+                          ? `Review ${j.needsReview}`
+                          : "Browse cards"}
+                    </button>
                     {j.status === "ready" && (
                       <>
                         <button className="btn text-xs text-brand-ink4 hover:bg-slate-100" onClick={() => exportCsv(j.id, j.label)}>
@@ -2967,6 +3247,32 @@ function BulkScanPanel() {
                     >
                       Rotate key
                     </button>
+                    <button
+                      className="btn text-xs text-red-600 hover:bg-red-50"
+                      disabled={busy}
+                      onClick={async () => {
+                        if (
+                          !confirm(
+                            `Delete "${j.label}" outright? Its photos and rows are removed for good. ` +
+                              `Cards already added to a member's collection stay theirs (use Undo upload first if that's not wanted).`
+                          )
+                        ) {
+                          return;
+                        }
+                        setBusy(true);
+                        setError(null);
+                        const res = await fetch(`/api/admin/bulk/${j.id}`, { method: "DELETE" });
+                        const json = await res.json().catch(() => ({}));
+                        if (!res.ok) setError(json.error ?? "Couldn't delete the job");
+                        else {
+                          if (open === j.id) setOpen(null);
+                          load();
+                        }
+                        setBusy(false);
+                      }}
+                    >
+                      Delete
+                    </button>
                     {j.status !== "cancelled" && j.status !== "uploaded" && (
                       <button
                         className="btn text-xs text-red-600 hover:bg-red-50"
@@ -2991,44 +3297,192 @@ function BulkScanPanel() {
       {open && (
         <div className="card-panel p-4">
           <h2 className="mb-2 font-display text-[17px] font-bold">
-            👀 Review queue ({rowCount} left)
+            {/* The job's name leads: with several jobs on the board, a
+                card list without a title is anyone's guess. */}
+            👀 {jobs?.find((j) => j.id === open)?.label ?? "…"} —{" "}
+            {rowFilter === "review" ? `Review queue (${rowCount} left)` : rowFilter === "verified" ? `Verified with no human (${rowCount})` : `All cards (${rowCount})`}
           </h2>
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {(
+              [
+                ["review", "Needs review"],
+                ["verified", "Verified"],
+                ["all", "All"],
+              ] as const
+            ).map(([w, label2]) => (
+              <button
+                key={w}
+                className={`btn text-xs ${rowFilter === w ? "bg-slate-200 font-semibold" : "text-brand-ink4 hover:bg-slate-100"}`}
+                onClick={() => open && loadRows(open, w, 0)}
+              >
+                {label2}
+              </button>
+            ))}
+          </div>
           <p className="m-0 mb-3 text-xs leading-[1.6] text-brand-ink3">
-            Both photos, both reads, and what the system picked. Accept the pick, or paste the
-            right catalogue card id (find it with card search) and save. Saving marks the card
-            human-reviewed — the upload button refuses to run while anything here is unreviewed.
+            Both photos, both reads, and what the system picked. Accept the pick, or search the
+            catalogue right here (an empty search uses what the read saw) and tap the right card.
+            Saving marks the card human-reviewed — the upload button refuses to run while
+            anything here is unreviewed.
           </p>
           {rows.length === 0 ? (
-            <p className="text-sm text-brand-ink4">Queue clear. 🎉</p>
+            <p className="text-sm text-brand-ink4">
+              {rowFilter === "review" ? "Queue clear. 🎉" : "Nothing here."}
+            </p>
           ) : (
             <ul className="flex list-none flex-col gap-3 p-0">
               {rows.map((r) => (
                 <li key={r.id} className="rounded-[14px] border border-brand-line p-3">
                   <div className="mb-1.5 flex items-center gap-2 text-xs text-brand-ink3">
                     <b>Card #{r.seq}</b>
+                    {r.confidence === "verified" && (
+                      <span className="text-brand-positive">verified</span>
+                    )}
+                    {r.confidence === "corrected" && (
+                      <span className="text-brand-ink4">human-corrected</span>
+                    )}
                     <span className="text-brand-warning">{r.note}</span>
                   </div>
                   <div className="flex flex-wrap items-start gap-3">
                     {[r.photo1, r.photo2].map(
                       (p, i) =>
                         p && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img key={i} src={p} alt={`pass ${i + 1}`} className="h-40 rounded-lg border border-brand-line object-contain" />
+                          <div key={i} className="text-center">
+                            {/* Righted for human eyes when the read said the
+                                card went through the feeder flipped — the
+                                stored photo stays as scanned. The ↻ button
+                                is the human override, XORed with the auto
+                                call. */}
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={p}
+                              alt={`pass ${i + 1}`}
+                              className={`h-80 cursor-zoom-in rounded-lg border border-brand-line object-contain ${
+                                (i === 0 && r.read1?.orientation === "upside_down") !== !!flip[`${r.id}:${i}`]
+                                  ? "rotate-180"
+                                  : ""
+                              }`}
+                              onClick={() =>
+                                setZoom({
+                                  src: p,
+                                  alt: `card #${r.seq} scan`,
+                                  rotated:
+                                    (i === 0 && r.read1?.orientation === "upside_down") !==
+                                    !!flip[`${r.id}:${i}`],
+                                })
+                              }
+                            />
+                            <div className="mt-0.5 text-[10px] text-brand-ink4">
+                              your scan{r.photo2 ? ` (pass ${i + 1})` : ""}
+                              {i === 0 && r.read1?.orientation === "upside_down" ? " · righted" : ""} · tap to zoom ·{" "}
+                              <button
+                                className="underline hover:text-brand-ink2"
+                                onClick={() =>
+                                  setFlip((f) => ({ ...f, [`${r.id}:${i}`]: !f[`${r.id}:${i}`] }))
+                                }
+                              >
+                                ↻ flip
+                              </button>
+                            </div>
+                          </div>
                         )
+                    )}
+                    {/* The pick's catalogue art beside the scan: same card,
+                        two sources — the eye settles a match in a second
+                        that the text line never could. */}
+                    {r.card?.image_small && (
+                      <div className="text-center">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={artSrc(r.card.id, r.card.image_small) ?? undefined}
+                          alt={r.card.name}
+                          className="h-80 cursor-zoom-in rounded-lg border border-brand-positive object-contain"
+                          onClick={() =>
+                            setZoom({
+                              src: artSrc(r.card!.id, r.card!.image_small, "large") ?? r.card!.image_small!,
+                              alt: r.card!.name,
+                            })
+                          }
+                        />
+                        <div className="mt-0.5 text-[10px] text-brand-positive">
+                          system pick · tap to zoom ·{" "}
+                          <button
+                            className="text-brand-ink4 underline hover:text-brand-ink2"
+                            title="The catalogue row is wearing the wrong picture? Refetch its art from the source database."
+                            onClick={async () => {
+                              const res = await fetch("/api/admin/card-images", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ action: "reset_art", cardId: r.card!.id }),
+                              });
+                              const json = await res.json().catch(() => ({}));
+                              if (!res.ok) setError(json.error ?? "Couldn't reset the art");
+                              else {
+                                setMessage(
+                                  json.refetched
+                                    ? "Art refetched from the source."
+                                    : "Bad art cleared — the gap filler will fetch a fresh one."
+                                );
+                                if (open) loadRows(open, rowFilter, 0);
+                              }
+                            }}
+                          >
+                            wrong art?
+                          </button>
+                        </div>
+                      </div>
                     )}
                     <div className="min-w-56 flex-1 text-xs leading-[1.7]">
                       <div>
                         Pass 1 read: <b>{r.read1?.error ?? `${r.read1?.name ?? "—"} #${r.read1?.number ?? "?"}`}</b>
                       </div>
                       <div>
-                        Pass 2 read: <b>{r.read2?.error ?? (r.read2 ? `${r.read2.name ?? "—"} #${r.read2.number ?? "?"}` : "no pass 2")}</b>
+                        Pass 2 read: <b>{r.read2?.error ?? (r.read2 ? `${r.read2.name ?? "—"} #${r.read2.number ?? "?"}` : "no pass 2 (single-pass job)")}</b>
                       </div>
                       <div className="mt-1">
                         System pick:{" "}
                         <b>
                           {r.card ? `${r.card.name} #${r.card.number} · ${r.card.set_name ?? "?"} (${r.card.id})` : "none"}
                         </b>{" "}
-                        · {r.variant}
+                        ·{" "}
+                        <select
+                          className="input inline-block w-auto py-0.5 text-[11.5px]"
+                          title="Finish — change it, then Accept pick (or any save) to apply"
+                          value={varPick[r.id] ?? r.variant}
+                          onChange={(e) => setVarPick((v) => ({ ...v, [r.id]: e.target.value }))}
+                        >
+                          {/* The full finish vocabulary for the row's game.
+                              Energy Symbol is ONE option on purpose: the
+                              motif is always the card's own type (water
+                              drops on a Water card, leaves on Grass), but
+                              it's a single printing and a single price. */}
+                          {[
+                            ...new Set(
+                              (r.card?.id ?? "").startsWith("scry-") || r.read1?.game === "mtg"
+                                ? ["normal", "foil", "etched", r.variant]
+                                : [
+                                    "normal",
+                                    "holofoil",
+                                    "reverseHolofoil",
+                                    "pokeBall",
+                                    "masterBall",
+                                    "friendBall",
+                                    "loveBall",
+                                    "energySymbol",
+                                    "pcStamp",
+                                    "prereleaseStamp",
+                                    "staffStamp",
+                                    "1stEditionNormal",
+                                    "1stEditionHolofoil",
+                                    r.variant,
+                                  ]
+                            ),
+                          ].map((v) => (
+                            <option key={v} value={v}>
+                              {variantLabel(v)}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {r.card && (
@@ -3038,18 +3492,74 @@ function BulkScanPanel() {
                         )}
                         <input
                           className="input w-56 py-1 text-[11.5px]"
-                          placeholder="…or correct card id (e.g. sv8pt5-50)"
+                          placeholder="…or search name / number / card id"
                           value={pick[r.id] ?? ""}
                           onChange={(e) => setPick((p) => ({ ...p, [r.id]: e.target.value }))}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") searchCatalogue(r);
+                          }}
                         />
                         <button
                           className="btn-secondary text-xs"
+                          disabled={searchingRow === r.id}
+                          onClick={() => searchCatalogue(r)}
+                        >
+                          {searchingRow === r.id ? "Searching…" : "Search catalogue"}
+                        </button>
+                        <button
+                          className="btn-secondary text-xs"
                           disabled={!(pick[r.id] ?? "").trim()}
+                          title="Use the typed text directly as a card id"
                           onClick={() => saveRow(r, (pick[r.id] ?? "").trim())}
                         >
-                          Save correction
+                          Save as id
+                        </button>
+                        <button
+                          className="btn text-xs text-red-600 hover:bg-red-50"
+                          title="For shutter misfires — a hand, an empty bucket, a blank frame. Removes the photo and the row."
+                          onClick={async () => {
+                            if (!open) return;
+                            if (!confirm(`Delete card #${r.seq}? Its photo is removed from the job for good.`)) return;
+                            const res = await fetch(`/api/admin/bulk/${open}?row=${r.id}`, { method: "DELETE" });
+                            const json = await res.json().catch(() => ({}));
+                            if (!res.ok) setError(json.error ?? "Couldn't delete the row");
+                            else {
+                              loadRows(open, rowFilter, 0);
+                              load();
+                            }
+                          }}
+                        >
+                          Not a card — delete
                         </button>
                       </div>
+                      {(hits[r.id]?.length ?? 0) > 0 && (
+                        <div className="mt-2 flex flex-col gap-1">
+                          {hits[r.id].map((c) => (
+                            <button
+                              key={c.id}
+                              className="btn flex items-center gap-2 px-2 py-1 text-left text-[11.5px] hover:bg-slate-100"
+                              onClick={() => {
+                                setHits((h) => ({ ...h, [r.id]: [] }));
+                                saveRow(r, c.id);
+                              }}
+                            >
+                              {c.imageSmall && (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={artSrc(c.id, c.imageSmall) ?? undefined} alt="" className="h-28 rounded" />
+                              )}
+                              <span>
+                                <b>{c.name}</b> #{c.number} · {c.setName}
+                                <span className="text-brand-ink4"> · {c.id}</span>
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {hits[r.id] && hits[r.id].length === 0 && searchingRow !== r.id && (
+                        <p className="m-0 mt-1 text-[11px] text-brand-ink4">
+                          Nothing found — this printing may not be in the catalogue yet.
+                        </p>
+                      )}
                     </div>
                   </div>
                 </li>
@@ -3057,12 +3567,16 @@ function BulkScanPanel() {
             </ul>
           )}
           {rowCount > rows.length && rows.length > 0 && (
-            <button className="btn-secondary mt-3 text-sm" onClick={() => open && loadRows(open)}>
+            <button
+              className="btn-secondary mt-3 text-sm"
+              onClick={() => open && loadRows(open, rowFilter, rowPage + 1)}
+            >
               Load next batch
             </button>
           )}
         </div>
       )}
+      {zoom && <CardZoom src={zoom.src} alt={zoom.alt} rotated={zoom.rotated} onClose={() => setZoom(null)} />}
     </div>
   );
 }
@@ -3071,6 +3585,165 @@ function BulkScanPanel() {
  *  test account without scanning a shoebox by hand. Preview first, always:
  *  the server matches against the catalogue and refuses to guess, so the
  *  dry run shows exactly what would land and what needs a better column. */
+/** The rescan-from-scratch reset. Bulk uploads merge, so a full rescan
+ *  needs an empty collection first — and this is the only way to get one
+ *  short of tapping 1,800 delete buttons. Decks survive on purpose (they
+ *  hold names and catalogue ids, not collection rows). */
+/** The "are the missing cards a bug?" triage: every unresolved review
+ *  row's read, grouped and checked against the catalogue, each group
+ *  labeled import-gap vs possible-matcher-bug, ordered by how many scans
+ *  hit the same wall. */
+function ScanGapsPanel() {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [data, setData] = useState<{
+    unresolved: number;
+    groups: Array<{
+      name: string;
+      number: string;
+      total: number | null;
+      game: string;
+      count: number;
+      note: string | null;
+      verdict: string;
+    }>;
+  } | null>(null);
+
+  async function analyze() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/admin/scan-gaps");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't analyze");
+      setData(json);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn't analyze");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="text-xs">
+      <p className="m-0 mb-2 leading-[1.6] text-brand-ink3">
+        Every card the scanner read but nobody has resolved, grouped and checked against the
+        catalogue. <b>Import gap</b> means the card genuinely isn&apos;t on file yet — fill the
+        set, no bug. <b>Check the row</b> means the catalogue has it and the matcher still
+        balked — that&apos;s the one worth reporting.
+      </p>
+      <button className="btn-secondary text-xs" disabled={busy} onClick={analyze}>
+        {busy ? "Analyzing…" : "Analyze unresolved rows"}
+      </button>
+      {err && <p className="mt-2 text-brand-negative">{err}</p>}
+      {data && (
+        <div className="mt-2">
+          <p className="m-0 mb-1 text-brand-ink4">
+            {data.unresolved} unresolved row{data.unresolved === 1 ? "" : "s"} · top{" "}
+            {data.groups.length} distinct reads:
+          </p>
+          <ul className="m-0 flex list-none flex-col gap-1 p-0">
+            {data.groups.map((g, i) => (
+              <li key={i} className="rounded border border-brand-line px-2 py-1">
+                <b>
+                  {g.count}× {g.name} #{g.number}
+                  {g.total ? `/${g.total}` : ""}
+                </b>{" "}
+                <span className="text-brand-ink4">({g.game})</span>
+                <div
+                  className={
+                    /import gap/.test(g.verdict) ? "text-brand-ink3" : "text-brand-warning"
+                  }
+                >
+                  {g.verdict}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClearCollectionPanel() {
+  const [email, setEmail] = useState("");
+  const [game, setGame] = useState<"all" | "pokemon" | "mtg">("all");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/admin/clear-collection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, confirm, game }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't clear the collection");
+      setMsg(
+        `Cleared ${json.removed} ${
+          json.game === "all" ? "" : json.game === "mtg" ? "Magic " : "Pokémon "
+        }rows from ${json.member}'s collection.`
+      );
+      setConfirm("");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn't clear the collection");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div>
+      <p className="m-0 mb-2 text-xs leading-[1.6] text-brand-ink3">
+        Empties a member&apos;s collection so a full rescan starts from zero — bulk uploads
+        merge, so rescanning on top of the old rows would double every card. Decks are NOT
+        touched (they reference the card catalogue, not collection rows) and light back up
+        as the rescan lands, and sealed product is NOT touched either (it lives in its own
+        tables). Gone for good: per-copy notes, custom values, and photo-backed
+        custom cards — <b>Export CSV from the collection page first</b> if any of that
+        matters. There is no undo.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          className="input w-64"
+          placeholder="member email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <select
+          className="input w-auto"
+          value={game}
+          onChange={(e) => setGame(e.target.value as "all" | "pokemon" | "mtg")}
+        >
+          <option value="all">Both games</option>
+          <option value="pokemon">⚡ Pokémon only</option>
+          <option value="mtg">🪄 Magic only</option>
+        </select>
+        <input
+          className="input w-32"
+          placeholder='type CLEAR'
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+        />
+        <button
+          className="btn text-xs text-red-600 hover:bg-red-50"
+          disabled={busy || confirm !== "CLEAR" || !email.trim()}
+          onClick={run}
+        >
+          {busy ? "Clearing…" : "Clear collection"}
+        </button>
+      </div>
+      {msg && <p className="mt-2 text-xs text-green-700">{msg}</p>}
+      {err && <p className="mt-2 text-xs text-red-600">{err}</p>}
+    </div>
+  );
+}
+
 function CsvLoadPanel() {
   const [email, setEmail] = useState("");
   const [csv, setCsv] = useState("");
@@ -4377,6 +5050,169 @@ function SearchProbePanel() {
  *  Ball pattern" finish, or the printing's own row. Saving prefers the row
  *  now, so nothing new splits — this is for everything recorded before that,
  *  which is otherwise valued as the plain card it isn't. */
+/** The official game rules, imported so DeckAI cites the text instead of
+ *  paraphrasing from memory. MTG: the Comprehensive Rules TXT by URL.
+ *  Pokémon: the rulebook pasted as text. */
+function RulesLibraryPanel() {
+  const [status, setStatus] = useState<Record<
+    string,
+    { sections: number; updated: string | null }
+  > | null>(null);
+  const [game, setGame] = useState<"mtg" | "pokemon">("mtg");
+  const [url, setUrl] = useState("");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const res = await fetch("/api/admin/rules");
+    const json = await res.json();
+    if (res.ok && !json.missing) setStatus(json);
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function doImport() {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/admin/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game, url: url.trim() || undefined, text: text.trim() || undefined }),
+      });
+      const json = await res.json();
+      if (!res.ok) setErr(json.error ?? "Import failed");
+      else {
+        setMsg(`Imported ${json.sections} sections (${json.shape}).`);
+        setUrl("");
+        setText("");
+        void load();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 text-xs">
+      <p className="m-0 text-brand-ink4">
+        DeckAI answers rules questions from this library, citing section numbers — empty means
+        it falls back to memory and says so. Magic: paste the URL of the official Comprehensive
+        Rules TXT (magic.wizards.com/en/rules; it changes each set). Pokémon: paste the
+        rulebook&apos;s text. Importing replaces that game&apos;s library.
+      </p>
+      <div className="text-brand-ink3">
+        {status
+          ? (["mtg", "pokemon"] as const).map((g) => (
+              <span key={g} className="mr-4">
+                {g === "mtg" ? "🪄 Magic" : "⚡ Pokémon"}:{" "}
+                <b>{status[g]?.sections ?? 0}</b> sections
+                {status[g]?.updated ? ` · ${new Date(status[g]!.updated!).toLocaleDateString()}` : ""}
+              </span>
+            ))
+          : "Run migration 079 to enable."}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select className="input w-auto py-1" value={game} onChange={(e) => setGame(e.target.value as "mtg" | "pokemon")}>
+          <option value="mtg">Magic</option>
+          <option value="pokemon">Pokémon</option>
+        </select>
+        <input
+          className="input min-w-64 flex-1 py-1"
+          placeholder="https://media.wizards.com/…/MagicCompRules….txt"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+        />
+      </div>
+      <textarea
+        className="input min-h-20 w-full font-mono text-[11px]"
+        placeholder="…or paste the rules text here (used instead of the URL when filled)"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <div className="flex items-center gap-2">
+        <button className="btn-secondary text-xs" disabled={busy || (!url.trim() && !text.trim())} onClick={() => void doImport()}>
+          {busy ? "Importing…" : "Import"}
+        </button>
+        {msg && <span className="text-brand-positive">{msg}</span>}
+        {err && <span className="text-brand-negative">{err}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** Merge collection copies split across duplicate catalogue rows — the
+ *  "#15" vs "#015" Wailmer, one row per source that padded differently. */
+function DedupePrintingsPanel() {
+  const [out, setOut] = useState<{
+    dryRun?: boolean;
+    duplicateRows?: number;
+    moved?: number;
+    moves?: Array<{ card: string; toCard: string; to: string; quantity: number; merged: boolean }>;
+    error?: string;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function run(dryRun: boolean) {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/dedupe-printings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dryRun }),
+      });
+      const json = await res.json();
+      setOut(res.ok ? json : { error: json.error || "Failed" });
+    } catch (e) {
+      setOut({ error: e instanceof Error ? e.message : "Failed" });
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="m-0 text-xs text-brand-ink4">
+        The same printing can hold two catalogue rows when sources pad numbers differently
+        (&ldquo;#15&rdquo; vs &ldquo;#015&rdquo;), splitting one card across two collection
+        entries. This merges copies onto the best row — priced and pictured first. Only cards
+        whose name, number AND set agree are touched; reprints that share a number stay apart.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button className="btn-secondary text-xs" disabled={busy} onClick={() => void run(true)}>
+          {busy ? "Checking…" : "Preview"}
+        </button>
+        <button
+          className="btn-secondary text-xs"
+          disabled={busy || !out || (out.moved ?? 0) === 0}
+          onClick={() => void run(false)}
+        >
+          Merge them
+        </button>
+      </div>
+      {out?.error && <p className="m-0 text-xs text-brand-negative">{out.error}</p>}
+      {out && !out.error && (
+        <p className="m-0 text-xs text-brand-ink3">
+          {out.dryRun ? "Would move" : "Moved"} {out.moved} cop{(out.moved ?? 0) === 1 ? "y" : "ies"} off{" "}
+          {out.duplicateRows} duplicate row{(out.duplicateRows ?? 0) === 1 ? "" : "s"}.
+        </p>
+      )}
+      {(out?.moves?.length ?? 0) > 0 && (
+        <div className="max-h-56 space-y-0.5 overflow-y-auto text-[11px] text-brand-ink4">
+          {out!.moves!.map((m, i) => (
+            <div key={i} className="font-mono">
+              {m.quantity}× {m.card} → {m.toCard} ({m.to}){m.merged ? " · merged" : ""}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PatternConsolidatePanel() {
   const [out, setOut] = useState<{
     dryRun?: boolean;

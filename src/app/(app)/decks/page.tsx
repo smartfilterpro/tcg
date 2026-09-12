@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AI_NAME } from "@/lib/branding";
+import { askDeckAI } from "@/components/TrainerChat";
 import { artSrc } from "@/lib/art";
 import { matchesSearch } from "@/lib/text";
 import type { CollectionItem, Deck, DeckCardEntry, DeckSuggestion } from "@/lib/types";
@@ -16,6 +17,7 @@ import DeckEditCard, { type DeckEditProposal } from "@/components/DeckEditCard";
 import { isBasicLand } from "@/lib/mtgDeckLegality";
 import { resilientFetch } from "@/lib/clientLoop";
 import CardText from "@/components/CardText";
+import CardPickerModal from "@/components/CardPickerModal";
 import CardZoom from "@/components/CardZoom";
 
 type UpgradeSuggestion = DeckSuggestion;
@@ -1018,6 +1020,16 @@ function UpgradeList({
                   {u.quantity > 1 && (
                     <> · ${(u.card.marketPrice * u.quantity).toFixed(2)} for {u.quantity}</>
                   )}
+                  {/* The quoted price is the cheapest printing; when pricier
+                      printings of the same card exist, say so — a $3 slot
+                      shouldn't read as $500, and a collector shouldn't miss
+                      that fancier versions exist. */}
+                  {u.priceHigh != null && (
+                    <span className="text-amber-600">
+                      {" "}
+                      · cheapest printing — collector versions up to ${u.priceHigh.toFixed(2)}
+                    </span>
+                  )}
                 </div>
               )}
               {(u.owners?.length ?? 0) > 0 && (
@@ -1114,8 +1126,20 @@ export default function DecksPage() {
   // to remember that in a dozen places.
   const [familyDecks, setFamilyDecks] = useState<Deck[]>(decksCache?.family ?? []);
   const [styleNotes, setStyleNotes] = useState("");
+  const [mtgStyleNotes, setMtgStyleNotes] = useState("");
   const [styleSaved, setStyleSaved] = useState(false);
+  const [styleError, setStyleError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
+  // Grows with what's typed, same as the chat composer: a deck request is
+  // often a paragraph ("beat Dragapult, lean on my Vampires, budget $30"),
+  // and a one-line box made writing one feel like threading a needle.
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = promptRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [prompt]);
   // Which game the AI builder is building for. The manual builder below
   // stays Pokémon-shaped for now; Magic decks come from this builder.
   const [buildGame, setBuildGame] = useState<"pokemon" | "mtg">("pokemon");
@@ -1169,6 +1193,9 @@ export default function DecksPage() {
   const [nameImages, setNameImages] = useState<Record<string, string | null>>({});
   // The card whose text is open, and the text we've fetched so far.
   const [reading, setReading] = useState<DeckCardEntry | null>(null);
+  // Manual swap: the picker is open for the card currently being read.
+  const [swapping, setSwapping] = useState(false);
+  const [swapBusy, setSwapBusy] = useState(false);
   const [details, setDetails] = useState<Record<string, CardDetail>>({});
   const [readingBusy, setReadingBusy] = useState(false);
   /** The card picture being looked at full-screen, if any. */
@@ -1264,7 +1291,10 @@ export default function DecksPage() {
       });
     fetch("/api/profile")
       .then((r) => r.json())
-      .then((j) => setStyleNotes(j.styleNotes ?? ""));
+      .then((j) => {
+        setStyleNotes(j.styleNotes ?? "");
+        setMtgStyleNotes(j.mtgStyleNotes ?? "");
+      });
 
     // Resume watching an in-flight build after a refresh / tab reload.
     try {
@@ -1282,11 +1312,17 @@ export default function DecksPage() {
   }, []);
 
   async function saveStyle() {
-    await fetch("/api/profile", {
+    setStyleError(null);
+    const res = await fetch("/api/profile", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ styleNotes }),
+      body: JSON.stringify({ styleNotes, mtgStyleNotes }),
     });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setStyleError((j as { error?: string }).error ?? "Couldn't save — try again.");
+      return;
+    }
     setStyleSaved(true);
     setTimeout(() => setStyleSaved(false), 2000);
   }
@@ -1536,21 +1572,30 @@ export default function DecksPage() {
       <div className="card-panel p-4">
         <h2 className="font-semibold">🎮 Your play style</h2>
         <p className="mb-2 mt-0.5 text-xs text-slate-500">
-          Tell {AI_NAME} how you like to play — aggressive, defensive, favorite Pokémon or
-          commanders, combos you love, your experience level. It uses this to tailor every deck
-          it builds for you.
+          Tell {AI_NAME} how you like to play — one profile per game, because &ldquo;fast Fire
+          decks&rdquo; and &ldquo;group-hug Commander&rdquo; are different players. Each build
+          uses its own game&apos;s profile.
         </p>
+        <label className="mb-0.5 block text-xs font-semibold text-amber-700">⚡ Pokémon</label>
         <textarea
-          className="input min-h-24"
+          className="input min-h-20"
           placeholder="e.g. I like fast aggressive decks that hit hard early. Fire types are my favorite. I'm still learning, so keep combos simple."
           value={styleNotes}
           onChange={(e) => setStyleNotes(e.target.value)}
         />
+        <label className="mb-0.5 mt-2 block text-xs font-semibold text-purple-700">🪄 Magic</label>
+        <textarea
+          className="input min-h-20"
+          placeholder="e.g. Green ramp into big creatures. I play casual Commander with friends — flavor over power, no infinite combos."
+          value={mtgStyleNotes}
+          onChange={(e) => setMtgStyleNotes(e.target.value)}
+        />
         <div className="mt-2 flex items-center gap-3">
           <button className="btn-secondary text-sm" onClick={saveStyle}>
-            Save profile
+            Save profiles
           </button>
           {styleSaved && <span className="text-sm text-green-600">Saved ✓</span>}
+          {styleError && <span className="text-sm text-red-600">{styleError}</span>}
         </div>
       </div>
 
@@ -1563,12 +1608,21 @@ export default function DecksPage() {
             : `${AI_NAME} looks at your whole collection and builds a legal 60-card deck. Basic energy is assumed — no need to scan energy cards. Can take a minute.`}
         </p>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <input
-            className="input"
+          <textarea
+            ref={promptRef}
+            rows={1}
+            className="input max-h-40 min-h-[42px] flex-1 resize-none overflow-y-auto"
             placeholder='e.g. "an aggressive fire deck" or leave blank for the best deck possible'
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !building && build()}
+            onKeyDown={(e) => {
+              // Enter builds, Shift+Enter breaks the line — same convention
+              // as the chat box.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (!building) build();
+              }
+            }}
           />
           {/* Wraps: three selects and a button never fit one phone-width
               row, and a row that can't wrap clips the format picker off
@@ -2136,6 +2190,113 @@ export default function DecksPage() {
 
           {/* Shared with the collection's card panel — see components/CardText. */}
           <CardText detail={d ?? null} loading={readingBusy} />
+
+          {/* Same quick-asks as the collection sheet: reading a card in a
+              deck is exactly when "how do I actually play this" comes up. */}
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {(() => {
+              const who = `${reading.name}${d?.setName ? ` (${d.setName}${d.number ? ` #${d.number}` : ""})` : ""}`;
+              const asks: Array<[string, string]> = [
+                ["💬 How do I play it?", `How do I play ${who} well? Walk me through when and why.`],
+                [
+                  "💬 Explain it simply",
+                  `Explain what ${who} does in simple terms — assume I'm still learning the game.`,
+                ],
+                ["💬 Why is it in this deck?", `In my deck this card sits in, what job does ${who} do and when should I use it?`],
+              ];
+              return asks.map(([label, q]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:border-brand-accent hover:text-brand-accent"
+                  onClick={() => askDeckAI(q)}
+                >
+                  {label}
+                </button>
+              ));
+            })()}
+            {/* Manual swap — no AI, no proposal round-trip: pick the
+                replacement, same quantity and slot, saved immediately.
+                Only on decks the viewer owns. */}
+            {viewing && !viewing.owner_name && (
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:border-brand-accent hover:text-brand-accent"
+                onClick={() => setSwapping(true)}
+              >
+                🔁 Swap this card…
+              </button>
+            )}
+          </div>
+          {swapping && viewing && (
+            <CardPickerModal
+              initialQuery=""
+              candidates={[]}
+              game={viewing.game === "mtg" ? "mtg" : "pokemon"}
+              onClose={() => setSwapping(false)}
+              onPick={(picked) => {
+                setSwapping(false);
+                void (async () => {
+                  if (swapBusy) return;
+                  setSwapBusy(true);
+                  try {
+                    const idx = viewing.cards.findIndex(
+                      (e) =>
+                        e.name === reading.name &&
+                        (e.card_id ?? null) === (reading.card_id ?? null) &&
+                        e.category === reading.category
+                    );
+                    if (idx < 0) throw new Error("Couldn't find that card in the deck.");
+                    const st = (picked.supertype ?? "").toLowerCase();
+                    const category =
+                      reading.category === "commander"
+                        ? ("commander" as const)
+                        : viewing.game === "mtg"
+                          ? /land/.test(st)
+                            ? ("land" as const)
+                            : /creature/.test(st)
+                              ? ("creature" as const)
+                              : ("spell" as const)
+                          : /energy/.test(st)
+                            ? ("energy" as const)
+                            : /trainer/.test(st)
+                              ? ("trainer" as const)
+                              : ("pokemon" as const);
+                    const cards = viewing.cards.map((e, i) =>
+                      i === idx
+                        ? {
+                            name: picked.name,
+                            quantity: reading.quantity,
+                            category,
+                            card_id: picked.id,
+                            // The old reason described the old card.
+                            reason: null,
+                          }
+                        : e
+                    );
+                    const res = await fetch(`/api/decks/${viewing.id}`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ cards }),
+                    });
+                    const json = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(json.error || "Couldn't save the swap.");
+                    const updated = { ...viewing, cards };
+                    setViewing(updated);
+                    setDecks((prev) => prev.map((dk) => (dk.id === updated.id ? updated : dk)));
+                    if (picked.imageSmall) {
+                      setCardImages((m) => ({ ...m, [picked.id]: picked.imageSmall }));
+                    }
+                    setReading(null);
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Couldn't save the swap.");
+                  } finally {
+                    setSwapBusy(false);
+                  }
+                })();
+              }}
+            />
+          )}
         </div>
         {zoomed && (
           <CardZoom src={zoomed} alt={reading.name} onClose={() => setZoomed(null)} />

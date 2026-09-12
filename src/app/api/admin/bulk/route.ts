@@ -3,6 +3,7 @@ import { randomBytes } from "crypto";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { errorJson } from "@/lib/apiError";
+import { rereadRuns } from "@/lib/bulkScan";
 
 /** GET: every bulk job with its counts — the service's job board. */
 export async function GET() {
@@ -21,6 +22,19 @@ export async function GET() {
       );
     }
 
+    // Who each uploaded job went to, resolved in one query — the job row
+    // is the upload's history, and an opaque profile id isn't history.
+    const nameOf = new Map<string, string>();
+    {
+      const ids = [...new Set((jobs ?? []).map((j) => j.uploaded_to).filter((v): v is string => !!v))];
+      if (ids.length > 0) {
+        const { data: profs } = await admin.from("profiles").select("id, email, display_name").in("id", ids);
+        for (const p of profs ?? []) {
+          nameOf.set(p.id as string, ((p.display_name as string | null)?.trim() || (p.email as string)) ?? "");
+        }
+      }
+    }
+
     const withCounts = await Promise.all(
       (jobs ?? []).map(async (j) => {
         const [p1, p2, verified, review, reviewed] = await Promise.all([
@@ -32,6 +46,8 @@ export async function GET() {
         ]);
         return {
           ...j,
+          rereading: rereadRuns.get(j.id as string) ?? null,
+          uploaded_to_name: j.uploaded_to ? (nameOf.get(j.uploaded_to as string) ?? null) : null,
           ai_cost_usd: Number(j.ai_cost_usd ?? 0),
           pass1: p1.count ?? 0,
           pass2: p2.count ?? 0,

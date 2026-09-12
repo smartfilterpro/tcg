@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { uploadCardPhoto } from "@/lib/photos";
-import { photoSrc } from "@/lib/art";
+import { artSrc } from "@/lib/art";
 import type { CardSummary } from "@/lib/types";
 
 const ENERGY_TYPES = [
@@ -160,6 +160,7 @@ export default function CardPickerModal({
   candidates,
   onPick,
   onClose,
+  onQueryChange,
   toast,
   headerExtra,
   allowPhoto = false,
@@ -169,6 +170,9 @@ export default function CardPickerModal({
   candidates: CardSummary[];
   onPick: (card: CardSummary) => void;
   onClose: () => void;
+  /** Reports what's typed, so a caller that reopens the picker (card
+   *  lookup's back button) can hand the search back via initialQuery. */
+  onQueryChange?: (q: string) => void;
   toast?: string | null;
   headerExtra?: React.ReactNode;
   /** Card photos become the card's shared artwork, so uploading them is an
@@ -182,6 +186,9 @@ export default function CardPickerModal({
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<CardSummary[]>(candidates);
+  // Cards whose art URL turned out to 404 — swapped for a labeled tile so
+  // the grid never shows the browser's broken-photo glyph.
+  const [brokenArt, setBrokenArt] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [manualMode, setManualMode] = useState(false);
   /** Set when the search KNOWS its answer is short — see SearchOutcome.notice.
@@ -194,6 +201,11 @@ export default function CardPickerModal({
   const [deep, setDeep] = useState(false);
   const [deepDone, setDeepDone] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Monotonic search counter: the guard against a slow old answer
+   *  overwriting a fast new one, and the key the local fast lane checks
+   *  before painting under the full answer. */
+  const searchSeq = useRef(0);
+  const fullAnswerAt = useRef(0);
   /** Has a search actually run? "No results" is a claim about a search, and
    *  before this is true no search has happened — see the mount effect. */
   const [searched, setSearched] = useState(candidates.length > 0);
@@ -202,17 +214,35 @@ export default function CardPickerModal({
   async function runSearch(text: string, everySource = false) {
     const term = text.trim();
     if (!term) return;
+    const seq = ++searchSeq.current;
     if (everySource) {
       setDeep(true);
       setDeepDone(false);
     }
     setLoading(true);
+    const base = `/api/cards/search?q=${encodeURIComponent(term)}${game === "mtg" ? "&game=mtg" : ""}`;
+    // The fast lane: our own rows, painted the moment they arrive. The
+    // full answer (external sources folded in) replaces them when it
+    // lands; the spinner stays up until then so a short local answer
+    // doesn't read as final.
+    if (!everySource) {
+      void fetch(`${base}&local=1`)
+        .then((r) => r.json())
+        .then((j) => {
+          if (seq !== searchSeq.current || fullAnswerAt.current >= seq) return;
+          if (Array.isArray(j.cards) && j.cards.length > 0) {
+            setResults(j.cards);
+            setSearched(true);
+          }
+        })
+        .catch(() => {});
+    }
     try {
-      const res = await fetch(
-        `/api/cards/search?q=${encodeURIComponent(term)}${everySource ? "&deep=1" : ""}${
-          game === "mtg" ? "&game=mtg" : ""
-        }`
-      );
+      const res = await fetch(`${base}${everySource ? "&deep=1" : ""}`);
+      // A newer keystroke owns the box now — a slow old answer must not
+      // overwrite a fast new one.
+      if (seq !== searchSeq.current) return;
+      fullAnswerAt.current = seq;
       const json = await res.json();
       if (res.ok) {
         setResults(json.cards);
@@ -220,8 +250,10 @@ export default function CardPickerModal({
       }
       if (everySource) setDeepDone(true);
     } finally {
-      setSearched(true);
-      setLoading(false);
+      if (seq === searchSeq.current) {
+        setSearched(true);
+        setLoading(false);
+      }
     }
   }
 
@@ -273,11 +305,14 @@ export default function CardPickerModal({
             className="input w-full sm:w-auto sm:flex-1"
             placeholder={
               game === "mtg"
-                ? '🔍 Card name — e.g. "Lightning Bolt", or Scryfall syntax like "t:goblin set:mh3"'
+                ? '🔍 Name or set — e.g. "Lightning Bolt", "set:The Hobbit", or Scryfall syntax "t:goblin"'
                 : '🔍 Name, number, or set: — e.g. "Charizard", "101/190", "set:Trick or Trade"'
             }
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              onQueryChange?.(e.target.value);
+            }}
           />
           <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
             {headerExtra ?? <span />}
@@ -331,12 +366,21 @@ export default function CardPickerModal({
               className="rounded-lg border border-transparent p-1 text-left hover:border-poke-blue hover:bg-blue-50"
               onClick={() => onPick(card)}
             >
-              {card.imageSmall ? (
+              {card.imageSmall && !brokenArt.has(card.id) ? (
+                // artSrc, not the raw URL: external art goes through the
+                // server proxy, which dodges hosts that block hotlinks —
+                // brand-new sets were rendering as broken-photo glyphs.
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={photoSrc(card.imageSmall)!} alt={card.name} className="w-full rounded" loading="lazy" />
+                <img
+                  src={artSrc(card.id, card.imageSmall) ?? undefined}
+                  alt={card.name}
+                  className="w-full rounded"
+                  loading="lazy"
+                  onError={() => setBrokenArt((b) => new Set(b).add(card.id))}
+                />
               ) : (
-                <div className="flex aspect-[63/88] items-center justify-center rounded bg-slate-100 text-xs text-slate-400">
-                  No image
+                <div className="flex aspect-[63/88] items-center justify-center rounded bg-slate-100 p-1 text-center text-xs text-slate-400">
+                  {card.imageSmall ? "No image yet" : "No image"}
                 </div>
               )}
               <div className="mt-1 truncate text-xs font-semibold">{card.name}</div>

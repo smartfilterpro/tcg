@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser, requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { aiHealthNotice } from "@/lib/aiHealth";
 
 export const dynamic = "force-dynamic";
 
@@ -34,8 +35,15 @@ export async function GET() {
       .limit(1)
       .maybeSingle();
 
-    // A missing table (migration 032 not run) is not an error worth showing.
-    if (error || !data) return NextResponse.json({ notice: null });
+    // No admin notice live (or the table is missing — migration 032):
+    // fall back to the COMPUTED one. DeckAI health is watched constantly
+    // — the Anthropic status page plus this server's own recent call
+    // failures — so an outage banners itself and clears itself. An
+    // admin's hand-written notice always wins the slot.
+    if (error || !data) {
+      const ai = await aiHealthNotice().catch(() => null);
+      return NextResponse.json({ notice: ai });
+    }
     return NextResponse.json({
       notice: {
         id: data.id,

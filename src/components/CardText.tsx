@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { CardDetail } from "@/app/api/cards/details/route";
+import { EnergyIcon, withManaSymbols } from "@/components/GameSymbols";
 
 /** Fetch one card's printed text by id.
  *
@@ -107,11 +108,14 @@ export default function CardText({
         <div key={i}>
           <p className="flex items-baseline justify-between gap-2 text-sm font-semibold">
             <span>
-              {a.cost.filter((c) => c.toLowerCase() !== "free").length > 0 && (
-                <span className="mr-1 text-slate-400">
-                  {"⚡".repeat(a.cost.filter((c) => c.toLowerCase() !== "free").length)}
-                </span>
-              )}
+              {/* The actual energy types, as the card prints them — a ⚡
+                  per symbol said how MANY but hid the one thing a player
+                  planning attachments needs: WHICH. */}
+              {a.cost
+                .filter((c) => c.toLowerCase() !== "free")
+                .map((c, ci) => (
+                  <EnergyIcon key={ci} type={c} />
+                ))}{" "}
               {a.name}
             </span>
             <span className="shrink-0 text-slate-500">{a.damage || "—"}</span>
@@ -120,19 +124,38 @@ export default function CardText({
         </div>
       ))}
       {detail.rules.map((r, i) => (
+        // Magic's oracle text and mana-cost lines carry {2}{U} tokens;
+        // rendered as the symbols the card prints. Pokémon rules text has
+        // no braces and passes through untouched.
         <p key={i} className="text-sm leading-relaxed text-slate-700">
-          {r}
+          {withManaSymbols(r, `r${i}`)}
         </p>
       ))}
       {(detail.weak || detail.resist || detail.retreat != null) && (
         <p className="text-xs text-slate-500">
-          {[
-            detail.weak ? `Weakness ${detail.weak.type} ${detail.weak.value}` : null,
-            detail.resist ? `Resistance ${detail.resist.type} ${detail.resist.value}` : null,
-            detail.retreat != null ? `Retreat ${detail.retreat}` : null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
+          {detail.weak && (
+            <>
+              Weakness <EnergyIcon type={detail.weak.type} /> {detail.weak.value}
+            </>
+          )}
+          {detail.resist && (
+            <>
+              {detail.weak ? " · " : ""}Resistance <EnergyIcon type={detail.resist.type} />{" "}
+              {detail.resist.value}
+            </>
+          )}
+          {detail.retreat != null && (
+            <>
+              {detail.weak || detail.resist ? " · " : ""}Retreat{" "}
+              {detail.retreat > 0 && detail.retreat <= 5 ? (
+                Array.from({ length: detail.retreat }).map((_, i) => (
+                  <EnergyIcon key={i} type="colorless" />
+                ))
+              ) : (
+                detail.retreat
+              )}
+            </>
+          )}
         </p>
       )}
       {hasNoText(detail) && (
