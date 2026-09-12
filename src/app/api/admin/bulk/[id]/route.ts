@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { BULK_BUCKET, finalizeJob, identifyPhoto, type BulkRead } from "@/lib/bulkScan";
+import { BULK_BUCKET, finalizeJob, identifyPhoto, rereadRuns, type BulkRead } from "@/lib/bulkScan";
 import { ensureScryCard } from "@/lib/scryfall";
 import { errorJson } from "@/lib/apiError";
 
@@ -237,37 +237,59 @@ export async function PATCH(req: Request, { params }: Params) {
         .order("seq");
       const rows = (stuck ?? []) as Array<{ id: string; seq: number; pass1_path: string }>;
       const adminUserId = (job.created_by as string | null) ?? "";
-      const started = Date.now();
-      let done = 0;
-      for (let i = 0; i < rows.length; i += 4) {
-        if (Date.now() - started > 220_000) break;
-        await Promise.all(
-          rows.slice(i, i + 4).map(async (r) => {
-            const { data: file } = await admin.storage.from(BULK_BUCKET).download(r.pass1_path);
-            if (!file) return;
-            const buf = Buffer.from(await file.arrayBuffer());
-            const mediaType = r.pass1_path.endsWith(".png")
-              ? "image/png"
-              : r.pass1_path.endsWith(".webp")
-                ? "image/webp"
-                : "image/jpeg";
-            const read = await identifyPhoto(
-              admin,
-              id,
-              adminUserId,
-              { data: buf.toString("base64"), mediaType },
-              { check: true }
-            );
-            await admin
-              .from("bulk_cards")
-              .update({ pass1_read: read, updated_at: new Date().toISOString() })
-              .eq("id", r.id);
-            done++;
-          })
-        );
+      // The loop runs ON THE SERVER, detached from the request — Railway's
+      // process is long-lived, so a sleeping laptop no longer pauses a
+      // 500-card re-read. The request returns immediately with the total;
+      // progress lives in rereadRuns and rides along on the jobs list, and
+      // pressing Re-read while one runs just reports it. A container
+      // restart aborts the run harmlessly — pressing again resumes with
+      // whatever rows still need it.
+      const existing = rereadRuns.get(id);
+      if (existing) {
+        return NextResponse.json({ ok: true, running: true, ...existing });
       }
-      const result = await finalizeJob(admin, id);
-      return NextResponse.json({ ok: true, reread: done, remaining: rows.length - done, result });
+      if (rows.length === 0) {
+        const result = await finalizeJob(admin, id);
+        return NextResponse.json({ ok: true, running: false, done: 0, total: 0, result });
+      }
+      rereadRuns.set(id, { done: 0, total: rows.length });
+      void (async () => {
+        try {
+          for (let i = 0; i < rows.length; i += 4) {
+            await Promise.all(
+              rows.slice(i, i + 4).map(async (r) => {
+                const { data: file } = await admin.storage.from(BULK_BUCKET).download(r.pass1_path);
+                if (!file) return;
+                const buf = Buffer.from(await file.arrayBuffer());
+                const mediaType = r.pass1_path.endsWith(".png")
+                  ? "image/png"
+                  : r.pass1_path.endsWith(".webp")
+                    ? "image/webp"
+                    : "image/jpeg";
+                const read = await identifyPhoto(
+                  admin,
+                  id,
+                  adminUserId,
+                  { data: buf.toString("base64"), mediaType },
+                  { check: true }
+                );
+                await admin
+                  .from("bulk_cards")
+                  .update({ pass1_read: read, updated_at: new Date().toISOString() })
+                  .eq("id", r.id);
+              })
+            );
+            const p = rereadRuns.get(id);
+            if (p) p.done = Math.min(rows.length, i + 4);
+          }
+          await finalizeJob(admin, id);
+        } catch (err) {
+          console.error(`reread ${id} aborted:`, err);
+        } finally {
+          rereadRuns.delete(id);
+        }
+      })();
+      return NextResponse.json({ ok: true, running: true, done: 0, total: rows.length });
     }
     if (body.action === "reopen") {
       if (job.status === "uploaded") {

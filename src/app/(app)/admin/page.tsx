@@ -2721,6 +2721,8 @@ interface BulkJob {
   verified: number;
   needsReview: number;
   reviewed: number;
+  /** Live server-side re-read progress, when one is running. */
+  rereading?: { done: number; total: number } | null;
   device_key?: string;
 }
 
@@ -2831,42 +2833,58 @@ function BulkScanPanel() {
     setBusy(false);
   }
 
-  /** Re-read runs under a server time budget, so a big job takes several
-   *  rounds. One click drives them all: keep calling while the server
-   *  reports a queue, narrating progress in the message line — the final
-   *  message (no "queued" clause) IS the completion notice. */
+  /** Kick off a server-side re-read. The loop runs detached on the
+   *  server, so closing the laptop doesn't pause it; the job row shows
+   *  live progress, and the ✅ message lands when polling sees it finish. */
   async function rereadAll(jobId: string) {
     setBusy(true);
     setError(null);
-    let done = 0;
     try {
-      for (let round = 0; round < 30; round++) {
-        const res = await fetch(`/api/admin/bulk/${jobId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "reread" }),
-        });
-        const json = await res.json();
-        if (!res.ok) {
-          setError(json.error ?? "Re-read failed");
-          break;
-        }
-        done += json.reread ?? 0;
-        if ((json.remaining ?? 0) > 0) {
-          setMessage(`Re-reading… ${done} done, ${json.remaining} to go — leave this page open.`);
-          continue;
-        }
+      const res = await fetch(`/api/admin/bulk/${jobId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reread" }),
+      });
+      const json = await res.json();
+      if (!res.ok) setError(json.error ?? "Re-read failed");
+      else if (!json.running) {
         setMessage(
-          `✅ Re-read complete: ${done} photo${done === 1 ? "" : "s"} — now ${json.result?.verified ?? "?"} verified, ${json.result?.review ?? "?"} for review.`
+          `Nothing to re-read — ${json.result?.verified ?? "?"} verified, ${json.result?.review ?? "?"} for review.`
         );
-        break;
+      } else {
+        setMessage(
+          `Re-read running on the server (${json.done}/${json.total}) — safe to close this page; the job row shows progress and the ✅ lands here when it finishes.`
+        );
       }
     } finally {
       load();
-      if (open === jobId) loadRows(jobId);
       setBusy(false);
     }
   }
+
+  // Poll while any job is re-reading server-side, and announce completions:
+  // a job leaving the running set gets its ✅ with the fresh counts.
+  const wasRereading = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const running = new Set((jobs ?? []).filter((j) => j.rereading).map((j) => j.id));
+    for (const id of wasRereading.current) {
+      if (!running.has(id)) {
+        const j = (jobs ?? []).find((x) => x.id === id);
+        if (j) {
+          setMessage(
+            `✅ Re-read complete for "${j.label}" — now ${j.verified} verified, ${j.needsReview} for review.`
+          );
+          if (open === id) loadRows(id);
+        }
+      }
+    }
+    wasRereading.current = running;
+    if (running.size > 0) {
+      const t = setTimeout(() => void load(), 4000);
+      return () => clearTimeout(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs]);
 
   async function jobAction(jobId: string, action: string, extra: Record<string, unknown> = {}) {
     setBusy(true);
@@ -3108,6 +3126,11 @@ function BulkScanPanel() {
                 <div className="flex flex-wrap items-center gap-2">
                   <b className="text-sm">{j.label}</b>
                   <span className="chip bg-slate-100 text-slate-600">{j.status}</span>
+                  {j.rereading && (
+                    <span className="chip bg-amber-100 text-amber-800">
+                      re-reading {j.rereading.done}/{j.rereading.total}…
+                    </span>
+                  )}
                   <span className="font-mono text-[11px] text-brand-ink4">
                     pass1 {j.pass1} · pass2 {j.pass2} · ✓{j.verified} · 👀{j.needsReview} · ✍️
                     {j.reviewed} · ${j.ai_cost_usd.toFixed(2)} AI

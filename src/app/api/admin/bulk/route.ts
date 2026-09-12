@@ -3,6 +3,7 @@ import { randomBytes } from "crypto";
 import { requireAdmin, AuthError } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { errorJson } from "@/lib/apiError";
+import { rereadRuns } from "@/lib/bulkScan";
 
 /** GET: every bulk job with its counts — the service's job board. */
 export async function GET() {
@@ -45,6 +46,7 @@ export async function GET() {
         ]);
         return {
           ...j,
+          rereading: rereadRuns.get(j.id as string) ?? null,
           uploaded_to_name: j.uploaded_to ? (nameOf.get(j.uploaded_to as string) ?? null) : null,
           ai_cost_usd: Number(j.ai_cost_usd ?? 0),
           pass1: p1.count ?? 0,
