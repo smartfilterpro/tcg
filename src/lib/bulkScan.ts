@@ -958,6 +958,20 @@ async function matchCatalogue(
       candidates: hits.slice(0, 12),
     };
   }
+  let variant = variantFor(isMtg, picked, hint);
+  // Modern rarity vetoes "normal": since the Scarlet & Violet era every
+  // ★ Rare exists ONLY in foil — there is no plain printing to file. The
+  // reads can't save this one (the stock render already SHOWS the foil,
+  // so "looks like the render" argues normal, wrongly), but the rarity
+  // decides it outright. Reverse-holo reads keep their reverse.
+  if (
+    !isMtg &&
+    variant === "normal" &&
+    /^(?:tcgdex-)?(sv|me|rsv)/.test(picked.id) &&
+    (picked.rarity ?? "").trim().toLowerCase() === "rare"
+  ) {
+    variant = "holofoil";
+  }
   return {
     cardId: picked.id,
     cardName: picked.name,
@@ -967,7 +981,7 @@ async function matchCatalogue(
     // exists as a reverse holo can't be recorded as a plain one, and a row
     // that IS the Poké Ball printing takes its own finish rather than the
     // pattern label. Magic speaks foil/normal instead.
-    variant: variantFor(isMtg, picked, hint),
+    variant,
   };
 }
 
