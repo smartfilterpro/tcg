@@ -188,7 +188,7 @@ const READ_SCHEMA = {
       type: "string",
       enum: ["none", "pokemon_center", "prerelease", "staff", "unknown"],
       description:
-        "Gold foil stamp pressed onto the artwork: a Pokémon Center logo, the word PRERELEASE, or the word STAFF. 'none' when there is clearly none.",
+        "Gold foil stamp pressed ONTO THE ARTWORK ITSELF: a Pokémon Center logo, the word PRERELEASE, or the word STAFF — a large gold badge sitting on top of the illustration. NOT a stamp: the set code in the bottom-left info bar. In particular the code PRE (Prismatic Evolutions) is a SET CODE that appears on every card of that set — reading it as a prerelease stamp is the known mistake here. 'none' when there is clearly none.",
     },
     readable: {
       type: "boolean",
@@ -289,7 +289,10 @@ const CHECK_SCHEMA = {
     stamp: {
       type: "string",
       enum: ["none", "pokemon_center", "prerelease", "staff", "unknown"],
-      description: "Gold foil stamp on the artwork, or 'none'.",
+      description:
+        "Gold foil stamp ON THE ARTWORK itself, or 'none'. The set code in the " +
+        "bottom-left bar is never a stamp — PRE there means the set Prismatic " +
+        "Evolutions, not PRERELEASE.",
     },
     concern: {
       type: "string",
